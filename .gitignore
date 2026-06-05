@@ -10,3 +10,11 @@ data/
 
 # 模型权重(首次运行自动下载,体积大,勿入库)
 models/
+
+# Visual Studio / C++ 构建产物(cp/,输出与中间目录可能嵌在子目录里)
+.vs/
+*.user
+*.aps
+cp/**/x64/
+cp/**/Debug/
+cp/**/Release/
