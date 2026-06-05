@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.log
+.env
+.vscode/
+
+# 加密人脸库(隐私)
+data/
+
+# 模型权重(首次运行自动下载,体积大,勿入库)
+models/
