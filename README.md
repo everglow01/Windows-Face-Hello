@@ -5,7 +5,9 @@
 ## 状态
 
 阶段 1~4 完成(Python 原型:采集 / 检测识别 / 眨眼+转头活体 / DPAPI 加密存储 / PySide6 管理台)。
-阶段 5(锁屏 Credential Provider)未做,见 DESIGN 路线图。
+阶段 5(锁屏 Credential Provider)未做,见 DESIGN 路线图。  
+
+***警告：项目开发中，请勿擅自下载使用，项目设计更改Windows注册表等系统性改动，还未经验证，切勿擅自使用！！！***
 
 ## 环境(uv 管理,Python 3.11)
 

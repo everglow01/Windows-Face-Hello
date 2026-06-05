@@ -61,6 +61,7 @@
     <ClCompile Include="dll.cpp" />
     <ClCompile Include="CFaceProvider.cpp" />
     <ClCompile Include="CFaceCredential.cpp" />
+    <ClCompile Include="PipeClient.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="guid.h" />
@@ -68,6 +69,7 @@
     <ClInclude Include="helpers.h" />
     <ClInclude Include="CFaceProvider.h" />
     <ClInclude Include="CFaceCredential.h" />
+    <ClInclude Include="PipeClient.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="FaceHelloCP.def" />

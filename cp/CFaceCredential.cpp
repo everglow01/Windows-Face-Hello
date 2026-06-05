@@ -1,7 +1,9 @@
 #include <new>
+#include <string>
 #include <shlwapi.h>
 #include "CFaceCredential.h"
 #include "common.h"
+#include "PipeClient.h"
 
 // 生成一张纯色磁贴位图(避免引入二进制资源,里程碑 a 够用)。
 static HBITMAP _CreateSolidBitmap(int w, int h, COLORREF color)
@@ -113,6 +115,18 @@ IFACEMETHODIMP CFaceCredential::SetSelected(BOOL* pbAutoLogon)
 {
     // 里程碑 a:选中磁贴不自动触发认证(等接入识别后再改成自动开始)。
     *pbAutoLogon = FALSE;
+
+    // 里程碑 b:选中磁贴时 ping 认证服务,把响应(或失败原因)显示在状态栏,
+    // 验证锁屏的 SYSTEM 上下文里 CP↔服务的命名管道通信成立。
+    std::wstring summary;
+    PipeClient::Ping(summary);
+    CoTaskMemFree(_rgFieldStrings[FFI_STATUS]);
+    _rgFieldStrings[FFI_STATUS] = nullptr;
+    SHStrDupW(summary.c_str(), &_rgFieldStrings[FFI_STATUS]);
+    if (_pCredProvCredentialEvents && _rgFieldStrings[FFI_STATUS])
+    {
+        _pCredProvCredentialEvents->SetFieldString(this, FFI_STATUS, _rgFieldStrings[FFI_STATUS]);
+    }
     return S_OK;
 }
 
