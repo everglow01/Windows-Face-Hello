@@ -1,9 +1,13 @@
 #include <new>
 #include <string>
 #include <shlwapi.h>
+#include <ntsecapi.h>
 #include "CFaceCredential.h"
 #include "common.h"
 #include "PipeClient.h"
+#include "CredVault.h"
+#include "KerbHelpers.h"
+#include "guid.h"
 
 // 生成一张纯色磁贴位图(避免引入二进制资源,里程碑 a 够用)。
 static HBITMAP _CreateSolidBitmap(int w, int h, COLORREF color)
@@ -184,7 +188,13 @@ IFACEMETHODIMP CFaceCredential::GetSubmitButtonValue(DWORD dwFieldID, DWORD* pdw
     return E_INVALIDARG;
 }
 
-// 里程碑 a:点提交不做认证,仅返回「未完成」并给一句占位提示。
+// 里程碑 c-1:点提交 → 调认证服务 → 读 LSA 密码 → 打包 KERB 提交解锁。
+static void _ReportFail(PCWSTR msg, PWSTR* ppwszStatus, CREDENTIAL_PROVIDER_STATUS_ICON* pIcon)
+{
+    SHStrDupW(msg, ppwszStatus);
+    *pIcon = CPSI_ERROR;
+}
+
 IFACEMETHODIMP CFaceCredential::GetSerialization(
     CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE* pcpgsr,
     CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* pcpcs,
@@ -193,10 +203,85 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
 {
     ZeroMemory(pcpcs, sizeof(*pcpcs));
     *pcpgsr = CPGSR_NO_CREDENTIAL_NOT_FINISHED;
+    *ppwszOptionalStatusText = nullptr;
     *pcpsiOptionalStatusIcon = CPSI_NONE;
-    // “刷脸识别尚未接入(里程碑 a 占位)”
-    SHStrDupW(L"\x5237\x8138\x8bc6\x522b\x5c1a\x672a\x63a5\x5165\xff08\x91cc\x7a0b\x7891 a \x5360\x4f4d\xff09",
-        ppwszOptionalStatusText);
+
+    // 1. 调认证服务做识别(c-1 用 mock,直接返回 {ok, user})。
+    bool authOk = false;
+    std::wstring user, reason;
+    if (!PipeClient::Authenticate(authOk, user, reason))
+    {
+        _ReportFail((L"认证服务不可用: " + reason).c_str(), ppwszOptionalStatusText, pcpsiOptionalStatusIcon);
+        return S_OK;
+    }
+    if (!authOk)
+    {
+        _ReportFail((L"刷脸未通过: " + reason).c_str(), ppwszOptionalStatusText, pcpsiOptionalStatusIcon);
+        return S_OK;
+    }
+
+    // 2. 从 LSA Secret 取该用户登录密码(CP 在锁屏是 SYSTEM,可读)。
+    std::wstring password;
+    if (!CredVault::RetrievePassword(user, password))
+    {
+        _ReportFail(L"已识别,但未找到登录密码(请先写入 LSA Secret)",
+                    ppwszOptionalStatusText, pcpsiOptionalStatusIcon);
+        return S_OK;
+    }
+
+    // 3. 拆 domain\user;本地账户用计算机名作域。
+    std::wstring domain, account;
+    const size_t bs = user.find(L'\\');
+    if (bs != std::wstring::npos)
+    {
+        domain = user.substr(0, bs);
+        account = user.substr(bs + 1);
+    }
+    else
+    {
+        wchar_t comp[MAX_COMPUTERNAME_LENGTH + 1] = {};
+        DWORD cch = ARRAYSIZE(comp);
+        GetComputerNameW(comp, &cch);
+        domain = comp;
+        account = user;
+    }
+
+    // 4. 打包 KERB_INTERACTIVE_UNLOCK_LOGON 交给 LSA 完成解锁。
+    KERB_INTERACTIVE_UNLOCK_LOGON kiul;
+    HRESULT hr = KerbInteractiveUnlockLogonInit(
+        domain.c_str(), account.c_str(), password.c_str(), _cpus, &kiul);
+    if (SUCCEEDED(hr))
+    {
+        BYTE* rgb = nullptr;
+        DWORD cb = 0;
+        hr = KerbInteractiveUnlockLogonPack(kiul, &rgb, &cb);
+        if (SUCCEEDED(hr))
+        {
+            ULONG ulAuthPackage = 0;
+            hr = RetrieveNegotiateAuthPackage(&ulAuthPackage);
+            if (SUCCEEDED(hr))
+            {
+                pcpcs->ulAuthenticationPackage = ulAuthPackage;
+                pcpcs->clsidCredentialProvider = CLSID_FaceHelloProvider;
+                pcpcs->rgbSerialization = rgb;
+                pcpcs->cbSerialization = cb;
+                *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED; // 交给 LogonUI 提交
+            }
+            else
+            {
+                CoTaskMemFree(rgb);
+            }
+        }
+    }
+
+    if (!password.empty())
+    {
+        SecureZeroMemory(&password[0], password.size() * sizeof(wchar_t));
+    }
+    if (FAILED(hr))
+    {
+        _ReportFail(L"构造登录凭据失败", ppwszOptionalStatusText, pcpsiOptionalStatusIcon);
+    }
     return S_OK;
 }
 

@@ -43,7 +43,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <ModuleDefinitionFile>FaceHelloCP.def</ModuleDefinitionFile>
-      <AdditionalDependencies>Shlwapi.lib;Ole32.lib;User32.lib;Gdi32.lib;Advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Shlwapi.lib;Ole32.lib;User32.lib;Gdi32.lib;Advapi32.lib;Secur32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -62,6 +62,8 @@
     <ClCompile Include="CFaceProvider.cpp" />
     <ClCompile Include="CFaceCredential.cpp" />
     <ClCompile Include="PipeClient.cpp" />
+    <ClCompile Include="CredVault.cpp" />
+    <ClCompile Include="KerbHelpers.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="guid.h" />
@@ -70,6 +72,8 @@
     <ClInclude Include="CFaceProvider.h" />
     <ClInclude Include="CFaceCredential.h" />
     <ClInclude Include="PipeClient.h" />
+    <ClInclude Include="CredVault.h" />
+    <ClInclude Include="KerbHelpers.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="FaceHelloCP.def" />

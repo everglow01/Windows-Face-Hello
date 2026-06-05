@@ -10,20 +10,22 @@ from __future__ import annotations
 
 import json
 
+import win32api
 import win32file
 import win32pipe
 
 PIPE_NAME = r"\\.\pipe\FaceHello"
 _BUF = 65536
-_USERS = ["owen", "test"]  # 固定假数据,证明 CP 客户端拿到的是服务端返回值
 
 
 def _handle(req: dict) -> dict:
     cmd = req.get("cmd")
     if cmd == "ping":
-        return {"ok": True, "ready": True, "users": _USERS}
+        return {"ok": True, "ready": True, "users": [win32api.GetUserName()]}
     if cmd == "authenticate":
-        return {"ok": False, "reason": "mock 服务不做真识别(里程碑 b)"}
+        # 里程碑 c-1:不做真识别,直接"假装识别通过",返回当前账户名。
+        # 真正解锁靠 CP 用这个用户名去读 LSA 密码 + 提交 KERB。
+        return {"ok": True, "user": win32api.GetUserName()}
     return {"ok": False, "reason": f"unknown cmd: {cmd}"}
 
 

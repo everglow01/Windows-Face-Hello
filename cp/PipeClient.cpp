@@ -89,3 +89,60 @@ bool PipeClient::Ping(std::wstring& outSummary)
     outSummary = resp; // 里程碑 b:成功/失败都把原文显示出来
     return ok;
 }
+
+namespace
+{
+// 极简 JSON 取值(响应来自我们自己的服务,格式可控)。
+bool ExtractBool(const std::wstring& json, const std::wstring& field, bool& val)
+{
+    const std::wstring key = L"\"" + field + L"\"";
+    size_t p = json.find(key);
+    if (p == std::wstring::npos) { return false; }
+    p = json.find(L':', p + key.size());
+    if (p == std::wstring::npos) { return false; }
+    ++p;
+    while (p < json.size() && json[p] == L' ') { ++p; }
+    if (json.compare(p, 4, L"true") == 0) { val = true; return true; }
+    if (json.compare(p, 5, L"false") == 0) { val = false; return true; }
+    return false;
+}
+
+bool ExtractString(const std::wstring& json, const std::wstring& field, std::wstring& val)
+{
+    const std::wstring key = L"\"" + field + L"\"";
+    size_t p = json.find(key);
+    if (p == std::wstring::npos) { return false; }
+    p = json.find(L':', p + key.size());
+    if (p == std::wstring::npos) { return false; }
+    p = json.find(L'"', p);
+    if (p == std::wstring::npos) { return false; }
+    const size_t end = json.find(L'"', p + 1);
+    if (end == std::wstring::npos) { return false; }
+    val = json.substr(p + 1, end - p - 1);
+    return true;
+}
+} // namespace
+
+bool PipeClient::Authenticate(bool& outOk, std::wstring& outUser, std::wstring& outReason)
+{
+    std::wstring resp;
+    if (!Call(L"{\"cmd\": \"authenticate\"}", resp))
+    {
+        outOk = false;
+        outReason = resp; // 传输失败原因
+        return false;
+    }
+
+    outOk = false;
+    ExtractBool(resp, L"ok", outOk);
+    if (outOk)
+    {
+        if (!ExtractString(resp, L"user", outUser)) { outUser.clear(); }
+        outReason.clear();
+    }
+    else if (!ExtractString(resp, L"reason", outReason))
+    {
+        outReason = resp;
+    }
+    return true; // 拿到了服务响应,结果看 outOk
+}
