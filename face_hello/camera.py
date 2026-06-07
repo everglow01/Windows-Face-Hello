@@ -13,22 +13,37 @@ class Camera:
         self.index = index
         self._cap: cv2.VideoCapture | None = None
 
-    def open(self, retries: int = 8, delay: float = 0.5) -> None:
-        """打开摄像头并确认能取到一帧。
+    def open(self, timeout_s: float = 30.0, delay: float = 0.3) -> None:
+        """打开摄像头并确认能取到一帧;DSHOW 后端在 timeout_s 内退避重试,超时才抛错。
 
-        冷启动 / 睡眠唤醒后 USB 摄像头要几秒才枚举就绪——首次 open 常失败,或
-        isOpened() 为真却读不出帧。带退避重试,直到真正能 read() 到一帧。
+        只用 DSHOW:MSMF 后端在设备不可用时,`VideoCapture()` 构造调用会阻塞数十分钟
+        (实测一次卡了约 33min),且是 C++ 层阻塞、Python 超时打不断,故不能用作回退。
+        每次尝试把 open/read/耗时打进日志,便于排查睡眠唤醒后 DSHOW 何时恢复。
         """
-        for _ in range(retries):
+        start = time.monotonic()
+        attempt = 0
+        while True:
+            attempt += 1
+            t0 = time.monotonic()
             cap = cv2.VideoCapture(self.index, cv2.CAP_DSHOW)
-            if cap.isOpened():
-                ok, _frame = cap.read()
-                if ok and _frame is not None:
-                    self._cap = cap
-                    return
+            opened = cap.isOpened()
+            read_ok = False
+            if opened:
+                ok, frame = cap.read()
+                read_ok = bool(ok and frame is not None)
+            if read_ok:
+                print(f"[摄像头] DSHOW 第 {attempt} 次就绪,累计 {time.monotonic() - start:.1f}s",
+                      flush=True)
+                self._cap = cap
+                return
             cap.release()
+            print(f"[摄像头] DSHOW 第 {attempt} 次失败 open={opened} read={read_ok} "
+                  f"本次 {time.monotonic() - t0:.1f}s", flush=True)
+            if time.monotonic() - start >= timeout_s:
+                raise RuntimeError(
+                    f"无法打开摄像头(index={self.index},{timeout_s:.0f}s 内 {attempt} 次均失败)"
+                )
             time.sleep(delay)
-        raise RuntimeError(f"无法打开摄像头(index={self.index},已重试 {retries} 次)")
 
     def read(self):
         """返回一帧 BGR 图;失败抛异常。"""
