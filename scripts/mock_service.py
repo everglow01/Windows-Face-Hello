@@ -1,6 +1,6 @@
 """里程碑 b 的最小 mock 认证服务:只为在 VM 里验证 CP 的命名管道客户端。
 
-不加载任何模型/摄像头,ping 返回固定用户列表,authenticate 返回占位失败。
+不加载任何模型/摄像头;ping 与 authenticate 都返回当前账户名(假装识别通过)。
 管道语义(消息模式)与真服务 face_hello/service.py 完全一致,故对 CP 透明。
 
 仅依赖 pywin32:  pip install pywin32
@@ -9,21 +9,17 @@
 from __future__ import annotations
 
 import json
-import sys
 
 import win32api
 import win32file
 import win32pipe
 
-PIPE_NAME = r"\\.\pipe\FaceHello"
+PIPE_NAME = r"\\.\pipe\FaceHello"  # 须与 face_hello/config.py 的 PIPE_NAME 一致
 _BUF = 65536
 
-# 服务返回的登录标识。可用命令行参数显式指定,验证不同账户类型:
-#   本地账户:  python mock_service.py                 (默认 = 当前账户名)
-#   本地显式:  python mock_service.py "DCR\owen"
-#   微软账户:  python mock_service.py "MicrosoftAccount\1250933321@qq.com"
-# CP 会按 \ 拆成 域\用户:本地 -> 计算机名作域;微软 -> 域=MicrosoftAccount,用户=邮箱。
-_IDENTITY = sys.argv[1] if len(sys.argv) > 1 else win32api.GetUserName()
+# 服务返回的登录标识 = 当前账户名。CP 用「计算机名\该名」+ LSA 里存的解锁密码提交 KERB,
+# 本地账户与微软账户都适用(微软账户也有本地后备名,见 scripts/logon_probe.py 实测)。
+_IDENTITY = win32api.GetUserName()
 
 
 def _handle(req: dict) -> dict:

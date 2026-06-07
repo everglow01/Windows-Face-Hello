@@ -25,7 +25,7 @@ const FIELD_STATE_PAIR g_fieldStatePairs[FFI_NUM_FIELDS] =
 
 CFaceProvider::CFaceProvider()
     : _cRef(1), _pCredential(nullptr), _pcpe(nullptr),
-      _upAdviseContext(0), _cpus(CPUS_INVALID)
+      _upAdviseContext(0)
 {
     DllAddRef();
 }
@@ -75,10 +75,9 @@ IFACEMETHODIMP CFaceProvider::SetUsageScenario(
     {
     case CPUS_LOGON:
     case CPUS_UNLOCK_WORKSTATION:
-        _cpus = cpus;
         if (!_pCredential)
         {
-            _CreateEnumeratedCredential();
+            _CreateEnumeratedCredential(cpus);
         }
         return S_OK;
     default:
@@ -154,13 +153,13 @@ IFACEMETHODIMP CFaceProvider::GetCredentialAt(
     return E_INVALIDARG;
 }
 
-void CFaceProvider::_CreateEnumeratedCredential()
+void CFaceProvider::_CreateEnumeratedCredential(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus)
 {
     _ReleaseEnumeratedCredentials();
     _pCredential = new (std::nothrow) CFaceCredential();
     if (_pCredential)
     {
-        if (FAILED(_pCredential->Initialize(_cpus)))
+        if (FAILED(_pCredential->Initialize(cpus)))
         {
             _ReleaseEnumeratedCredentials();
         }

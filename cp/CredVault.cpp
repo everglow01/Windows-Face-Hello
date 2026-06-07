@@ -11,6 +11,7 @@ bool CredVault::RetrievePassword(const std::wstring& user, std::wstring& outPass
         return false;
     }
 
+    // 前缀须与 face_hello/cred_vault.py 的 _KEY_PREFIX 一致(跨语言契约)。
     const std::wstring keyStr = L"L$FaceHello_" + user;
     LSA_UNICODE_STRING key;
     key.Buffer = const_cast<PWSTR>(keyStr.c_str());

@@ -2,6 +2,7 @@
 
 namespace
 {
+// 须与 face_hello/config.py 的 PIPE_NAME 一致(跨语言契约)。
 constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\FaceHello";
 constexpr DWORD kBufSize = 65536;
 
@@ -28,28 +29,28 @@ std::wstring Utf8ToWide(const char* p, int len)
 
 bool PipeClient::Call(const std::wstring& jsonRequest, std::wstring& outResponse)
 {
-    HANDLE hPipe = INVALID_HANDLE_VALUE;
-    for (int attempt = 0; attempt < 2; ++attempt)
+    // 先直接连;若管道忙,等一个空闲实例再连一次。
+    HANDLE hPipe = CreateFileW(kPipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                               OPEN_EXISTING, 0, nullptr);
+    if (hPipe == INVALID_HANDLE_VALUE)
     {
-        hPipe = CreateFileW(kPipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                            OPEN_EXISTING, 0, nullptr);
-        if (hPipe != INVALID_HANDLE_VALUE) { break; }
-
         if (GetLastError() != ERROR_PIPE_BUSY)
         {
             outResponse = L"auth service not running";
             return false;
         }
-        if (!WaitNamedPipeW(kPipeName, 3000)) // 服务忙,等一会儿管道实例
+        if (!WaitNamedPipeW(kPipeName, 3000))
         {
             outResponse = L"auth service busy / timeout";
             return false;
         }
-    }
-    if (hPipe == INVALID_HANDLE_VALUE)
-    {
-        outResponse = L"auth service not running";
-        return false;
+        hPipe = CreateFileW(kPipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                            OPEN_EXISTING, 0, nullptr);
+        if (hPipe == INVALID_HANDLE_VALUE)
+        {
+            outResponse = L"auth service not running";
+            return false;
+        }
     }
 
     // 切到消息读模式,与服务端 PIPE_TYPE_MESSAGE 一致(一次请求一条消息)。
@@ -93,15 +94,23 @@ bool PipeClient::Ping(std::wstring& outSummary)
 namespace
 {
 // 极简 JSON 取值(响应来自我们自己的服务,格式可控)。
-bool ExtractBool(const std::wstring& json, const std::wstring& field, bool& val)
+// 返回 "field": 之后第一个非空格字符的位置,找不到返回 npos。
+size_t FindValue(const std::wstring& json, const std::wstring& field)
 {
     const std::wstring key = L"\"" + field + L"\"";
     size_t p = json.find(key);
-    if (p == std::wstring::npos) { return false; }
+    if (p == std::wstring::npos) { return std::wstring::npos; }
     p = json.find(L':', p + key.size());
-    if (p == std::wstring::npos) { return false; }
+    if (p == std::wstring::npos) { return std::wstring::npos; }
     ++p;
     while (p < json.size() && json[p] == L' ') { ++p; }
+    return p;
+}
+
+bool ExtractBool(const std::wstring& json, const std::wstring& field, bool& val)
+{
+    const size_t p = FindValue(json, field);
+    if (p == std::wstring::npos) { return false; }
     if (json.compare(p, 4, L"true") == 0) { val = true; return true; }
     if (json.compare(p, 5, L"false") == 0) { val = false; return true; }
     return false;
@@ -109,10 +118,7 @@ bool ExtractBool(const std::wstring& json, const std::wstring& field, bool& val)
 
 bool ExtractString(const std::wstring& json, const std::wstring& field, std::wstring& val)
 {
-    const std::wstring key = L"\"" + field + L"\"";
-    size_t p = json.find(key);
-    if (p == std::wstring::npos) { return false; }
-    p = json.find(L':', p + key.size());
+    size_t p = FindValue(json, field);
     if (p == std::wstring::npos) { return false; }
     p = json.find(L'"', p);
     if (p == std::wstring::npos) { return false; }

@@ -97,10 +97,11 @@ HRESULT RetrieveNegotiateAuthPackage(ULONG* pulAuthPackage)
 
     ULONG ulPackage = 0;
     char szNegotiate[] = "Negotiate";
+    const size_t cch = strlen(szNegotiate);
     LSA_STRING name;
     name.Buffer = szNegotiate;
-    name.Length = static_cast<USHORT>(strlen(szNegotiate));
-    name.MaximumLength = static_cast<USHORT>(strlen(szNegotiate) + 1);
+    name.Length = static_cast<USHORT>(cch);
+    name.MaximumLength = static_cast<USHORT>(cch + 1);
 
     st = LsaLookupAuthenticationPackage(hLsa, &name, &ulPackage);
     HRESULT hr;

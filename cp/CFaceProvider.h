@@ -29,14 +29,13 @@ public:
 
 private:
     ~CFaceProvider();
-    void _CreateEnumeratedCredential();
+    void _CreateEnumeratedCredential(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus);
     void _ReleaseEnumeratedCredentials();
 
     LONG _cRef;
     CFaceCredential* _pCredential;
     ICredentialProviderEvents* _pcpe;
     UINT_PTR _upAdviseContext;
-    CREDENTIAL_PROVIDER_USAGE_SCENARIO _cpus;
 };
 
 // 由 dll.cpp 的类工厂调用。
