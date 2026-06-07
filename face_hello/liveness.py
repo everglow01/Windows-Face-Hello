@@ -72,21 +72,31 @@ class FaceMeshTracker:
         from mediapipe.tasks.python import vision
 
         self._mp = mp
+        self._ts_ms = 0  # VIDEO 模式要求时间戳严格递增
         # 用 buffer 而非 path:mediapipe C++ 打不开含非 ASCII(如中文)的 Windows 路径
         model_bytes = config.FACE_LANDMARKER.read_bytes() if config.FACE_LANDMARKER.exists() \
             else _download_landmarker_bytes()
         options = vision.FaceLandmarkerOptions(
             base_options=mp_python.BaseOptions(model_asset_buffer=model_bytes),
-            running_mode=vision.RunningMode.IMAGE,
+            # VIDEO 流式:跨帧跟踪,不必每帧重跑人脸检测,比 IMAGE 快且稳
+            # (IMAGE 模式下偶发单帧卡死数十秒)
+            running_mode=vision.RunningMode.VIDEO,
             num_faces=1,
         )
         self._landmarker = vision.FaceLandmarker.create_from_options(options)
 
     def process(self, frame_bgr) -> FaceMetrics | None:
+        import time
+
         h, w = frame_bgr.shape[:2]
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         mp_image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
-        res = self._landmarker.detect(mp_image)
+        self._ts_ms += 33  # 约 30fps 的递增时间戳
+        _td = time.monotonic()
+        res = self._landmarker.detect_for_video(mp_image, self._ts_ms)
+        _dd = time.monotonic() - _td
+        if _dd > 0.5:  # 临时诊断:确认是否仍是 detect 慢
+            print(f"[mp] detect={_dd:.2f}s", flush=True)
         if not res.face_landmarks:
             return None
         lm = res.face_landmarks[0]
