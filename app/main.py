@@ -368,7 +368,8 @@ class ServiceTab(QWidget):
             QMessageBox.warning(self, action, out or f"{action} 返回码 {rc}")
 
     def _install(self) -> None:
-        rc, out = _run_service("install", "--startup", "auto")
+        # 注意:HandleCommandLine 要求选项在命令之前(--startup auto install)
+        rc, out = _run_service("--startup", "auto", "install")
         if rc == 0:
             _run_service("start")
             self._refresh_status()
