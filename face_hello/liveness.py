@@ -86,17 +86,11 @@ class FaceMeshTracker:
         self._landmarker = vision.FaceLandmarker.create_from_options(options)
 
     def process(self, frame_bgr) -> FaceMetrics | None:
-        import time
-
         h, w = frame_bgr.shape[:2]
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         mp_image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
-        self._ts_ms += 33  # 约 30fps 的递增时间戳
-        _td = time.monotonic()
+        self._ts_ms += 33  # VIDEO 模式要求时间戳严格递增(约 30fps)
         res = self._landmarker.detect_for_video(mp_image, self._ts_ms)
-        _dd = time.monotonic() - _td
-        if _dd > 0.5:  # 临时诊断:确认是否仍是 detect 慢
-            print(f"[mp] detect={_dd:.2f}s", flush=True)
         if not res.face_landmarks:
             return None
         lm = res.face_landmarks[0]
@@ -147,7 +141,6 @@ class LivenessSession:
     _blinks: int = field(default=0, init=False)
     _closed_frames: int = field(default=0, init=False)
     _was_closed: bool = field(default=False, init=False)
-    _last_dbg: float = field(default=0.0, init=False)  # 临时诊断:节流打印
 
     def __post_init__(self):
         self.kind = random.choice(
@@ -170,16 +163,6 @@ class LivenessSession:
         if self.done:
             return
         now = time.monotonic()
-
-        # 临时诊断:每 ~1s 打印一次活体内部状态,定位"卡 47 秒"的根因
-        if now - self._last_dbg >= 1.0:
-            self._last_dbg = now
-            if metrics is None:
-                print(f"[live] no-face start={'y' if self.start_ts else 'n'} "
-                      f"t={now - self.created_ts:.1f}", flush=True)
-            else:
-                print(f"[live] face yaw={metrics.yaw_deg:+.1f} ear={metrics.ear:.2f} "
-                      f"start={'y' if self.start_ts else 'n'} blinks={self._blinks}", flush=True)
 
         # 还没见到人脸:不计挑战时间,但有"一直没脸"的总超时兜底
         if self.start_ts is None:

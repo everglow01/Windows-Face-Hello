@@ -58,30 +58,18 @@ class _AuthRunner:
             self._thread.start()
 
     def _run(self, detector: FaceDetector, store: FaceStore) -> None:
-        import time
-
-        t0 = time.monotonic()
-
         def on_instr(s: str) -> None:
             with self._lock:
                 self._instruction = s
-            # 带相对时间戳,便于定位活体各阶段耗时(无脸等待 / 挑战 / 识别)
-            print(f"[活体 +{time.monotonic() - t0:5.1f}s] {s}", flush=True)
 
         try:
             store.load()
-            s = store.get_settings()  # 临时诊断:打印本次实际生效的活体阈值
-            print(f"[活体设置] liveness={s['liveness_enabled']} "
-                  f"challenge_timeout={s['challenge_timeout_s']} no_face={s['no_face_timeout_s']} "
-                  f"yaw_thr={s['yaw_threshold_deg']} blinks={s['required_blinks']} "
-                  f"ear={s['ear_threshold']}", flush=True)
             if store.is_empty():
                 result = AuthResult(False, "尚未录入任何人脸")
             else:
                 result = authenticate_blocking(detector, store, on_instruction=on_instr)
         except Exception as e:  # noqa: BLE001
             result = AuthResult(False, f"认证异常: {e}")
-        print(f"[活体 +{time.monotonic() - t0:5.1f}s] 结束", flush=True)
         with self._lock:
             self._result = result
             self._done = True

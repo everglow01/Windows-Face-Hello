@@ -61,27 +61,11 @@ class AuthSession:
                     self._finish(AuthResult(False, "活体检测失败(超时或未完成动作)"))
                     return
                 self.phase = "recognize"
-                # 识别前先关掉 MediaPipe:其线程池与 onnxruntime 同时活动会让识别卡死数十秒
-                if self._tracker is not None:
-                    import time
-
-                    _tc = time.monotonic()
-                    self._tracker.close()
-                    _dc = time.monotonic() - _tc
-                    if _dc > 0.5:  # 临时诊断:确认 close 是否就是那 ~42s
-                        print(f"[perf] tracker_close={_dc:.2f}s", flush=True)
-                    self._tracker = None
         if self.phase == "recognize":  # 活体通过 或 活体关闭,都在此识别
             self._recognize(frame_bgr)
 
     def _recognize(self, frame_bgr) -> None:
-        import time
-
-        _t = time.monotonic()
         face = self.detector.largest_face(frame_bgr)
-        _d = time.monotonic() - _t
-        if _d > 0.5:  # 临时诊断:确认识别耗时
-            print(f"[perf] recognize={_d:.2f}s", flush=True)
         if face is None:
             self._finish(AuthResult(False, "未检测到人脸"))
             return
@@ -96,7 +80,12 @@ class AuthSession:
         self.result = result
         self.phase = "done"
         if self._tracker is not None:
-            self._tracker.close()
+            # MediaPipe 的 close() 会阻塞约 40s(等内部图/线程退出),丢到后台守护线程,
+            # 不卡解锁主流程。tracker 本身按会话新建,后台关旧的即可。
+            import threading
+
+            threading.Thread(target=self._tracker.close, daemon=True).start()
+            self._tracker = None
 
 
 def authenticate_blocking(detector: FaceDetector, store: FaceStore, on_instruction=None) -> AuthResult:
@@ -105,21 +94,13 @@ def authenticate_blocking(detector: FaceDetector, store: FaceStore, on_instructi
     供认证服务调用(无 Qt)。liveness 自带超时,循环必然结束。
     on_instruction(text):活体提示变化时回调(服务端可打印,供测试者照做)。
     """
-    import time
-
     from .camera import Camera
 
     session = AuthSession(detector, store)
     last = None
     with Camera() as cam:
         while not session.done:
-            t0 = time.monotonic()
-            frame = cam.read()
-            t1 = time.monotonic()
-            session.feed(frame)
-            t2 = time.monotonic()
-            if (t1 - t0) > 0.5 or (t2 - t1) > 0.5:  # 临时诊断:定位每帧慢在哪
-                print(f"[perf] read={t1 - t0:.2f}s feed={t2 - t1:.2f}s", flush=True)
+            session.feed(cam.read())
             if on_instruction is not None and session.instruction != last:
                 last = session.instruction
                 on_instruction(session.instruction)
