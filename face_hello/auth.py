@@ -89,13 +89,21 @@ def authenticate_blocking(detector: FaceDetector, store: FaceStore, on_instructi
     供认证服务调用(无 Qt)。liveness 自带超时,循环必然结束。
     on_instruction(text):活体提示变化时回调(服务端可打印,供测试者照做)。
     """
+    import time
+
     from .camera import Camera
 
     session = AuthSession(detector, store)
     last = None
     with Camera() as cam:
         while not session.done:
-            session.feed(cam.read())
+            t0 = time.monotonic()
+            frame = cam.read()
+            t1 = time.monotonic()
+            session.feed(frame)
+            t2 = time.monotonic()
+            if (t1 - t0) > 0.5 or (t2 - t1) > 0.5:  # 临时诊断:定位每帧慢在哪
+                print(f"[perf] read={t1 - t0:.2f}s feed={t2 - t1:.2f}s", flush=True)
             if on_instruction is not None and session.instruction != last:
                 last = session.instruction
                 on_instruction(session.instruction)
