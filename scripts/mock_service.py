@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 import win32api
 import win32file
@@ -17,15 +18,22 @@ import win32pipe
 PIPE_NAME = r"\\.\pipe\FaceHello"
 _BUF = 65536
 
+# 服务返回的登录标识。可用命令行参数显式指定,验证不同账户类型:
+#   本地账户:  python mock_service.py                 (默认 = 当前账户名)
+#   本地显式:  python mock_service.py "DCR\owen"
+#   微软账户:  python mock_service.py "MicrosoftAccount\1250933321@qq.com"
+# CP 会按 \ 拆成 域\用户:本地 -> 计算机名作域;微软 -> 域=MicrosoftAccount,用户=邮箱。
+_IDENTITY = sys.argv[1] if len(sys.argv) > 1 else win32api.GetUserName()
+
 
 def _handle(req: dict) -> dict:
     cmd = req.get("cmd")
     if cmd == "ping":
-        return {"ok": True, "ready": True, "users": [win32api.GetUserName()]}
+        return {"ok": True, "ready": True, "users": [_IDENTITY]}
     if cmd == "authenticate":
-        # 里程碑 c-1:不做真识别,直接"假装识别通过",返回当前账户名。
-        # 真正解锁靠 CP 用这个用户名去读 LSA 密码 + 提交 KERB。
-        return {"ok": True, "user": win32api.GetUserName()}
+        # 不做真识别,直接"假装识别通过",返回配置的登录标识。
+        # 真正解锁靠 CP 用这个标识去读 LSA 密码 + 提交 KERB。
+        return {"ok": True, "user": _IDENTITY}
     return {"ok": False, "reason": f"unknown cmd: {cmd}"}
 
 
@@ -54,6 +62,7 @@ def _serve_one() -> None:
 
 
 def main() -> None:
+    print(f"[mock service] identity = {_IDENTITY!r}")
     print(f"[mock service] listening {PIPE_NAME} (Ctrl+C to stop)")
     try:
         while True:
