@@ -139,6 +139,13 @@ IFACEMETHODIMP CFaceCredential::SetDeselected()
 // 选中磁贴时拉起后台扫描线程。仅在空闲/失败态允许重新开始。
 void CFaceCredential::_StartAuthThread()
 {
+    // 回收上一轮已自然结束的线程句柄,否则失败/成功后再选中磁贴无法重新扫描。
+    if (_hAuthThread != nullptr && WaitForSingleObject(_hAuthThread, 0) == WAIT_OBJECT_0)
+    {
+        CloseHandle(_hAuthThread);
+        _hAuthThread = nullptr;
+    }
+
     bool canStart = false;
     EnterCriticalSection(&_cs);
     if (_hAuthThread == nullptr &&
