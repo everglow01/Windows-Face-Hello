@@ -61,11 +61,21 @@ class AuthSession:
                     self._finish(AuthResult(False, "活体检测失败(超时或未完成动作)"))
                     return
                 self.phase = "recognize"
+                # 识别前先关掉 MediaPipe:其线程池与 onnxruntime 同时活动会让识别卡死数十秒
+                if self._tracker is not None:
+                    self._tracker.close()
+                    self._tracker = None
         if self.phase == "recognize":  # 活体通过 或 活体关闭,都在此识别
             self._recognize(frame_bgr)
 
     def _recognize(self, frame_bgr) -> None:
+        import time
+
+        _t = time.monotonic()
         face = self.detector.largest_face(frame_bgr)
+        _d = time.monotonic() - _t
+        if _d > 0.5:  # 临时诊断:确认识别耗时
+            print(f"[perf] recognize={_d:.2f}s", flush=True)
         if face is None:
             self._finish(AuthResult(False, "未检测到人脸"))
             return
