@@ -72,7 +72,8 @@ def _serve_one(detector: FaceDetector, store: FaceStore) -> None:
         except Exception as e:  # noqa: BLE001
             resp = {"ok": False, "reason": f"请求处理失败: {e}"}
         try:
-            win32file.WriteFile(pipe, json.dumps(resp).encode("utf-8"))
+            # ensure_ascii=False:中文 reason 直接发 UTF-8,CP 端按 UTF-8 解就不乱码
+            win32file.WriteFile(pipe, json.dumps(resp, ensure_ascii=False).encode("utf-8"))
             win32file.FlushFileBuffers(pipe)
         except Exception:  # noqa: BLE001 客户端可能已断开
             pass
@@ -81,18 +82,25 @@ def _serve_one(detector: FaceDetector, store: FaceStore) -> None:
         win32file.CloseHandle(pipe)
 
 
-def serve() -> None:
-    print("[FaceHello 服务] 加载模型中…")
+def serve(should_continue=None) -> None:
+    """常驻服务主循环。
+
+    should_continue:返回 False 时退出循环(供 Windows 服务的 SvcStop 用);
+    默认 None = 永远运行(控制台模式靠 Ctrl+C)。
+    """
+    if should_continue is None:
+        should_continue = lambda: True  # noqa: E731
+    print("[FaceHello 服务] 加载模型中…", flush=True)
     detector = FaceDetector()
     detector.load()
     _warm_liveness()
     store = FaceStore().load()
-    print(f"[FaceHello 服务] 就绪,监听 {config.PIPE_NAME}(Ctrl+C 退出)")
+    print(f"[FaceHello 服务] 就绪,监听 {config.PIPE_NAME}", flush=True)
     try:
-        while True:
+        while should_continue():
             _serve_one(detector, store)
     except KeyboardInterrupt:
-        print("\n[FaceHello 服务] 已停止")
+        print("\n[FaceHello 服务] 已停止", flush=True)
 
 
 if __name__ == "__main__":

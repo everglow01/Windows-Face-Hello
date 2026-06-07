@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.workers import AuthWorker, EnrollWorker, WarmupWorker
+from face_hello import config, cred_vault
 from face_hello.auth import AuthResult
 from face_hello.detector import FaceDetector
 from face_hello.store import FaceStore
@@ -60,11 +61,13 @@ class EnrollTab(QWidget):
         self.worker: EnrollWorker | None = None
 
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("用户名(如 owen)")
+        # 预填当前 Windows 账户名:档案名必须等于该账户名,锁屏刷脸才能对上 LSA 密码 + KERB
+        self.name_edit.setText(cred_vault.current_user())
+        self.name_edit.setPlaceholderText("Windows 账户名")
         self.start_btn = QPushButton("开始录入")
         self.start_btn.clicked.connect(self._start)
         self.preview = _preview_label()
-        self.status = QLabel("输入用户名后开始;请正对摄像头,光线充足。")
+        self.status = QLabel("用户名需与登录 Windows 的账户一致;请正对摄像头,光线充足。")
 
         top = QHBoxLayout()
         top.addWidget(QLabel("用户名:"))
@@ -253,6 +256,138 @@ class SettingsTab(QWidget):
         QMessageBox.information(self, "已保存", "设置已保存")
 
 
+def _is_admin() -> bool:
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _run_service(*args: str) -> tuple[int, str]:
+    """调 `python winservice_main.py <args>`(install/start/stop/remove)。需管理员。"""
+    import subprocess
+
+    cmd = [sys.executable, str(config.ROOT / "winservice_main.py"), *args]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    return p.returncode, (p.stdout + p.stderr).strip()
+
+
+_SVC_STATES = {1: "已停止", 2: "启动中", 3: "停止中", 4: "运行中", 7: "已暂停"}
+
+
+def _service_status() -> str:
+    try:
+        import win32serviceutil
+
+        st = win32serviceutil.QueryServiceStatus(ServiceTab.SERVICE_NAME)[1]
+        return _SVC_STATES.get(st, f"状态码 {st}")
+    except Exception:  # noqa: BLE001 多半是未安装
+        return "未安装"
+
+
+class ServiceTab(QWidget):
+    """服务与凭据:设 LSA 解锁密码 + 安装/启停 LocalSystem 自启服务。需管理员。"""
+
+    SERVICE_NAME = "FaceHello"
+
+    def __init__(self):
+        super().__init__()
+        self.user = cred_vault.current_user()
+        self.is_admin = _is_admin()
+
+        self.pwd_edit = QLineEdit()
+        self.pwd_edit.setEchoMode(QLineEdit.Password)
+        self.pwd_edit.setPlaceholderText("锁屏解锁用的密码")
+        save_pwd_btn = QPushButton("保存解锁密码")
+        save_pwd_btn.clicked.connect(self._save_pwd)
+
+        install_btn = QPushButton("安装并设为开机自启")
+        install_btn.clicked.connect(self._install)
+        start_btn = QPushButton("启动")
+        start_btn.clicked.connect(lambda: self._svc_cmd("start"))
+        stop_btn = QPushButton("停止")
+        stop_btn.clicked.connect(lambda: self._svc_cmd("stop"))
+        remove_btn = QPushButton("卸载")
+        remove_btn.clicked.connect(self._remove)
+        refresh_btn = QPushButton("刷新状态")
+        refresh_btn.clicked.connect(self._refresh_status)
+        self.svc_status = QLabel("—")
+
+        # 这些动作都需管理员,非管理员时禁用
+        self._admin_widgets = [
+            self.pwd_edit, save_pwd_btn, install_btn, start_btn, stop_btn, remove_btn,
+        ]
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(f"当前账户:{self.user}"))
+        if not self.is_admin:
+            warn = QLabel("⚠ 设置密码与管理服务需要管理员权限,请以管理员身份重新运行本管理台。")
+            warn.setStyleSheet("color:#c62828;")
+            layout.addWidget(warn)
+
+        layout.addSpacing(8)
+        layout.addWidget(QLabel("① 解锁密码(写入 LSA,刷脸时替你提交;微软账户登录的机器通常填本地登录密码)"))
+        pwd_row = QHBoxLayout()
+        pwd_row.addWidget(self.pwd_edit, 1)
+        pwd_row.addWidget(save_pwd_btn)
+        layout.addLayout(pwd_row)
+
+        layout.addSpacing(12)
+        layout.addWidget(QLabel("② 认证服务(LocalSystem,开机自启,锁屏时为凭据提供程序刷脸)"))
+        svc_row = QHBoxLayout()
+        for b in (install_btn, start_btn, stop_btn, remove_btn, refresh_btn):
+            svc_row.addWidget(b)
+        layout.addLayout(svc_row)
+        layout.addWidget(self.svc_status)
+        layout.addStretch(1)
+
+        if not self.is_admin:
+            for w in self._admin_widgets:
+                w.setEnabled(False)
+        self._refresh_status()
+
+    def _save_pwd(self) -> None:
+        pwd = self.pwd_edit.text()
+        if not pwd:
+            QMessageBox.warning(self, "提示", "请输入密码")
+            return
+        try:
+            cred_vault.store_password(self.user, pwd)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "失败", f"写入 LSA 失败:{e}")
+            return
+        self.pwd_edit.clear()
+        QMessageBox.information(self, "完成", f"已为账户「{self.user}」保存解锁密码")
+
+    def _svc_cmd(self, action: str) -> None:
+        rc, out = _run_service(action)
+        self._refresh_status()
+        if rc != 0:
+            QMessageBox.warning(self, action, out or f"{action} 返回码 {rc}")
+
+    def _install(self) -> None:
+        rc, out = _run_service("install", "--startup", "auto")
+        if rc == 0:
+            _run_service("start")
+            self._refresh_status()
+            QMessageBox.information(self, "安装", "服务已安装并设为开机自启,已尝试启动")
+        else:
+            self._refresh_status()
+            QMessageBox.warning(self, "安装", out or f"返回码 {rc}")
+
+    def _remove(self) -> None:
+        _run_service("stop")
+        rc, out = _run_service("remove")
+        self._refresh_status()
+        if rc != 0:
+            QMessageBox.warning(self, "卸载", out or f"返回码 {rc}")
+
+    def _refresh_status(self) -> None:
+        self.svc_status.setText("服务状态:" + _service_status())
+
+
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -264,8 +399,10 @@ class MainWindow(QWidget):
         self.settings_tab = SettingsTab(self.store)
         self.enroll_tab = EnrollTab(self.detector, self.store, self.settings_tab.refresh)
         self.auth_tab = AuthTab(self.detector, self.store)
+        self.service_tab = ServiceTab()
         tabs.addTab(self.enroll_tab, "录入人脸")
         tabs.addTab(self.auth_tab, "测试解锁")
+        tabs.addTab(self.service_tab, "服务与凭据")
         tabs.addTab(self.settings_tab, "设置与安全")
 
         self.status_label = QLabel("● 模型加载中…")
