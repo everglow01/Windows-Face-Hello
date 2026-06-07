@@ -29,28 +29,37 @@ std::wstring Utf8ToWide(const char* p, int len)
 
 bool PipeClient::Call(const std::wstring& jsonRequest, std::wstring& outResponse)
 {
-    // 先直接连;若管道忙,等一个空闲实例再连一次。
-    HANDLE hPipe = CreateFileW(kPipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                               OPEN_EXISTING, 0, nullptr);
-    if (hPipe == INVALID_HANDLE_VALUE)
+    // 连接管道,带重试。服务是单实例串行管道,每应答完一个请求就重建实例,
+    // 期间有瞬时空窗(CreateFile 报 FILE_NOT_FOUND);异步轮询紧挨着发,极易撞上。
+    // 故对 BUSY(实例都占用)和 FILE_NOT_FOUND(实例正在重建)都短暂重试,
+    // 总计约 3 秒,既跨过空窗,也容忍服务刚启动还在建首个实例。
+    HANDLE hPipe = INVALID_HANDLE_VALUE;
+    for (int attempt = 0; attempt < 30; ++attempt)
     {
-        if (GetLastError() != ERROR_PIPE_BUSY)
-        {
-            outResponse = L"auth service not running";
-            return false;
-        }
-        if (!WaitNamedPipeW(kPipeName, 3000))
-        {
-            outResponse = L"auth service busy / timeout";
-            return false;
-        }
         hPipe = CreateFileW(kPipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                             OPEN_EXISTING, 0, nullptr);
-        if (hPipe == INVALID_HANDLE_VALUE)
+        if (hPipe != INVALID_HANDLE_VALUE)
         {
-            outResponse = L"auth service not running";
-            return false;
+            break;
         }
+        const DWORD err = GetLastError();
+        if (err == ERROR_PIPE_BUSY)
+        {
+            WaitNamedPipeW(kPipeName, 2000);  // 等一个空闲实例
+        }
+        else if (err == ERROR_FILE_NOT_FOUND)
+        {
+            Sleep(100);  // 服务正在重建实例的空窗,稍等重试
+        }
+        else
+        {
+            break;  // 其他错误不重试
+        }
+    }
+    if (hPipe == INVALID_HANDLE_VALUE)
+    {
+        outResponse = L"auth service not running";
+        return false;
     }
 
     // 切到消息读模式,与服务端 PIPE_TYPE_MESSAGE 一致(一次请求一条消息)。
