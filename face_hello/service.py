@@ -70,6 +70,11 @@ class _AuthRunner:
 
         try:
             store.load()
+            s = store.get_settings()  # 临时诊断:打印本次实际生效的活体阈值
+            print(f"[活体设置] liveness={s['liveness_enabled']} "
+                  f"challenge_timeout={s['challenge_timeout_s']} no_face={s['no_face_timeout_s']} "
+                  f"yaw_thr={s['yaw_threshold_deg']} blinks={s['required_blinks']} "
+                  f"ear={s['ear_threshold']}", flush=True)
             if store.is_empty():
                 result = AuthResult(False, "尚未录入任何人脸")
             else:
