@@ -3,6 +3,7 @@
 #include <shlwapi.h>
 #include <ntsecapi.h>
 #include "CFaceCredential.h"
+#include "CFaceProvider.h"
 #include "common.h"
 #include "PipeClient.h"
 #include "CredVault.h"
@@ -35,13 +36,18 @@ static HBITMAP _CreateSolidBitmap(int w, int h, COLORREF color)
 }
 
 CFaceCredential::CFaceCredential()
-    : _cRef(1), _cpus(CPUS_INVALID), _pCredProvCredentialEvents(nullptr)
+    : _cRef(1), _cpus(CPUS_INVALID), _pProvider(nullptr),
+      _pCredProvCredentialEvents(nullptr), _hAuthThread(nullptr),
+      _stopFlag(0), _authState(AuthState::Idle)
 {
     ZeroMemory(_rgFieldStrings, sizeof(_rgFieldStrings));
+    InitializeCriticalSection(&_cs);
 }
 
 CFaceCredential::~CFaceCredential()
 {
+    _StopAuthThread();
+    DeleteCriticalSection(&_cs);
     for (PWSTR& s : _rgFieldStrings)
     {
         CoTaskMemFree(s);
@@ -54,9 +60,10 @@ CFaceCredential::~CFaceCredential()
     }
 }
 
-HRESULT CFaceCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus)
+HRESULT CFaceCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, CFaceProvider* pProvider)
 {
     _cpus = cpus;
+    _pProvider = pProvider;
     HRESULT hr = SHStrDupW(L"Face Unlock", &_rgFieldStrings[FFI_LABEL]);
     if (SUCCEEDED(hr))
     {
@@ -117,26 +124,145 @@ IFACEMETHODIMP CFaceCredential::UnAdvise()
 
 IFACEMETHODIMP CFaceCredential::SetSelected(BOOL* pbAutoLogon)
 {
-    // 里程碑 a:选中磁贴不自动触发认证(等接入识别后再改成自动开始)。
+    // milestone d:选中磁贴即后台开始刷脸(不在此处自动提交,成功后再由线程触发)。
     *pbAutoLogon = FALSE;
-
-    // 里程碑 b:选中磁贴时 ping 认证服务,把响应(或失败原因)显示在状态栏,
-    // 验证锁屏的 SYSTEM 上下文里 CP↔服务的命名管道通信成立。
-    std::wstring summary;
-    PipeClient::Ping(summary);
-    CoTaskMemFree(_rgFieldStrings[FFI_STATUS]);
-    _rgFieldStrings[FFI_STATUS] = nullptr;
-    SHStrDupW(summary.c_str(), &_rgFieldStrings[FFI_STATUS]);
-    if (_pCredProvCredentialEvents && _rgFieldStrings[FFI_STATUS])
-    {
-        _pCredProvCredentialEvents->SetFieldString(this, FFI_STATUS, _rgFieldStrings[FFI_STATUS]);
-    }
+    _StartAuthThread();
     return S_OK;
 }
 
 IFACEMETHODIMP CFaceCredential::SetDeselected()
 {
+    _StopAuthThread();
     return S_OK;
+}
+
+// 选中磁贴时拉起后台扫描线程。仅在空闲/失败态允许重新开始。
+void CFaceCredential::_StartAuthThread()
+{
+    bool canStart = false;
+    EnterCriticalSection(&_cs);
+    if (_hAuthThread == nullptr &&
+        (_authState == AuthState::Idle || _authState == AuthState::Failed))
+    {
+        _authState = AuthState::Running;
+        _stopFlag = 0;
+        canStart = true;
+    }
+    LeaveCriticalSection(&_cs);
+    if (!canStart)
+    {
+        return;
+    }
+    AddRef();  // 线程持有一个引用,线程退出时释放
+    _hAuthThread = CreateThread(nullptr, 0, _AuthThreadProc, this, 0, nullptr);
+    if (_hAuthThread == nullptr)
+    {
+        Release();
+        EnterCriticalSection(&_cs);
+        _authState = AuthState::Idle;
+        LeaveCriticalSection(&_cs);
+    }
+}
+
+// 取消选中/销毁时停掉扫描线程(等它退出,确保不再回调已失效的 events)。
+void CFaceCredential::_StopAuthThread()
+{
+    InterlockedExchange(&_stopFlag, 1);
+    HANDLE h = _hAuthThread;
+    _hAuthThread = nullptr;
+    if (h != nullptr)
+    {
+        WaitForSingleObject(h, 5000);  // poll 很快返回,通常 <1s
+        CloseHandle(h);
+    }
+    EnterCriticalSection(&_cs);
+    if (_authState == AuthState::Running)
+    {
+        _authState = AuthState::Idle;
+    }
+    LeaveCriticalSection(&_cs);
+}
+
+DWORD WINAPI CFaceCredential::_AuthThreadProc(LPVOID param)
+{
+    CFaceCredential* self = static_cast<CFaceCredential*>(param);
+    self->_AuthLoop();
+    self->Release();  // 对应 _StartAuthThread 的 AddRef
+    return 0;
+}
+
+void CFaceCredential::_AuthLoop()
+{
+    std::wstring reason;
+    if (!PipeClient::AuthStart(reason))
+    {
+        _SetStatus((L"认证服务不可用: " + reason).c_str());
+        EnterCriticalSection(&_cs);
+        _authState = AuthState::Failed;
+        LeaveCriticalSection(&_cs);
+        return;
+    }
+
+    for (;;)
+    {
+        if (InterlockedCompareExchange(&_stopFlag, 0, 0) == 1)
+        {
+            return;  // 被取消;状态已在 _StopAuthThread 里复位
+        }
+        bool done = false, success = false;
+        std::wstring instr, user, rsn;
+        if (!PipeClient::AuthPoll(done, success, instr, user, rsn))
+        {
+            _SetStatus(L"与认证服务通信中断");
+            EnterCriticalSection(&_cs);
+            _authState = AuthState::Failed;
+            LeaveCriticalSection(&_cs);
+            return;
+        }
+        if (!done)
+        {
+            if (!instr.empty())
+            {
+                _SetStatus(instr.c_str());  // 把"请眨眼/转头"刷到锁屏
+            }
+            Sleep(400);
+            continue;
+        }
+        if (success)
+        {
+            EnterCriticalSection(&_cs);
+            _authUser = user;
+            _authState = AuthState::Success;
+            LeaveCriticalSection(&_cs);
+            _SetStatus(L"识别通过,正在登录…");
+            if (_pProvider != nullptr)
+            {
+                _pProvider->SignalAutoLogon();  // 触发 LogonUI 调 GetSerialization
+            }
+        }
+        else
+        {
+            _SetStatus((L"刷脸未通过: " + rsn).c_str());
+            EnterCriticalSection(&_cs);
+            _authState = AuthState::Failed;
+            LeaveCriticalSection(&_cs);
+        }
+        return;
+    }
+}
+
+void CFaceCredential::_SetStatus(PCWSTR text)
+{
+    EnterCriticalSection(&_cs);
+    CoTaskMemFree(_rgFieldStrings[FFI_STATUS]);
+    _rgFieldStrings[FFI_STATUS] = nullptr;
+    SHStrDupW(text, &_rgFieldStrings[FFI_STATUS]);
+    if (_pCredProvCredentialEvents != nullptr && _rgFieldStrings[FFI_STATUS] != nullptr &&
+        InterlockedCompareExchange(&_stopFlag, 0, 0) == 0)
+    {
+        _pCredProvCredentialEvents->SetFieldString(this, FFI_STATUS, _rgFieldStrings[FFI_STATUS]);
+    }
+    LeaveCriticalSection(&_cs);
 }
 
 IFACEMETHODIMP CFaceCredential::GetFieldState(
@@ -206,19 +332,22 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
     *ppwszOptionalStatusText = nullptr;
     *pcpsiOptionalStatusIcon = CPSI_NONE;
 
-    // 1. 调认证服务做识别(c-1 用 mock,直接返回 {ok, user})。
-    bool authOk = false;
-    std::wstring user, reason;
-    if (!PipeClient::Authenticate(authOk, user, reason))
+    // 1. milestone d:识别由后台扫描线程完成,这里只看缓存结果。
+    //    未识别成功就返回 NOT_FINISHED(LogonUI 仅在自动提交时调到这里)。
+    std::wstring user;
+    EnterCriticalSection(&_cs);
+    const bool ready = (_authState == AuthState::Success);
+    if (ready) { user = _authUser; }
+    LeaveCriticalSection(&_cs);
+    if (!ready)
     {
-        _ReportFail((L"认证服务不可用: " + reason).c_str(), ppwszOptionalStatusText, pcpsiOptionalStatusIcon);
-        return S_OK;
+        return S_OK;  // 还没识别通过,什么都不提交
     }
-    if (!authOk)
-    {
-        _ReportFail((L"刷脸未通过: " + reason).c_str(), ppwszOptionalStatusText, pcpsiOptionalStatusIcon);
-        return S_OK;
-    }
+    // 这次自动提交已消费:复位状态并清掉自动登录标志,避免失败后死循环重试。
+    EnterCriticalSection(&_cs);
+    _authState = AuthState::Idle;
+    LeaveCriticalSection(&_cs);
+    if (_pProvider != nullptr) { _pProvider->ClearAutoLogon(); }
 
     // 2. 从 LSA Secret 取该用户登录密码(CP 在锁屏是 SYSTEM,可读)。
     std::wstring password;

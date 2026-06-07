@@ -25,9 +25,23 @@ const FIELD_STATE_PAIR g_fieldStatePairs[FFI_NUM_FIELDS] =
 
 CFaceProvider::CFaceProvider()
     : _cRef(1), _pCredential(nullptr), _pcpe(nullptr),
-      _upAdviseContext(0)
+      _upAdviseContext(0), _bAutoLogon(false)
 {
     DllAddRef();
+}
+
+void CFaceProvider::SignalAutoLogon()
+{
+    _bAutoLogon = true;
+    if (_pcpe)
+    {
+        _pcpe->CredentialsChanged(_upAdviseContext);
+    }
+}
+
+void CFaceProvider::ClearAutoLogon()
+{
+    _bAutoLogon = false;
 }
 
 CFaceProvider::~CFaceProvider()
@@ -138,8 +152,9 @@ IFACEMETHODIMP CFaceProvider::GetCredentialCount(
     DWORD* pdwCount, DWORD* pdwDefault, BOOL* pbAutoLogonWithDefault)
 {
     *pdwCount = _pCredential ? 1 : 0;
-    *pdwDefault = 0;
-    *pbAutoLogonWithDefault = FALSE; // 里程碑 a 不自动登录,等用户点磁贴
+    *pdwDefault = 0;  // 我们的磁贴为默认项 → 显示即 SetSelected → 后台开始刷脸
+    // 识别通过后 SignalAutoLogon 置位,LogonUI 据此自动调 GetSerialization 完成提交
+    *pbAutoLogonWithDefault = _bAutoLogon ? TRUE : FALSE;
     return S_OK;
 }
 
@@ -159,7 +174,7 @@ void CFaceProvider::_CreateEnumeratedCredential(CREDENTIAL_PROVIDER_USAGE_SCENAR
     _pCredential = new (std::nothrow) CFaceCredential();
     if (_pCredential)
     {
-        if (FAILED(_pCredential->Initialize(cpus)))
+        if (FAILED(_pCredential->Initialize(cpus, this)))
         {
             _ReleaseEnumeratedCredentials();
         }

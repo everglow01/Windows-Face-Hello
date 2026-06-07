@@ -2,11 +2,14 @@
 
 #include <windows.h>
 #include <credentialprovider.h>
+#include <string>
 #include "common.h"
 
-// 单个「刷脸」磁贴。里程碑 a:能显示图标/标题/提交按钮,但点提交不做任何认证
-// (GetSerialization 返回 NOT_FINISHED + 占位提示)。后续里程碑在 GetSerialization
-// 里接入命名管道 authenticate → 读 LSA 密码 → KERB 解锁。
+class CFaceProvider;  // 反向指针,用于认证成功后触发自动提交
+
+// 单个「刷脸」磁贴。milestone d:选中磁贴即后台线程启动认证(auth_start),轮询
+// auth_poll 把活体提示实时刷到状态文字;识别通过则触发 LogonUI 自动提交,
+// GetSerialization 用缓存的用户名读 LSA 密码 → 打包 KERB 解锁。
 class CFaceCredential : public ICredentialProviderCredential
 {
 public:
@@ -42,14 +45,29 @@ public:
         PWSTR* ppwszOptionalStatusText,
         CREDENTIAL_PROVIDER_STATUS_ICON* pcpsiOptionalStatusIcon);
 
-    HRESULT Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus);
+    HRESULT Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, CFaceProvider* pProvider);
     CFaceCredential();
 
 private:
     ~CFaceCredential();
 
+    enum class AuthState { Idle, Running, Success, Failed };
+
+    void _StartAuthThread();
+    void _StopAuthThread();
+    void _AuthLoop();
+    static DWORD WINAPI _AuthThreadProc(LPVOID param);
+    void _SetStatus(PCWSTR text);  // 线程安全地更新状态字段并通知 LogonUI
+
     LONG _cRef;
     CREDENTIAL_PROVIDER_USAGE_SCENARIO _cpus;
+    CFaceProvider* _pProvider;
     ICredentialProviderCredentialEvents* _pCredProvCredentialEvents;
     PWSTR _rgFieldStrings[FFI_NUM_FIELDS]; // 各文本字段当前内容(CoTaskMem)
+
+    CRITICAL_SECTION _cs;          // 保护 _authState/_authUser/状态字段/events 调用
+    HANDLE _hAuthThread;
+    volatile LONG _stopFlag;       // 1 = 请求停止扫描线程
+    AuthState _authState;
+    std::wstring _authUser;        // 认证通过的账户名(供 GetSerialization)
 };

@@ -14,16 +14,85 @@ ACL 暂用默认(创建者 + 管理员 + SYSTEM 可访问),限 SYSTEM 的加固�
 from __future__ import annotations
 
 import json
+import threading
 
 import win32file
 import win32pipe
 
 from . import config
-from .auth import authenticate_blocking
+from .auth import AuthResult, authenticate_blocking
 from .detector import FaceDetector
 from .store import FaceStore
 
 _BUF = 65536
+
+
+class _AuthRunner:
+    """后台跑一次认证,主循环用 auth_poll 取实时活体提示和最终结果。
+
+    供 milestone d 的异步 CP:CP 选中磁贴 → auth_start(立即返回)→ 反复 auth_poll
+    刷新锁屏提示文字,直到 done。摄像头由这个后台线程独占,主管道循环照常应答。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._instruction = ""
+        self._done = False
+        self._result: AuthResult | None = None
+
+    @property
+    def _running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self, detector: FaceDetector, store: FaceStore) -> None:
+        with self._lock:
+            if self._running:
+                return  # 已有一次在跑,忽略重复 start
+            self._instruction = "启动中…"
+            self._done = False
+            self._result = None
+            self._thread = threading.Thread(
+                target=self._run, args=(detector, store), daemon=True
+            )
+            self._thread.start()
+
+    def _run(self, detector: FaceDetector, store: FaceStore) -> None:
+        def on_instr(s: str) -> None:
+            with self._lock:
+                self._instruction = s
+
+        try:
+            store.load()
+            if store.is_empty():
+                result = AuthResult(False, "尚未录入任何人脸")
+            else:
+                result = authenticate_blocking(detector, store, on_instruction=on_instr)
+        except Exception as e:  # noqa: BLE001
+            result = AuthResult(False, f"认证异常: {e}")
+        with self._lock:
+            self._result = result
+            self._done = True
+        if result.success:
+            print(f"[认证] 通过:user={result.name} similarity={result.similarity:.4f}", flush=True)
+        else:
+            print(f"[认证] 拒绝:{result.reason}", flush=True)
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            resp = {"ok": True, "done": self._done, "instruction": self._instruction}
+            if self._done and self._result is not None:
+                r = self._result
+                resp["success"] = r.success
+                if r.success:
+                    resp["user"] = r.name
+                    resp["similarity"] = round(r.similarity, 4)
+                else:
+                    resp["reason"] = r.reason
+            return resp
+
+
+_runner = _AuthRunner()
 
 
 def _warm_liveness() -> None:
@@ -57,6 +126,11 @@ def _handle(req: dict, detector: FaceDetector, store: FaceStore) -> dict:
             return {"ok": True, "user": result.name, "similarity": round(result.similarity, 4)}
         print(f"[认证] 拒绝:{result.reason}", flush=True)
         return {"ok": False, "reason": result.reason}
+    if cmd == "auth_start":  # milestone d:异步认证,立即返回,随后用 auth_poll 取进度
+        _runner.start(detector, store)
+        return {"ok": True, "done": False}
+    if cmd == "auth_poll":
+        return _runner.snapshot()
     return {"ok": False, "reason": f"未知命令: {cmd}"}
 
 

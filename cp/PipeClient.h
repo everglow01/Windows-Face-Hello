@@ -18,4 +18,13 @@ namespace PipeClient
     // 返回 true 表示拿到了服务响应,识别结果在 outOk:成功时 outUser 为用户名,
     // 失败时 outReason 为拒绝原因。
     bool Authenticate(bool& outOk, std::wstring& outUser, std::wstring& outReason);
+
+    // milestone d 异步认证:启动一次后台认证(立即返回)。传输失败返回 false。
+    bool AuthStart(std::wstring& outReason);
+
+    // 轮询认证进度。传输失败返回 false。否则:outDone=是否结束;
+    // 未结束时 outInstruction 为当前活体提示;结束时 outSuccess 表示成功与否,
+    // 成功 outUser 为用户名,失败 outReason 为原因。
+    bool AuthPoll(bool& outDone, bool& outSuccess, std::wstring& outInstruction,
+                  std::wstring& outUser, std::wstring& outReason);
 }

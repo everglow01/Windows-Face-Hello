@@ -152,3 +152,37 @@ bool PipeClient::Authenticate(bool& outOk, std::wstring& outUser, std::wstring& 
     }
     return true; // 拿到了服务响应,结果看 outOk
 }
+
+bool PipeClient::AuthStart(std::wstring& outReason)
+{
+    std::wstring resp;
+    if (!Call(L"{\"cmd\": \"auth_start\"}", resp))
+    {
+        outReason = resp;
+        return false;
+    }
+    return true;
+}
+
+bool PipeClient::AuthPoll(bool& outDone, bool& outSuccess, std::wstring& outInstruction,
+                          std::wstring& outUser, std::wstring& outReason)
+{
+    std::wstring resp;
+    if (!Call(L"{\"cmd\": \"auth_poll\"}", resp))
+    {
+        outReason = resp;
+        return false;
+    }
+    outDone = false;
+    ExtractBool(resp, L"done", outDone);
+    outInstruction.clear();
+    ExtractString(resp, L"instruction", outInstruction);
+    if (outDone)
+    {
+        outSuccess = false;
+        ExtractBool(resp, L"success", outSuccess);
+        if (outSuccess) { ExtractString(resp, L"user", outUser); }
+        else { ExtractString(resp, L"reason", outReason); }
+    }
+    return true;
+}

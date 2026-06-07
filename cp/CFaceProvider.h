@@ -27,6 +27,11 @@ public:
 
     CFaceProvider();
 
+    // 由凭据的扫描线程在识别通过后调用:置自动登录标志并通知 LogonUI 重新查询
+    // (随后 LogonUI 会调 GetSerialization 完成提交)。ClearAutoLogon 在消费后复位。
+    void SignalAutoLogon();
+    void ClearAutoLogon();
+
 private:
     ~CFaceProvider();
     void _CreateEnumeratedCredential(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus);
@@ -36,6 +41,7 @@ private:
     CFaceCredential* _pCredential;
     ICredentialProviderEvents* _pcpe;
     UINT_PTR _upAdviseContext;
+    bool _bAutoLogon;  // 识别通过后置 true,GetCredentialCount 据此让 LogonUI 自动提交
 };
 
 // 由 dll.cpp 的类工厂调用。
