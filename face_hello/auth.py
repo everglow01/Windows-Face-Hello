@@ -63,7 +63,13 @@ class AuthSession:
                 self.phase = "recognize"
                 # 识别前先关掉 MediaPipe:其线程池与 onnxruntime 同时活动会让识别卡死数十秒
                 if self._tracker is not None:
+                    import time
+
+                    _tc = time.monotonic()
                     self._tracker.close()
+                    _dc = time.monotonic() - _tc
+                    if _dc > 0.5:  # 临时诊断:确认 close 是否就是那 ~42s
+                        print(f"[perf] tracker_close={_dc:.2f}s", flush=True)
                     self._tracker = None
         if self.phase == "recognize":  # 活体通过 或 活体关闭,都在此识别
             self._recognize(frame_bgr)
