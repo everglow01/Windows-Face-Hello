@@ -14,6 +14,7 @@ package=false、face_hello 没装进 venv)。本模块只定义服务类。
 """
 from __future__ import annotations
 
+import os
 import sys
 
 import win32service
@@ -45,11 +46,22 @@ class FaceHelloService(win32serviceutil.ServiceFramework):
         _poke_pipe()  # 解开阻塞在 ConnectNamedPipe 的 accept,让主循环立刻退出
 
     def SvcDoRun(self) -> None:
-        # 服务无控制台,把 stdout/stderr 落到 data/service.log 便于排错
         config.ensure_dirs()
+        # matplotlib(insightface 的传递依赖)在 SYSTEM 上下文首次建字体缓存易卡死/崩溃。
+        # 固定到可写缓存目录 + 非交互后端绕开它;须在其被导入前设好(serve 里才会触发导入)。
+        os.environ.setdefault("MPLBACKEND", "Agg")
+        os.environ.setdefault("MPLCONFIGDIR", str(config.DATA_DIR / "mpl"))
+        # 服务无控制台,把 stdout/stderr 落到 data/service.log 便于排错
         log = open(config.DATA_DIR / "service.log", "a", encoding="utf-8", buffering=1)
         sys.stdout = sys.stderr = log
-        serve(should_continue=lambda: self._running)
+        try:
+            serve(should_continue=lambda: self._running)
+        except BaseException:  # noqa: BLE001 把真 traceback 落盘(pywin32 抓不到)
+            import traceback
+
+            traceback.print_exc(file=log)
+            log.flush()
+            raise
 
 
 def _poke_pipe() -> None:
