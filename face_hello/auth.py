@@ -28,10 +28,16 @@ class AuthSession:
         self.settings = store.get_settings()
         self._gallery = store.embeddings()
         self._profiles = store.list_profiles()
-        self._tracker = FaceMeshTracker()
-        self._liveness = LivenessSession(self.settings)
-        self.phase = "liveness"  # liveness | recognize | done
         self.result: AuthResult | None = None
+        # 活体可关:关掉则不建 tracker,直接进识别阶段
+        if self.settings.get("liveness_enabled", True):
+            self._tracker = FaceMeshTracker()
+            self._liveness = LivenessSession(self.settings)
+            self.phase = "liveness"  # liveness | recognize | done
+        else:
+            self._tracker = None
+            self._liveness = None
+            self.phase = "recognize"
 
     @property
     def instruction(self) -> str:
@@ -53,9 +59,10 @@ class AuthSession:
             if self._liveness.done:
                 if not self._liveness.passed:
                     self._finish(AuthResult(False, "活体检测失败(超时或未完成动作)"))
-                else:
-                    self.phase = "recognize"
-                    self._recognize(frame_bgr)
+                    return
+                self.phase = "recognize"
+        if self.phase == "recognize":  # 活体通过 或 活体关闭,都在此识别
+            self._recognize(frame_bgr)
 
     def _recognize(self, frame_bgr) -> None:
         face = self.detector.largest_face(frame_bgr)
@@ -72,7 +79,8 @@ class AuthSession:
     def _finish(self, result: AuthResult) -> None:
         self.result = result
         self.phase = "done"
-        self._tracker.close()
+        if self._tracker is not None:
+            self._tracker.close()
 
 
 def authenticate_blocking(detector: FaceDetector, store: FaceStore, on_instruction=None) -> AuthResult:

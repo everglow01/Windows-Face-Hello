@@ -47,12 +47,15 @@ def _handle(req: dict, detector: FaceDetector, store: FaceStore) -> dict:
     if cmd == "authenticate":
         store.load()  # 取最新人脸库
         if store.is_empty():
+            print("[认证] 拒绝:尚未录入任何人脸", flush=True)
             return {"ok": False, "reason": "尚未录入任何人脸"}
         result = authenticate_blocking(
             detector, store, on_instruction=lambda s: print(f"[活体提示] {s}", flush=True)
         )
         if result.success:
+            print(f"[认证] 通过:user={result.name} similarity={result.similarity:.4f}", flush=True)
             return {"ok": True, "user": result.name, "similarity": round(result.similarity, 4)}
+        print(f"[认证] 拒绝:{result.reason}", flush=True)
         return {"ok": False, "reason": result.reason}
     return {"ok": False, "reason": f"未知命令: {cmd}"}
 

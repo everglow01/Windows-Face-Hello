@@ -32,6 +32,7 @@ DEFAULTS = {
     # buffalo_l 的 normed_embedding 走余弦,经验阈值需实测校准
     "match_threshold": 0.40,
     # 活体
+    "liveness_enabled": True,   # 关掉则跳过活体直接识别(测试/低安全模式;牺牲防照片能力)
     "ear_threshold": 0.16,      # 低于判定闭眼(实测标定:睁眼中位~0.27,眨眼min~0.01)
     "ear_consec_frames": 2,     # 连续多少帧闭眼算一次有效闭合
     "yaw_threshold_deg": 45.0,  # 转头判定角度(实测标定:最大幅度~85°)

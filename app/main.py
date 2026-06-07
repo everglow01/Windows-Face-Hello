@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QDoubleSpinBox,
     QHBoxLayout,
     QHeaderView,
@@ -187,11 +188,14 @@ class SettingsTab(QWidget):
         self.samples_spin = QSpinBox()
         self.samples_spin.setRange(3, 30)
         self.samples_spin.setValue(s["enroll_samples"])
+        self.liveness_check = QCheckBox("启用活体检测(关闭=直接识别,牺牲防照片能力)")
+        self.liveness_check.setChecked(s["liveness_enabled"])
 
         save_btn = QPushButton("保存设置")
         save_btn.clicked.connect(self._save)
 
         form = QVBoxLayout()
+        form.addWidget(self.liveness_check)
         form.addLayout(self._row("匹配阈值(越高越严):", self.match_spin))
         form.addLayout(self._row("转头判定角度(°):", self.yaw_spin))
         form.addLayout(self._row("眨眼挑战次数:", self.blink_spin))
@@ -246,6 +250,7 @@ class SettingsTab(QWidget):
 
     def _save(self) -> None:
         self.store.update_settings(
+            liveness_enabled=self.liveness_check.isChecked(),
             match_threshold=self.match_spin.value(),
             yaw_threshold_deg=self.yaw_spin.value(),
             required_blinks=self.blink_spin.value(),
