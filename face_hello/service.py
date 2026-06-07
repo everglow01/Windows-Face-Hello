@@ -104,7 +104,8 @@ def _warm_liveness() -> None:
 
         tr = FaceMeshTracker()
         tr.process(np.zeros((480, 640, 3), dtype=np.uint8))
-        tr.close()
+        # close() 阻塞约 40s(同 auth._finish),丢后台守护线程,别卡服务启动/建管道
+        threading.Thread(target=tr.close, daemon=True).start()
     except Exception:  # noqa: BLE001
         pass
 
