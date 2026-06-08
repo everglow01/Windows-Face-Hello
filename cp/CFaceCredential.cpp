@@ -37,7 +37,8 @@ static HBITMAP _CreateSolidBitmap(int w, int h, COLORREF color)
     return hbmp;
 }
 
-// 用 WIC 解码 png/jpg/bmp,缩放到 w×h,转成与占位图同格式的 top-down 32bpp HBITMAP。
+// 用 WIC 解码 png/jpg/bmp,按短边居中裁成正方形(不拉伸变形)再缩放到 w×h,
+// 转成 top-down 32bpp 后返回 HBITMAP。
 // 任一步失败返回 nullptr,交由调用方回退纯色占位图。
 static HBITMAP _LoadBitmapFromFileWIC(PCWSTR path, int w, int h)
 {
@@ -49,6 +50,7 @@ static HBITMAP _LoadBitmapFromFileWIC(PCWSTR path, int w, int h)
     IWICImagingFactory* pFactory = nullptr;
     IWICBitmapDecoder* pDecoder = nullptr;
     IWICBitmapFrameDecode* pFrame = nullptr;
+    IWICBitmapClipper* pClipper = nullptr;
     IWICBitmapScaler* pScaler = nullptr;
     IWICFormatConverter* pConverter = nullptr;
 
@@ -59,10 +61,24 @@ static HBITMAP _LoadBitmapFromFileWIC(PCWSTR path, int w, int h)
                                                  WICDecodeMetadataCacheOnDemand, &pDecoder);
     if (SUCCEEDED(hr))
         hr = pDecoder->GetFrame(0, &pFrame);
+    // 按短边取中间正方形:避免非正方形图被直接缩放拉伸变形
+    UINT uiW = 0, uiH = 0;
+    if (SUCCEEDED(hr))
+        hr = pFrame->GetSize(&uiW, &uiH);
+    if (SUCCEEDED(hr))
+        hr = pFactory->CreateBitmapClipper(&pClipper);
+    if (SUCCEEDED(hr))
+    {
+        const UINT side = (uiW < uiH) ? uiW : uiH;
+        WICRect rc = { static_cast<INT>((uiW - side) / 2),
+                       static_cast<INT>((uiH - side) / 2),
+                       static_cast<INT>(side), static_cast<INT>(side) };
+        hr = pClipper->Initialize(pFrame, &rc);
+    }
     if (SUCCEEDED(hr))
         hr = pFactory->CreateBitmapScaler(&pScaler);
     if (SUCCEEDED(hr))
-        hr = pScaler->Initialize(pFrame, w, h, WICBitmapInterpolationModeFant);
+        hr = pScaler->Initialize(pClipper, w, h, WICBitmapInterpolationModeFant);
     if (SUCCEEDED(hr))
         hr = pFactory->CreateFormatConverter(&pConverter);
     if (SUCCEEDED(hr))
@@ -96,6 +112,7 @@ static HBITMAP _LoadBitmapFromFileWIC(PCWSTR path, int w, int h)
 
     if (pConverter) pConverter->Release();
     if (pScaler)    pScaler->Release();
+    if (pClipper)   pClipper->Release();
     if (pFrame)     pFrame->Release();
     if (pDecoder)   pDecoder->Release();
     if (pFactory)   pFactory->Release();
