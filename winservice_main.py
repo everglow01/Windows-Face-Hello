@@ -24,4 +24,9 @@ if __name__ == "__main__":
         servicemanager.StartServiceCtrlDispatcher()
     else:
         # 带参数 = 命令行 install / start / stop / remove
+        if "install" in sys.argv:
+            # 安装时(管理员上下文)就建好锁屏头像目录,用户装完即可往里放图
+            from face_hello import config
+
+            config.AVATAR_DIR.mkdir(parents=True, exist_ok=True)
         win32serviceutil.HandleCommandLine(FaceHelloService)

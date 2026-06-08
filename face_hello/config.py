@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # 项目根:face_hello/config.py -> 上两级
@@ -12,6 +13,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 MODELS_DIR = ROOT / "models"
 FACE_STORE = DATA_DIR / "faces.dat"  # DPAPI 加密的人脸库
+
+# 锁屏磁贴自定义头像目录:CP 在 SYSTEM 上下文从这里读第一张图作磁贴头像。
+# 路径必须与 cp/CFaceCredential.cpp 硬编码的 C:\ProgramData\FaceHello\ 一致
+# (ProgramData 纯 ASCII、SYSTEM 可读,避开 OneDrive/中文项目路径)。
+AVATAR_DIR = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "FaceHello"
 
 # 认证服务的命名管道(Credential Provider 通过它请求认证)
 PIPE_NAME = r"\\.\pipe\FaceHello"
@@ -49,3 +55,4 @@ DEFAULTS = {
 def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    AVATAR_DIR.mkdir(parents=True, exist_ok=True)
