@@ -43,7 +43,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <ModuleDefinitionFile>FaceHelloCP.def</ModuleDefinitionFile>
-      <AdditionalDependencies>Shlwapi.lib;Ole32.lib;User32.lib;Gdi32.lib;Advapi32.lib;Secur32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Shlwapi.lib;Ole32.lib;User32.lib;Gdi32.lib;Advapi32.lib;Secur32.lib;Windowscodecs.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">

@@ -2,6 +2,8 @@
 #include <string>
 #include <shlwapi.h>
 #include <ntsecapi.h>
+#include <wincodec.h>
+#include <strsafe.h>
 #include "CFaceCredential.h"
 #include "CFaceProvider.h"
 #include "common.h"
@@ -33,6 +35,105 @@ static HBITMAP _CreateSolidBitmap(int w, int h, COLORREF color)
         }
     }
     return hbmp;
+}
+
+// 用 WIC 解码 png/jpg/bmp,缩放到 w×h,转成与占位图同格式的 top-down 32bpp HBITMAP。
+// 任一步失败返回 nullptr,交由调用方回退纯色占位图。
+static HBITMAP _LoadBitmapFromFileWIC(PCWSTR path, int w, int h)
+{
+    // CP 跑在 LogonUI 进程,COM 一般已初始化;RPC_E_CHANGED_MODE 视为已初始化、不反初始化。
+    HRESULT hrInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    bool needUninit = SUCCEEDED(hrInit);
+
+    HBITMAP hbmp = nullptr;
+    IWICImagingFactory* pFactory = nullptr;
+    IWICBitmapDecoder* pDecoder = nullptr;
+    IWICBitmapFrameDecode* pFrame = nullptr;
+    IWICBitmapScaler* pScaler = nullptr;
+    IWICFormatConverter* pConverter = nullptr;
+
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                  IID_PPV_ARGS(&pFactory));
+    if (SUCCEEDED(hr))
+        hr = pFactory->CreateDecoderFromFilename(path, nullptr, GENERIC_READ,
+                                                 WICDecodeMetadataCacheOnDemand, &pDecoder);
+    if (SUCCEEDED(hr))
+        hr = pDecoder->GetFrame(0, &pFrame);
+    if (SUCCEEDED(hr))
+        hr = pFactory->CreateBitmapScaler(&pScaler);
+    if (SUCCEEDED(hr))
+        hr = pScaler->Initialize(pFrame, w, h, WICBitmapInterpolationModeFant);
+    if (SUCCEEDED(hr))
+        hr = pFactory->CreateFormatConverter(&pConverter);
+    if (SUCCEEDED(hr))
+        hr = pConverter->Initialize(pScaler, GUID_WICPixelFormat32bppPBGRA,
+                                    WICBitmapDitherTypeNone, nullptr, 0.0,
+                                    WICBitmapPaletteTypeCustom);
+    if (SUCCEEDED(hr))
+    {
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = w;
+        bmi.bmiHeader.biHeight = -h; // 负高 = 自上而下,与 _CreateSolidBitmap 一致
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        void* pBits = nullptr;
+        HBITMAP hTmp = CreateDIBSection(nullptr, &bmi, DIB_RGB_COLORS, &pBits, nullptr, 0);
+        if (hTmp && pBits)
+        {
+            const UINT stride = static_cast<UINT>(w) * 4;
+            const UINT cbBuffer = stride * static_cast<UINT>(h);
+            hr = pConverter->CopyPixels(nullptr, stride, cbBuffer,
+                                        static_cast<BYTE*>(pBits));
+            if (SUCCEEDED(hr))
+                hbmp = hTmp;
+            else
+                DeleteObject(hTmp);
+        }
+    }
+
+    if (pConverter) pConverter->Release();
+    if (pScaler)    pScaler->Release();
+    if (pFrame)     pFrame->Release();
+    if (pDecoder)   pDecoder->Release();
+    if (pFactory)   pFactory->Release();
+    if (needUninit) CoUninitialize();
+    return hbmp;
+}
+
+// 在 dir 里找第一张 png/jpg/jpeg/bmp,把全路径写进 outPath。找到返回 true。
+static bool _FindFirstImageInFolder(PCWSTR dir, PWSTR outPath, size_t cch)
+{
+    wchar_t pattern[MAX_PATH];
+    if (FAILED(StringCchCopyW(pattern, ARRAYSIZE(pattern), dir)) ||
+        FAILED(StringCchCatW(pattern, ARRAYSIZE(pattern), L"*")))
+        return false;
+
+    WIN32_FIND_DATAW fd = {};
+    HANDLE hFind = FindFirstFileW(pattern, &fd);
+    if (hFind == INVALID_HANDLE_VALUE)
+        return false;
+
+    bool found = false;
+    do
+    {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            continue;
+        PCWSTR ext = PathFindExtensionW(fd.cFileName);
+        if (_wcsicmp(ext, L".png") == 0 || _wcsicmp(ext, L".jpg") == 0 ||
+            _wcsicmp(ext, L".jpeg") == 0 || _wcsicmp(ext, L".bmp") == 0)
+        {
+            if (SUCCEEDED(StringCchCopyW(outPath, cch, dir)) &&
+                SUCCEEDED(StringCchCatW(outPath, cch, fd.cFileName)))
+                found = true;
+            break;
+        }
+    } while (FindNextFileW(hFind, &fd));
+
+    FindClose(hFind);
+    return found;
 }
 
 CFaceCredential::CFaceCredential()
@@ -300,7 +401,13 @@ IFACEMETHODIMP CFaceCredential::GetBitmapValue(DWORD dwFieldID, HBITMAP* phbmp)
 {
     if (dwFieldID == FFI_TILEIMAGE && phbmp)
     {
-        HBITMAP hbmp = _CreateSolidBitmap(128, 128, RGB(0, 120, 215)); // Windows 蓝
+        // 优先用 C:\ProgramData\FaceHello\ 里的自定义头像;读不到/解码失败回退纯蓝占位。
+        HBITMAP hbmp = nullptr;
+        wchar_t imgPath[MAX_PATH];
+        if (_FindFirstImageInFolder(L"C:\\ProgramData\\FaceHello\\", imgPath, ARRAYSIZE(imgPath)))
+            hbmp = _LoadBitmapFromFileWIC(imgPath, 128, 128);
+        if (!hbmp)
+            hbmp = _CreateSolidBitmap(128, 128, RGB(0, 120, 215)); // Windows 蓝
         if (hbmp)
         {
             *phbmp = hbmp;
