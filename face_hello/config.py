@@ -8,16 +8,31 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# 项目根:face_hello/config.py -> 上两级
+# 项目根:face_hello/config.py -> 上两级(开发态用)
 ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT / "data"
-MODELS_DIR = ROOT / "models"
-FACE_STORE = DATA_DIR / "faces.dat"  # DPAPI 加密的人脸库
 
-# 锁屏磁贴自定义头像目录:CP 在 SYSTEM 上下文从这里读第一张图作磁贴头像。
-# 路径必须与 cp/CFaceCredential.cpp 硬编码的 C:\ProgramData\FaceHello\ 一致
-# (ProgramData 纯 ASCII、SYSTEM 可读,避开 OneDrive/中文项目路径)。
-AVATAR_DIR = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "FaceHello"
+# 安装态 / 开发态分流:安装器写环境变量 FACEHELLO_HOME=<安装根>(如 C:\Program Files\FaceHello);
+# 开发态没有该变量,一切走仓库相对路径,uv run 流程完全不变。
+#   - 程序文件(模型、CP DLL):安装态在只读安装目录,开发态在仓库
+#   - 可写数据(人脸库、日志):安装态固定落 ProgramData(SYSTEM 服务 + 提权 GUI 共享),开发态在仓库 data/
+_HOME = os.environ.get("FACEHELLO_HOME")
+_PROGRAMDATA = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "FaceHello"
+IS_INSTALLED = bool(_HOME)
+
+if IS_INSTALLED:  # 安装态
+    INSTALL_ROOT = Path(_HOME)
+    DATA_DIR = _PROGRAMDATA / "data"
+    MODELS_DIR = INSTALL_ROOT / "models"
+    CP_DLL = INSTALL_ROOT / "FaceHelloCP.dll"  # 安装布局:DLL 在安装根(DESIGN 10.2)
+else:             # 开发态
+    INSTALL_ROOT = ROOT
+    DATA_DIR = ROOT / "data"
+    MODELS_DIR = ROOT / "models"
+    CP_DLL = ROOT / "cp" / "x64" / "Release" / "FaceHelloCP.dll"  # MSBuild 产物
+
+FACE_STORE = DATA_DIR / "faces.dat"  # DPAPI 加密的人脸库
+# 锁屏磁贴自定义头像目录(两态一致;CP 硬编码读 C:\ProgramData\FaceHello\,SYSTEM 可读、纯 ASCII)。
+AVATAR_DIR = _PROGRAMDATA
 
 # 认证服务的命名管道(Credential Provider 通过它请求认证)
 PIPE_NAME = r"\\.\pipe\FaceHello"

@@ -490,12 +490,18 @@ class ServiceTab(QWidget):
         remove_btn.clicked.connect(self._remove)
         refresh_btn = QPushButton("刷新状态")
         refresh_btn.clicked.connect(self._refresh_status)
+        register_btn = QPushButton("注册 CP 磁贴")
+        register_btn.setObjectName("accent")
+        register_btn.clicked.connect(lambda: self._register_cp(unregister=False))
+        unregister_btn = QPushButton("反注册")
+        unregister_btn.clicked.connect(lambda: self._register_cp(unregister=True))
         self.svc_status = QLabel("—")
         self.svc_status.setObjectName("hint")
 
         # 这些动作都需管理员,非管理员时禁用
         self._admin_widgets = [
             self.pwd_edit, save_pwd_btn, install_btn, start_btn, stop_btn, remove_btn,
+            register_btn, unregister_btn,
         ]
 
         account_lbl = QLabel(f"当前账户:{self.user}")
@@ -506,6 +512,9 @@ class ServiceTab(QWidget):
         step2 = QLabel("② 认证服务(LocalSystem,开机自启,锁屏时为凭据提供程序刷脸)")
         step2.setObjectName("h2")
         step2.setWordWrap(True)
+        step3 = QLabel("③ 锁屏磁贴(Credential Provider;安装包会自动注册,此处用于排错或重编后手动刷新)")
+        step3.setObjectName("h2")
+        step3.setWordWrap(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -531,6 +540,14 @@ class ServiceTab(QWidget):
             svc_row.addWidget(b)
         layout.addLayout(svc_row)
         layout.addWidget(self.svc_status)
+
+        layout.addSpacing(12)
+        layout.addWidget(step3)
+        cp_row = QHBoxLayout()
+        cp_row.addWidget(register_btn)
+        cp_row.addWidget(unregister_btn)
+        cp_row.addStretch(1)
+        layout.addLayout(cp_row)
         layout.addStretch(1)
 
         if not self.is_admin:
@@ -574,6 +591,26 @@ class ServiceTab(QWidget):
         self._refresh_status()
         if rc != 0:
             QMessageBox.warning(self, "卸载", out or f"返回码 {rc}")
+
+    def _register_cp(self, unregister: bool) -> None:
+        """regsvr32 注册/反注册 CP DLL(锁屏磁贴)。安装包已自动做,此处供排错/手动刷新。"""
+        import subprocess
+
+        action = "反注册" if unregister else "注册"
+        dll = config.CP_DLL
+        if not dll.exists():
+            QMessageBox.warning(
+                self, "未找到 DLL",
+                f"未找到 CP DLL:\n{dll}\n请先用 MSBuild 编译 cp\\FaceHelloCP.sln。",
+            )
+            return
+        args = ["regsvr32", "/s"] + (["/u"] if unregister else []) + [str(dll)]
+        p = subprocess.run(args, capture_output=True, text=True)
+        if p.returncode == 0:
+            QMessageBox.information(self, action, f"CP 磁贴已{action}")
+        else:
+            msg = (p.stdout + p.stderr).strip()
+            QMessageBox.warning(self, action, msg or f"regsvr32 返回码 {p.returncode}")
 
     def _refresh_status(self) -> None:
         self.svc_status.setText("服务状态:" + _service_status())
