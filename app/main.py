@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QPolygon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -104,6 +104,31 @@ QLineEdit, QSpinBox, QDoubleSpinBox {
 }
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #0067C0; }
 
+/* 自定义边框后必须显式给上下按钮几何,否则点击区域塌陷、点上三角会落到输入框上 */
+QSpinBox, QDoubleSpinBox { padding-right: 22px; }
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 20px;
+    border-left: 1px solid #D1D1D1;
+    border-top-right-radius: 6px;
+    background: #F7F7F7;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 20px;
+    border-left: 1px solid #D1D1D1;
+    border-bottom-right-radius: 6px;
+    background: #F7F7F7;
+}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover { background: #E8E8E8; }
+QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
+QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed { background: #DDDDDD; }
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(__UP_ARROW__); }
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(__DOWN_ARROW__); }
+
 QTableWidget {
     background: #FFFFFF;
     border: 1px solid #E5E5E5;
@@ -137,6 +162,36 @@ QScrollBar::handle:vertical:hover { background: #B0B0B0; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 """
+
+
+def _make_arrow(path: str, up: bool) -> None:
+    """画一个小三角箭头 PNG 到 path(QSS 接管 spinbox 后默认箭头不再绘制,自带一个)。"""
+    pm = QPixmap(12, 12)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setBrush(QColor("#5A5A5A"))
+    p.setPen(Qt.NoPen)
+    if up:
+        tri = QPolygon([QPoint(2, 8), QPoint(10, 8), QPoint(6, 4)])
+    else:
+        tri = QPolygon([QPoint(2, 5), QPoint(10, 5), QPoint(6, 9)])
+    p.drawPolygon(tri)
+    p.end()
+    pm.save(path, "PNG")
+
+
+def _themed_qss() -> str:
+    """生成箭头图标到临时目录(纯 ASCII 路径),把其路径填进 QSS。"""
+    import os
+    import tempfile
+
+    tmp = tempfile.gettempdir()
+    up = os.path.join(tmp, "facehello_spin_up.png").replace("\\", "/")
+    down = os.path.join(tmp, "facehello_spin_down.png").replace("\\", "/")
+    _make_arrow(up, True)
+    _make_arrow(down, False)
+    return FLUENT_QSS.replace("__UP_ARROW__", up).replace("__DOWN_ARROW__", down)
 
 
 def _preview_label() -> QLabel:
@@ -572,7 +627,7 @@ class MainWindow(QWidget):
 
 def main() -> None:
     app = QApplication(sys.argv)
-    app.setStyleSheet(FLUENT_QSS)
+    app.setStyleSheet(_themed_qss())
     win = MainWindow()
     win.resize(720, 760)
     win.show()
