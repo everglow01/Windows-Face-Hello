@@ -19,6 +19,10 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      # CI runner 的 stdout 默认是 cp1252,脚本里 print 中文会 UnicodeEncodeError;
+      # 开 Python UTF-8 模式让 stdout/文件默认编码为 UTF-8(GitHub 日志本就是 UTF-8)
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
 
