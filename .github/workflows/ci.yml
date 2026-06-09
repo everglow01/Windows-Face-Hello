@@ -1,0 +1,62 @@
+name: CI
+
+# Windows-only 项目(pywin32 / Credential Provider / LSA / 服务),必须在 windows runner 上跑。
+# 目的是"构建可用性"守门:依赖能装、离线自检通过、C++ CP DLL 能编过。
+# 刷脸解锁的真正功能(摄像头/锁屏/SYSTEM)在 CI 里无法验证,不在此覆盖。
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  pull_request:
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true            # 缓存 uv 下载的 wheel,加速 uv sync
+
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: models                  # InsightFace(buffalo_l)+ MediaPipe(face_landmarker.task)都下到这
+          # 模型版本固定;换模型(config 的 INSIGHTFACE_MODEL / FACE_LANDMARKER_URL)时把 v1 手动 bump 成 v2
+          key: models-${{ runner.os }}-v1
+          restore-keys: |
+            models-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Byte-compile (syntax check)
+        run: uv run python -m compileall face_hello app scripts winservice_main.py
+
+      - name: Offline self-check (matcher / DPAPI / FaceMesh / InsightFace load)
+        env:
+          # package=false:face_hello 没装进 venv,要把仓库根加进 sys.path 才能 import
+          PYTHONPATH: ${{ github.workspace }}
+        run: uv run python scripts/offline_check.py
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Credential Provider DLL
+        run: msbuild cp\FaceHelloCP.sln /p:Configuration=Release /p:Platform=x64 /m
+
+      - name: Upload DLL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FaceHelloCP-dll
+          path: cp/x64/Release/FaceHelloCP.dll
+          if-no-files-found: error
