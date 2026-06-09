@@ -13,6 +13,21 @@ dependencies = [
     "pywin32",
 ]
 
+[dependency-groups]
+# 分发依赖(build_release 装进便携 python)。与运行时一致,但换 PySide6 的瘦身子集:
+# PySide6-Essentials = 全家桶 PySide6 去掉 Addons(Qt6WebEngineCore.dll ~196MB 等),最大头瘦身。
+# 注:opencv 暂维持 opencv-python——mediapipe 强依赖 opencv-contrib-python(也提供 cv2),
+#     headless 替换省不掉两者并存,需另行实测裁剪(DESIGN 10.9/10.10 风险项),第一版不动。
+dist = [
+    "numpy<2.0",
+    "opencv-python",
+    "mediapipe",
+    "insightface",
+    "onnxruntime",
+    "PySide6-Essentials",
+    "pywin32",
+]
+
 [tool.uv]
 # 应用型项目,不把自身作为可安装包(根级 face_hello/ app/ 直接在 sys.path)
 package = false

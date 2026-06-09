@@ -220,6 +220,18 @@ dependencies = [
     { name = "pywin32" },
 ]
 
+[package.dev-dependencies]
+dist = [
+    { name = "insightface" },
+    { name = "mediapipe" },
+    { name = "numpy" },
+    { name = "onnxruntime", version = "1.24.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "onnxruntime", version = "1.26.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "opencv-python" },
+    { name = "pyside6-essentials" },
+    { name = "pywin32" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "insightface" },
@@ -228,6 +240,17 @@ requires-dist = [
     { name = "onnxruntime" },
     { name = "opencv-python" },
     { name = "pyside6" },
+    { name = "pywin32" },
+]
+
+[package.metadata.requires-dev]
+dist = [
+    { name = "insightface" },
+    { name = "mediapipe" },
+    { name = "numpy", specifier = "<2.0" },
+    { name = "onnxruntime" },
+    { name = "opencv-python" },
+    { name = "pyside6-essentials" },
     { name = "pywin32" },
 ]
 
