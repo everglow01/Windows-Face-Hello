@@ -51,6 +51,8 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
+      <!-- /MT 静态链接 CRT:用户机器免装 VC++ 运行库,CP DLL 在干净系统也能加载(DESIGN 10.1/10.4) -->
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
