@@ -18,3 +18,4 @@ models/
 cp/**/x64/
 cp/**/Debug/
 cp/**/Release/
+.claude
