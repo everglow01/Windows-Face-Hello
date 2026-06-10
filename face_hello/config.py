@@ -17,10 +17,15 @@ ROOT = Path(__file__).resolve().parents[1]
 #   - 可写数据(人脸库、日志):安装态固定落 ProgramData(SYSTEM 服务 + 提权 GUI 共享),开发态在仓库 data/
 _HOME = os.environ.get("FACEHELLO_HOME")
 _PROGRAMDATA = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "FaceHello"
-IS_INSTALLED = bool(_HOME)
+# 安装器在安装根放一个空的 .installed 标记文件作为安装态依据。优先它(而非只靠
+# FACEHELLO_HOME 环境变量)是因为 SCM 把系统环境变量块缓存到下次重启,SYSTEM 服务
+# 装好当下读不到新设的 FACEHELLO_HOME;标记文件随安装即落盘,服务 / GUI 立刻一致,
+# 无需重启。FACEHELLO_HOME 仍兼容(开发 / 调试显式指定安装根)。
+_MARKER = ROOT / ".installed"
+IS_INSTALLED = bool(_HOME) or _MARKER.exists()
 
 if IS_INSTALLED:  # 安装态
-    INSTALL_ROOT = Path(_HOME)
+    INSTALL_ROOT = Path(_HOME) if _HOME else ROOT
     DATA_DIR = _PROGRAMDATA / "data"
     MODELS_DIR = INSTALL_ROOT / "models"
     CP_DLL = INSTALL_ROOT / "FaceHelloCP.dll"  # 安装布局:DLL 在安装根(DESIGN 10.2)

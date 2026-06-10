@@ -117,7 +117,9 @@ def step_copy_payload() -> None:
     ignore = shutil.ignore_patterns("__pycache__")
     for name in ("face_hello", "app"):
         shutil.copytree(ROOT / name, BUILD / name, dirs_exist_ok=True, ignore=ignore)
-    shutil.copy(ROOT / "winservice_main.py", BUILD / "winservice_main.py")
+    # 根级引导脚本:服务宿主 + 卸载清理(都靠仓库根在 sys.path 才 import 得到 face_hello)
+    for name in ("winservice_main.py", "uninstall_cleanup.py"):
+        shutil.copy(ROOT / name, BUILD / name)
 
     models = ROOT / "models"
     if not models.exists():
