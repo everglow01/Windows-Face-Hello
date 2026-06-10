@@ -11,6 +11,9 @@ data/
 # 模型权重(首次运行自动下载,体积大,勿入库)
 models/
 
+# Inno Setup 打包产物(setup.exe ~300MB,走 GitHub Release 分发,勿入库)
+installer/Output/
+
 # Visual Studio / C++ 构建产物(cp/,输出与中间目录可能嵌在子目录里)
 .vs/
 *.user

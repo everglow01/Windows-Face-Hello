@@ -19,7 +19,10 @@
 #endif
 
 #define MyAppName "FaceHello"
-#define MyAppVersion "0.1.0"
+; 版本号可被编译命令 /DMyAppVersion=... 覆盖(release.yml 用 git tag 注入)
+#ifndef MyAppVersion
+  #define MyAppVersion "0.1.0"
+#endif
 #define MyAppPublisher "FaceHello"
 #define PyExe "{app}\python\python.exe"
 #define PyWExe "{app}\python\pythonw.exe"
@@ -47,6 +50,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 
 [Languages]
+; 简体中文为默认;ChineseSimplified.isl 随仓库附带(Inno 不自带中文),路径相对 .iss 所在目录
+Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]

@@ -1,0 +1,108 @@
+name: Release
+
+# 打 tag(v*)即触发完整分发流水线:
+#   备模型 → 编 CP DLL + 便携包(build_release) → Inno 打成 setup.exe → 传到 GitHub Release。
+# 也可手动 workflow_dispatch(只产出 setup.exe 作为 artifact,不建 Release,便于试打)。
+#
+# 与 ci.yml 的分工:ci 是每次 push 的"能不能构建"守门;release 是"打出可安装的成品"。
+# 真机功能(摄像头 / 锁屏 / SYSTEM 解锁)CI 无法验证,不在本流水线覆盖——只保证包能打出来。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号(如 0.1.0);留空则取 tag,再留空用 0.0.0-dev'
+        required: false
+
+permissions:
+  contents: write          # 建 Release / 上传资产需要写权限
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      # runner 默认 cp1252,脚本里 print 中文会 UnicodeEncodeError;开 UTF-8 模式
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: models                  # 与 ci.yml 共享同一缓存(换模型时一起 bump v1)
+          key: models-${{ runner.os }}-v1
+          restore-keys: |
+            models-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Prepare models (download buffalo_l + face_landmarker into models/)
+        env:
+          PYTHONPATH: ${{ github.workspace }}   # package=false,要把仓库根加进 sys.path
+        run: uv run python scripts/offline_check.py   # 触发模型下载,同时充当离线自检守门
+
+      - name: Prune unused buffalo_l models (match local lean package)
+        shell: pwsh
+        run: |
+          # 与本机一致:只留 det_10g + w600k_r50,删掉用不到的 onnx(识别精度无损,缩小包体)
+          $bl = "models/buffalo_l"
+          foreach ($f in '1k3d68.onnx','2d106det.onnx','genderage.onnx') {
+            $p = Join-Path $bl $f
+            if (Test-Path $p) { Remove-Item $p -Force; Write-Host "pruned $f" }
+          }
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2          # 让 build_release 内部能调到 msbuild 编 DLL
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          $inp = "${{ github.event.inputs.version }}"
+          $ref = "${{ github.ref_name }}"
+          if ($inp) { $v = $inp }
+          elseif ($ref -match '^v(.+)$') { $v = $Matches[1] }
+          else { $v = '0.0.0-dev' }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "resolved version=$v"
+
+      - name: Build portable package (DLL + python + deps + models + payload)
+        run: uv run python scripts/build_release.py
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          $build = "$env:LOCALAPPDATA\FaceHello-build\FaceHello"
+          & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" "/DBuildDir=$build" "installer/FaceHello.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit $LASTEXITCODE" }
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FaceHello-Setup-${{ steps.ver.outputs.version }}
+          path: installer/Output/FaceHello-Setup-*.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/Output/FaceHello-Setup-*.exe
+          fail_on_unmatched_files: true
+          generate_release_notes: true
