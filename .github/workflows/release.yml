@@ -62,6 +62,8 @@ jobs:
             $p = Join-Path $bl $f
             if (Test-Path $p) { Remove-Item $p -Force; Write-Host "pruned $f" }
           }
+          # insightface 解压后残留的原始包(~281MB),删掉避免 models 缓存膨胀
+          if (Test-Path "models/buffalo_l.zip") { Remove-Item "models/buffalo_l.zip" -Force; Write-Host "pruned buffalo_l.zip" }
 
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2          # 让 build_release 内部能调到 msbuild 编 DLL
