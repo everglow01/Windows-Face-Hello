@@ -205,4 +205,4 @@ A: This is normal. Windows updates typically refresh Windows services, which may
 
 ## License
 
-Not yet decided (TODO).
+Apache-2.0 (see LICENSE); due to the bundled InsightFace model being limited to non-commercial use, this distribution is for non-commercial purposes only. See THIRD_PARTY_LICENSES.md for details.

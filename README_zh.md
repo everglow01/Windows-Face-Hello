@@ -201,5 +201,4 @@ A：此乃正常现象，Windows更新后一般会刷新 WIndows 服务，此时
 5.GPU推理支持      
 
 ## 许可证
-
-暂未确定(TODO)。
+Apache-2.0(见 LICENSE);因捆绑的 InsightFace 模型仅限非商业,发行版为非商业用途,详见 THIRD_PARTY_LICENSES.md    
