@@ -1,44 +1,201 @@
 # Face_hello
 
-让普通 RGB 摄像头也能人脸解锁 Windows。设计与决策见 [DESIGN.md](./DESIGN.md)。
+A project that lets an **ordinary RGB webcam** do face unlock for Windows — aimed at laptops, desktop front cameras, and USB cameras that Windows Hello doesn't support.
 
-## 状态
+Inspired by a Surface Pro 4 the author once owned~
 
-阶段 1~4 完成(Python 原型:采集 / 检测识别 / 眨眼+转头活体 / DPAPI 加密存储 / PySide6 管理台)。
-阶段 5(锁屏 Credential Provider)未做,见 DESIGN 路线图。  
+> [中文](./README_zh.md) ｜ Design & technical decisions: [DESIGN.md](./DESIGN.md)
 
-***警告：项目开发中，请勿擅自下载使用，项目设计更改Windows注册表等系统性改动，还未经验证，切勿擅自使用！！！***
+---
 
-## 环境(uv 管理,Python 3.11)
+## Safety Notice (read before use)
+
+- This project is only meant for **Windows 10 / 11**; using it on any other OS is not recommended.
+- It touches system-affecting operations like modifying Windows services. The author has added plenty of safeguards and validated it on real hardware, but there's still a chance of serious system problems like **being unable to sign in, a service crash, or a BSOD**. The odds are very small, but be aware.
+- This project uses vision algorithms like OpenCV to do single-RGB-camera face unlock — i.e. **Windows Hello-like** — but the actual security is far below the real Windows Hello. A single RGB camera can't sense spatial information the way infrared / depth cameras can, and may well be bypassed by a high-quality video or photo. **Do not use this on a work computer that stores sensitive data** — the risk is significant, and you bear the consequences of any major loss yourself.
+- The vision recognition runs onnx-model inference on the CPU, which puts some demand on your hardware. From testing, a CPU with fewer than 4 cores is not recommended — inference latency rises noticeably, defeating the fast-unlock spirit of the original Windows Hello.
+
+---
+
+## Requirements
+
+- **Windows 10 / 11 (x64)**
+- A working **RGB webcam**
+- **A 4-core-or-better CPU**: recognition runs onnx inference on the CPU, and with too few cores unlock latency rises noticeably, defeating the point of a fast unlock
+- Some advanced actions (writing the LSA password, installing the service) need an **Administrator** terminal (PowerShell)
+
+---
+
+## Install & Use (recommended: the one-click installer)
+
+Regular users don't need Python / uv — just grab the installer from the Release page:
+
+1. Download the latest `FaceHello-Setup-x.y.z.exe` from [Releases](https://github.com/everglow01/Windows-Face-Hello/releases).
+2. Right-click **Run as administrator** and follow the Chinese wizard, next-next-next. The installer automatically registers and starts the background auth service, registers the lock-screen Credential Provider, and creates the data directory.
+3. Once installed, open the "FaceHello Console" from the Start menu or desktop (use admin privileges the first time), enroll your face, set your sign-in password, and you can unlock by face at the lock screen.
+
+> The recognition models are all bundled in the installer — no network download during install.
+
+**Uninstall**: uninstall via Windows "Settings → Apps" or "Uninstall FaceHello" in the Start menu. The uninstall removes both the program and all local data, leaving no leftover files behind.
+
+---
+
+## Dev Environment
+
+If you want to run the console and service from source, or contribute:
+
+- **Python 3.11** (the project requires `>=3.10,<3.12`)
+- [**uv**](https://docs.astral.sh/uv/) (package / virtualenv management)
 
 ```powershell
-uv sync                       # 创建 .venv 并安装依赖
-uv run python -m scripts.offline_check   # 离线自检(不需摄像头)
-uv run python -m app.main     # 启动管理台 GUI
+git clone https://github.com/everglow01/Windows-Face-Hello.git
+cd Windows-Face-Hello
+
+uv sync                                   # create .venv and install deps (not the base env)
+uv run python scripts/offline_check.py    # offline self-check (no camera/display needed); all [ok] = good
+uv run python -m app.main                 # launch the console GUI (must use admin privileges on first use)
 ```
 
-首次运行会自动下载模型:InsightFace `buffalo_l`(~281MB)→ `models/buffalo_l/`,
-MediaPipe `face_landmarker.task`(~3.7MB)→ `models/`。
+> On first run, models auto-download to `models/`: InsightFace `buffalo_l` (recognition + detection, ~191 MB) and MediaPipe `face_landmarker.task` (liveness, ~3.7 MB).
 
-## 使用
+For detailed developer docs and a contribution guide, see [contribute.md](./contribute.md).
 
-1. **录入人脸**:输入用户名 → 开始录入,正对摄像头采集若干帧。
-2. **测试解锁**:按提示完成活体动作(随机:眨眼 N 次 / 向左 / 向右转头)→ 识别比对。
-3. **设置与安全**:查看/删除已录入用户、人脸有效期;调匹配阈值、转头角度、眨眼次数、有效期天数。
+---
 
-## 目录
+## Using the Console
+
+Launch the installed app with admin privileges to enter the console desktop app:
+
+![GUI](README_image/GUI.png)
+
+1. **Enroll** — the username defaults to your current Windows account name (the text shown on the lock screen); face the camera to collect several good frames, averaged into a template.
+   > The username must equal your Windows sign-in account name, otherwise lock-screen unlock won't match (Microsoft accounts use the local login name).
+   > Not sure of your account name? Press Win+L to see the name shown on the lock screen — it's usually the same.
+2. **Test unlock** — follow the random liveness prompt (blink N times / turn left / turn right), then recognition runs and shows the similarity and result.
+3. **Settings** — view / delete enrolled users; tune the match threshold, turn angle, blink count, and face validity period; toggle "enable liveness".
+4. **Service & credentials** — set the sign-in password used for lock-screen unlock (written to an LSA Secret) and install / start / stop the auth service in one click. **Requires Administrator**, otherwise the relevant buttons are disabled.
+
+*Some stutter on the first enrollment and test is normal.*
+
+*The bottom-right of the GUI shows model-loading status; it's recommended to wait until the models finish loading before enrolling and testing.*
+
+To calibrate liveness thresholds (live EAR / yaw display, prints suggested values on exit):
+
+```powershell
+uv run python -m scripts.liveness_tune
+```
+
+---
+
+## How Lock-screen Unlock Works
+
+Full unlock chain: lock-screen "Face Unlock" tile → (named pipe) → LocalSystem service → InsightFace recognition → read the password saved in the LSA → pack a Kerberos credential to actually unlock. Both local accounts and Microsoft accounts (MSA local login) are verified end-to-end. **Fully validated and working on the author's physical machine.**
+
+Auth service commands (Administrator; `<venv>` = `.venv\Scripts\python.exe`):
+
+```powershell
+<venv> winservice_main.py install --startup auto   # register the service, auto-start at boot
+<venv> winservice_main.py start | stop | remove     # start / stop / remove
+```
+
+You normally don't need to run these by hand — the GUI above can install and start everything in one click; these are for dev/debugging.
+
+If you're developing from source and want to build the C++ Credential Provider (CP) for the lock-screen tile yourself, you'll need VS2022 with "Desktop development with C++", and **build with PowerShell, not Bash** (MSYS mangles the `/p:` arguments):
+
+```powershell
+MSBuild.exe cp\FaceHelloCP.sln /p:Configuration=Release /p:Platform=x64
+# Output: cp\x64\Release\FaceHelloCP.dll, then register it with regsvr32
+```
+
+> ⚠️ Before registering the CP or testing on real hardware, **always** take a system restore point or VM snapshot and keep a spare admin account. This project **never** replaces the system's built-in password / PIN sign-in — the fallback login is always there. More build and troubleshooting details are in [cp/README.md](./cp/README.md).
+
+(Regular users of the one-click installer don't need this step — the DLL is already built and bundled.)
+
+---
+
+## How It Works (in brief)
 
 ```
-face_hello/   核心库
-  camera.py     摄像头采集
-  detector.py   InsightFace 检测 + 512 维特征
-  matcher.py    余弦相似度比对
-  liveness.py   FaceLandmarker → EAR 眨眼 + solvePnP 转头 + 随机挑战
-  enroll.py     多帧平均特征录入
-  store.py      DPAPI 加密人脸库 + 设置
-  auth.py       认证编排(活体→识别)状态机
-app/          PySide6 管理台(main.py + 后台 workers.py)
-scripts/      offline_check.py 离线自检
-data/         加密人脸库(gitignored)
-models/       模型权重(gitignored)
+Camera (OpenCV) → Liveness (MediaPipe FaceLandmarker: EAR blink + solvePnP head turn)
+               → Face detection + recognition (InsightFace ArcFace, 512-d embedding)
+               → Cosine similarity vs gallery → pass / reject
 ```
+
+- The `face_hello/` core library has no GUI dependency and is shared by the console, the service, and scripts.
+- At the lock screen, recognition runs in a resident LocalSystem service; the C++ Credential Provider only handles the UI and submits the credential. The two communicate over a local named pipe.
+
+---
+
+## Custom Lock-screen Avatar
+
+You can drop your own avatar image into the default path `C:\ProgramData\FaceHello`. The program takes the **first** image in that directory, scales and crops it to a square, and places it on the lock-screen tile; newer Windows displays it as a circle automatically.
+
+- Supports **PNG / JPG / BMP**; a square image is recommended so the edges aren't cropped.
+- A pure-ASCII path — the Credential Provider running as SYSTEM at the lock screen can read it (it can't access OneDrive / Chinese paths).
+- If no image is found or decoding fails, the tile falls back to the default solid-blue placeholder without affecting unlock.
+
+![avatar](README_image/touxiang.png)
+
+## Security & Privacy
+
+- The gallery stores **feature vectors, not photos**, encrypted on disk with Windows DPAPI in the local `data/`, uploaded to no cloud server, keeping your face data private and secure.
+- The sign-in password is kept in an **LSA Secret**, read by the Credential Provider itself in the SYSTEM context — it **never travels over IPC**.
+- Monocular RGB liveness can't tell apart high-quality photos / video streams. **Don't use this on a machine others might physically access.** Any data leak or loss is the result of the user's own operation and of not understanding this project's risks, and you bear the consequences yourself.
+- With **liveness** turned off, startup compresses to under 1s for an almost-instant experience — but for safety we still don't recommend turning it off.
+
+---
+
+## Project Layout
+
+```
+face_hello/        core library (no Qt dependency)
+  camera.py          camera capture (with cold-boot / wake retries)
+  detector.py        InsightFace detection + 512-d embedding
+  matcher.py         cosine-similarity matching
+  liveness.py        FaceLandmarker → EAR blink + solvePnP turn + random challenge
+  enroll.py          multi-frame averaged enrollment
+  store.py           DPAPI-encrypted gallery + settings
+  auth.py            auth orchestration (liveness → recognition) state machine
+  service.py         named-pipe auth server
+  win_service.py     LocalSystem Windows service wrapper
+  cred_vault.py      LSA Secret read/write (sign-in password)
+app/               PySide6 console (main.py + background workers.py)
+cp/                C++ Credential Provider (lock-screen tile, needs VS to build)
+scripts/           offline_check.py and other tooling
+data/              encrypted gallery (gitignored)
+models/            model weights (gitignored)
+```
+
+---
+
+## Known Limitations
+
+- Anti-spoofing is limited by the monocular RGB camera (see the Security notice above); it may be bypassed by a determined attacker through illicit means. Again: do not use this on a computer holding sensitive data.
+- The first cold start loads the ~191 MB recognition model from disk, taking a few seconds (about 2s on a modern CPU); after sleep the camera needs a couple of seconds to re-enumerate (retries are built in).
+- When the working directory contains Chinese paths, OpenCV / MediaPipe are handled specially, but encoding glitches may still occur.
+- The installer and the app itself are fairly large, bounded by the Python-related dependencies.
+
+---
+
+## FAQ
+
+**Q: In the console app the camera opens and recognizes faces accurately — why does the camera often fail to open after the PC locks or cold-boots, making Face Hello unusable?**
+A: 1. Some USB or built-in laptop cameras *aren't powered* on the lock screen, so OpenCV can't grab the camera — make sure your camera device is powered at the lock screen or on cold boot (just powered on, woken from sleep, etc.). 2. On some laptop brands the camera may be turned off when not on AC power or in power-saving mode — you may need to force it on. 3. Make sure you've enabled camera permission in Windows settings. 4. Make sure the camera isn't occupied by another app on the lock screen. 5. A very few external cameras refuse lock-screen access for security reasons — there's no fix for that but to switch cameras.
+
+**Q: The lock screen shows "service not started" and face unlock doesn't work.**
+A: Enter the console with admin privileges and check the service status under "Service & credentials." If it's not running, click the start button. If the status is "Running," please file an issue with your machine's environment so we can investigate further.
+
+**Q: Why is my face recognition unstable at the lock screen — Face Hello takes a long time to start and finally fails, yet sometimes it works fine?**
+A: This is indeed a current bug. We've fixed and optimized the slow-start / sometimes-won't-start problems, and on the few machines the author tested the chance of hitting it is extremely low, near zero. If you run into it often, please file an issue so we can look into it. Such a bug can come from a daemon thread not running properly, an unstable camera index, and so on.
+
+## TODO
+
+1. Optimize startup speed, model-loading speed, service-startup speed (OpenCV DNN)
+2. Polish or refactor the PySide6 frontend
+3. Further improve security, including the login credential and single-RGB protection
+4. Detailed usage docs (?)
+5. GPU inference support
+
+## License
+
+Not yet decided (TODO).
