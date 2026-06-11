@@ -22,6 +22,7 @@ import win32pipe
 from . import config
 from .auth import AuthResult, authenticate_blocking
 from .detector import FaceDetector
+from .i18n import save_lang_mirror, t
 from .store import FaceStore
 
 _BUF = 65536
@@ -49,7 +50,7 @@ class _AuthRunner:
         with self._lock:
             if self._running:
                 return  # 已有一次在跑,忽略重复 start
-            self._instruction = "启动中…"
+            self._instruction = t("starting", store.get_settings().get("language", "zh"))
             self._done = False
             self._result = None
             self._thread = threading.Thread(
@@ -65,7 +66,7 @@ class _AuthRunner:
         try:
             store.load()
             if store.is_empty():
-                result = AuthResult(False, "尚未录入任何人脸")
+                result = AuthResult(False, t("no_enrolled", store.get_settings().get("language", "zh")))
             else:
                 result = authenticate_blocking(detector, store, on_instruction=on_instr)
         except Exception as e:  # noqa: BLE001
@@ -118,7 +119,7 @@ def _handle(req: dict, detector: FaceDetector, store: FaceStore) -> dict:
         store.load()  # 取最新人脸库
         if store.is_empty():
             print("[认证] 拒绝:尚未录入任何人脸", flush=True)
-            return {"ok": False, "reason": "尚未录入任何人脸"}
+            return {"ok": False, "reason": t("no_enrolled", store.get_settings().get("language", "zh"))}
         result = authenticate_blocking(
             detector, store, on_instruction=lambda s: print(f"[活体提示] {s}", flush=True)
         )
@@ -173,6 +174,9 @@ def serve(should_continue=None) -> None:
     detector.load()
     _warm_liveness()
     store = FaceStore().load()
+    # 以 SYSTEM 身份把语言镜像同步成 settings 的值,保证重启后锁屏磁贴语言与控制台一致
+    # (控制台非管理员时可能写不进 ProgramData,这里兜底)。
+    save_lang_mirror(store.get_settings().get("language", "zh"))
     print(f"[FaceHello 服务] 就绪,监听 {config.PIPE_NAME}", flush=True)
     try:
         while should_continue():

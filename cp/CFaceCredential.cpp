@@ -153,10 +153,27 @@ static bool _FindFirstImageInFolder(PCWSTR dir, PWSTR outPath, size_t cch)
     return found;
 }
 
+// 读 C:\ProgramData\FaceHello\lang.txt(控制台 / 服务写的语言镜像)。内容以 "en" 开头
+// 返回 true(英文),否则一律按中文(默认)。CP 在锁屏是 SYSTEM,可读该 ASCII 路径;
+// 控制台读不了 DPAPI 人脸库,故语言以此明文文件跨进程传递。
+static bool _IsEnglishUI()
+{
+    HANDLE h = CreateFileW(L"C:\\ProgramData\\FaceHello\\lang.txt", GENERIC_READ,
+                           FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return false;
+    char buf[8] = {};
+    DWORD read = 0;
+    bool en = ReadFile(h, buf, sizeof(buf) - 1, &read, nullptr) && read >= 2 &&
+              buf[0] == 'e' && buf[1] == 'n';
+    CloseHandle(h);
+    return en;
+}
+
 CFaceCredential::CFaceCredential()
     : _cRef(1), _cpus(CPUS_INVALID), _pProvider(nullptr),
       _pCredProvCredentialEvents(nullptr), _hAuthThread(nullptr),
-      _stopFlag(0), _authState(AuthState::Idle)
+      _stopFlag(0), _authState(AuthState::Idle), _en(false)
 {
     ZeroMemory(_rgFieldStrings, sizeof(_rgFieldStrings));
     InitializeCriticalSection(&_cs);
@@ -182,7 +199,8 @@ HRESULT CFaceCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, CFa
 {
     _cpus = cpus;
     _pProvider = pProvider;
-    HRESULT hr = SHStrDupW(L"Face Unlock", &_rgFieldStrings[FFI_LABEL]);
+    _en = _IsEnglishUI();  // 读一次语言镜像,贯穿本磁贴所有文案
+    HRESULT hr = SHStrDupW(_L(L"面部解锁", L"Face Unlock"), &_rgFieldStrings[FFI_LABEL]);
     if (SUCCEEDED(hr))
     {
         hr = SHStrDupW(L"", &_rgFieldStrings[FFI_STATUS]);
@@ -321,7 +339,7 @@ void CFaceCredential::_AuthLoop()
     std::wstring reason;
     if (!PipeClient::AuthStart(reason))
     {
-        _SetStatus((L"认证服务不可用: " + reason).c_str());
+        _SetStatus((std::wstring(_L(L"认证服务不可用: ", L"Auth service unavailable: ")) + reason).c_str());
         EnterCriticalSection(&_cs);
         _authState = AuthState::Failed;
         LeaveCriticalSection(&_cs);
@@ -338,7 +356,7 @@ void CFaceCredential::_AuthLoop()
         std::wstring instr, user, rsn;
         if (!PipeClient::AuthPoll(done, success, instr, user, rsn))
         {
-            _SetStatus(L"与认证服务通信中断");
+            _SetStatus(_L(L"与认证服务通信中断", L"Lost connection to auth service"));
             EnterCriticalSection(&_cs);
             _authState = AuthState::Failed;
             LeaveCriticalSection(&_cs);
@@ -359,7 +377,7 @@ void CFaceCredential::_AuthLoop()
             _authUser = user;
             _authState = AuthState::Success;
             LeaveCriticalSection(&_cs);
-            _SetStatus(L"识别通过,正在登录…");
+            _SetStatus(_L(L"识别通过,正在登录…", L"Recognized, signing in…"));
             if (_pProvider != nullptr)
             {
                 _pProvider->SignalAutoLogon();  // 触发 LogonUI 调 GetSerialization
@@ -367,7 +385,7 @@ void CFaceCredential::_AuthLoop()
         }
         else
         {
-            _SetStatus((L"刷脸未通过: " + rsn).c_str());
+            _SetStatus((std::wstring(_L(L"刷脸未通过: ", L"Face check failed: ")) + rsn).c_str());
             EnterCriticalSection(&_cs);
             _authState = AuthState::Failed;
             LeaveCriticalSection(&_cs);
@@ -484,7 +502,8 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
     std::wstring password;
     if (!CredVault::RetrievePassword(user, password))
     {
-        _ReportFail(L"已识别,但未找到登录密码(请先写入 LSA Secret)",
+        _ReportFail(_L(L"已识别,但未找到登录密码(请先写入 LSA Secret)",
+                       L"Recognized, but no sign-in password found (set it in the console first)"),
                     ppwszOptionalStatusText, pcpsiOptionalStatusIcon);
         return S_OK;
     }
@@ -540,7 +559,8 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
     }
     if (FAILED(hr))
     {
-        _ReportFail(L"构造登录凭据失败", ppwszOptionalStatusText, pcpsiOptionalStatusIcon);
+        _ReportFail(_L(L"构造登录凭据失败", L"Failed to build sign-in credential"),
+                    ppwszOptionalStatusText, pcpsiOptionalStatusIcon);
     }
     return S_OK;
 }

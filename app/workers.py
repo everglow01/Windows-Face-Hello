@@ -11,6 +11,7 @@ from face_hello.auth import AuthResult, AuthSession
 from face_hello.camera import Camera
 from face_hello.detector import FaceDetector
 from face_hello.enroll import Enroller
+from face_hello.i18n import tr
 from face_hello.store import FaceStore
 
 _FRAME_INTERVAL = 0.03  # 限制循环频率,约 30fps 上限
@@ -77,7 +78,7 @@ class EnrollWorker(QThread):
         try:
             frames = self._capture()
             if self._stop:
-                self.failed.emit("已取消")
+                self.failed.emit(tr("cancelled"))
                 return
             self._process(frames)
         except Exception as e:  # noqa: BLE001 原型阶段直接上抛文案
@@ -87,7 +88,7 @@ class EnrollWorker(QThread):
         """阶段一:只采集原始帧,不做检测,保证预览流畅。"""
         frames: list = []
         with Camera() as cam:
-            self.status.emit("正对镜头,开始拍摄…")
+            self.status.emit(tr("capture_start"))
             next_cap = time.monotonic()
             while not self._stop and len(frames) < self.samples:
                 frame = cam.read()
@@ -102,15 +103,13 @@ class EnrollWorker(QThread):
 
     def _process(self, frames: list) -> None:
         """阶段二:统一对已拍帧提特征、取平均。"""
-        self.status.emit("处理中…")
+        self.status.emit(tr("processing"))
         enr = Enroller(self.detector, self.samples)
         for f in frames:
             enr.feed(f)
         need = max(3, self.samples // 2)
         if enr.collected < need:
-            self.failed.emit(
-                f"有效人脸帧太少({enr.collected}/{len(frames)})——请正对镜头、光线充足后重试"
-            )
+            self.failed.emit(tr("too_few_frames", collected=enr.collected, total=len(frames)))
             return
         self.finished_ok.emit(enr.result())
 
@@ -148,6 +147,6 @@ class AuthWorker(QThread):
             if session.done and session.result is not None:
                 self.finished_result.emit(session.result)
             else:
-                self.finished_result.emit(AuthResult(False, "已取消"))
+                self.finished_result.emit(AuthResult(False, tr("cancelled")))
         except Exception as e:  # noqa: BLE001
             self.failed.emit(str(e))

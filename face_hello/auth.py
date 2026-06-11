@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .detector import FaceDetector
+from .i18n import t
 from .liveness import FaceMeshTracker, LivenessSession
 from .matcher import best_match
 from .store import FaceStore
@@ -26,6 +27,7 @@ class AuthSession:
     def __init__(self, detector: FaceDetector, store: FaceStore):
         self.detector = detector
         self.settings = store.get_settings()
+        self._lang = self.settings.get("language", "zh")
         self._gallery = store.embeddings()
         self._profiles = store.list_profiles()
         self.result: AuthResult | None = None
@@ -44,7 +46,7 @@ class AuthSession:
         if self.phase == "liveness":
             return self._liveness.instruction
         if self.phase == "recognize":
-            return "识别中…"
+            return t("recognizing", self._lang)
         return self.result.reason if self.result else ""
 
     @property
@@ -58,7 +60,7 @@ class AuthSession:
             self._liveness.update(self._tracker.process(frame_bgr))
             if self._liveness.done:
                 if not self._liveness.passed:
-                    self._finish(AuthResult(False, "活体检测失败(超时或未完成动作)"))
+                    self._finish(AuthResult(False, t("liveness_failed", self._lang)))
                     return
                 self.phase = "recognize"
         if self.phase == "recognize":  # 活体通过 或 活体关闭,都在此识别
@@ -67,14 +69,16 @@ class AuthSession:
     def _recognize(self, frame_bgr) -> None:
         face = self.detector.largest_face(frame_bgr)
         if face is None:
-            self._finish(AuthResult(False, "未检测到人脸"))
+            self._finish(AuthResult(False, t("no_face", self._lang)))
             return
         idx, sim = best_match(face.embedding, self._gallery)
         thr = self.settings["match_threshold"]
         if idx >= 0 and sim >= thr:
-            self._finish(AuthResult(True, "认证通过", self._profiles[idx].name, sim))
+            self._finish(AuthResult(True, t("auth_pass", self._lang), self._profiles[idx].name, sim))
         else:
-            self._finish(AuthResult(False, f"人脸不匹配(相似度 {sim:.3f} < {thr:.2f})", None, sim))
+            self._finish(
+                AuthResult(False, t("face_mismatch", self._lang, sim=sim, thr=thr), None, sim)
+            )
 
     def _finish(self, result: AuthResult) -> None:
         self.result = result
@@ -104,4 +108,6 @@ def authenticate_blocking(detector: FaceDetector, store: FaceStore, on_instructi
             if on_instruction is not None and session.instruction != last:
                 last = session.instruction
                 on_instruction(session.instruction)
-    return session.result if session.result is not None else AuthResult(False, "未完成")
+    if session.result is not None:
+        return session.result
+    return AuthResult(False, t("incomplete", session._lang))

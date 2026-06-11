@@ -58,8 +58,10 @@ private:
     void _AuthLoop();
     static DWORD WINAPI _AuthThreadProc(LPVOID param);
     void _SetStatus(PCWSTR text);  // 线程安全地更新状态字段并通知 LogonUI
+    PCWSTR _L(PCWSTR zh, PCWSTR en) const { return _en ? en : zh; }  // 按 lang.txt 选中/英文
 
     LONG _cRef;
+    bool _en;  // 界面语言:读 C:\ProgramData\FaceHello\lang.txt,内容 "en" 为真,否则中文
     CREDENTIAL_PROVIDER_USAGE_SCENARIO _cpus;
     CFaceProvider* _pProvider;
     ICredentialProviderCredentialEvents* _pCredProvCredentialEvents;

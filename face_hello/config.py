@@ -38,6 +38,9 @@ else:             # 开发态
 FACE_STORE = DATA_DIR / "faces.dat"  # DPAPI 加密的人脸库
 # 锁屏磁贴自定义头像目录(两态一致;CP 硬编码读 C:\ProgramData\FaceHello\,SYSTEM 可读、纯 ASCII)。
 AVATAR_DIR = _PROGRAMDATA
+# 界面语言镜像:settings['language'] 的明文副本,供 C++ CP(SYSTEM)在锁屏读取
+# (CP 读不了 DPAPI 加密的人脸库)。控制台改语言时写,服务启动时按 settings 同步。
+LANG_FILE = _PROGRAMDATA / "lang.txt"
 
 # 认证服务的命名管道(Credential Provider 通过它请求认证)
 PIPE_NAME = r"\\.\pipe\FaceHello"
@@ -55,6 +58,8 @@ FACE_LANDMARKER_URL = (
 
 # 默认设置(可被 store 中持久化的 settings 覆盖)
 DEFAULTS = {
+    # 界面语言:"zh" / "en"。控制台、活体提示、锁屏磁贴共用同一值(见 i18n.py)。
+    "language": "zh",
     # buffalo_l 的 normed_embedding 走余弦,经验阈值需实测校准
     "match_threshold": 0.40,
     # 活体

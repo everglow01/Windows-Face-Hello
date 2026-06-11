@@ -150,14 +150,17 @@ class LivenessSession:
 
     @property
     def instruction(self) -> str:
+        from .i18n import t
+
+        lang = self.settings.get("language", "zh")
         if self.start_ts is None:
-            return "请正对摄像头…"
+            return t("face_camera", lang)
         if self.kind is ChallengeKind.BLINK:
             need = self.settings.get("required_blinks", 2)
-            return f"请眨眼 {need} 次({self._blinks}/{need})"
+            return t("blink_prompt", lang, need=need, cur=self._blinks, tot=need)
         if self.kind is ChallengeKind.TURN_LEFT:
-            return "请向左转头"
-        return "请向右转头"
+            return t("turn_left", lang)
+        return t("turn_right", lang)
 
     def update(self, metrics: FaceMetrics | None) -> None:
         if self.done:

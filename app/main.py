@@ -13,6 +13,7 @@ from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QPolygon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
     QHeaderView,
@@ -32,6 +33,7 @@ from app.workers import AuthWorker, EnrollWorker, WarmupWorker
 from face_hello import config, cred_vault
 from face_hello.auth import AuthResult
 from face_hello.detector import FaceDetector
+from face_hello.i18n import save_lang_mirror, set_lang, tr
 from face_hello.store import FaceStore
 
 PREVIEW_W, PREVIEW_H = 640, 480
@@ -195,7 +197,7 @@ def _themed_qss() -> str:
 
 
 def _preview_label() -> QLabel:
-    lbl = QLabel("摄像头预览")
+    lbl = QLabel(tr("camera_preview"))
     lbl.setFixedSize(PREVIEW_W, PREVIEW_H)
     lbl.setAlignment(Qt.AlignCenter)
     lbl.setStyleSheet(
@@ -223,16 +225,16 @@ class EnrollTab(QWidget):
         self.name_edit = QLineEdit()
         # 预填当前 Windows 账户名:档案名必须等于该账户名,锁屏刷脸才能对上 LSA 密码 + KERB
         self.name_edit.setText(cred_vault.current_user())
-        self.name_edit.setPlaceholderText("Windows 账户名")
-        self.start_btn = QPushButton("开始录入")
+        self.name_edit.setPlaceholderText(tr("win_account_name"))
+        self.start_btn = QPushButton(tr("start_enroll"))
         self.start_btn.setObjectName("accent")
         self.start_btn.clicked.connect(self._start)
         self.preview = _preview_label()
-        self.status = QLabel("用户名需与登录 Windows 的账户一致;请正对摄像头,光线充足。")
+        self.status = QLabel(tr("enroll_hint"))
         self.status.setObjectName("hint")
 
         top = QHBoxLayout()
-        top.addWidget(QLabel("用户名:"))
+        top.addWidget(QLabel(tr("username_label")))
         top.addWidget(self.name_edit, 1)
         top.addWidget(self.start_btn)
 
@@ -246,16 +248,16 @@ class EnrollTab(QWidget):
     def _start(self) -> None:
         name = self.name_edit.text().strip()
         if not name:
-            QMessageBox.warning(self, "提示", "请输入用户名")
+            QMessageBox.warning(self, tr("tip"), tr("enter_username"))
             return
         samples = self.store.get_settings()["enroll_samples"]
         self.start_btn.setEnabled(False)
-        self.status.setText("正在打开摄像头…")
+        self.status.setText(tr("opening_camera"))
         self.worker = EnrollWorker(self.detector, samples)
         self.worker.preview.connect(lambda img: _show_frame(self.preview, img))
         self.worker.status.connect(self.status.setText)
         self.worker.progress.connect(
-            lambda c, t: self.status.setText(f"拍摄中 {c}/{t} …")
+            lambda c, n: self.status.setText(tr("capturing", cur=c, tot=n))
         )
         self.worker.finished_ok.connect(self._on_done)
         self.worker.failed.connect(self._on_fail)
@@ -265,13 +267,13 @@ class EnrollTab(QWidget):
         name = self.name_edit.text().strip()
         self.store.add_profile(name, embedding)
         self.store.save()
-        self.status.setText(f"✅ 已录入「{name}」")
+        self.status.setText(tr("enrolled_ok", name=name))
         self.start_btn.setEnabled(True)
         self.on_changed()
-        QMessageBox.information(self, "完成", f"用户「{name}」录入成功")
+        QMessageBox.information(self, tr("done_title"), tr("enroll_success", name=name))
 
     def _on_fail(self, msg: str) -> None:
-        self.status.setText(f"❌ 失败:{msg}")
+        self.status.setText(tr("failed_fmt", msg=msg))
         self.start_btn.setEnabled(True)
 
 
@@ -282,11 +284,11 @@ class AuthTab(QWidget):
         self.store = store
         self.worker: AuthWorker | None = None
 
-        self.start_btn = QPushButton("开始测试解锁")
+        self.start_btn = QPushButton(tr("start_test_unlock"))
         self.start_btn.setObjectName("accent")
         self.start_btn.clicked.connect(self._start)
         self.preview = _preview_label()
-        self.instruction = QLabel("点击开始,按提示完成活体动作")
+        self.instruction = QLabel(tr("auth_idle_hint"))
         self.instruction.setAlignment(Qt.AlignCenter)
         self.instruction.setStyleSheet(_INSTR_BASE)
 
@@ -299,11 +301,11 @@ class AuthTab(QWidget):
 
     def _start(self) -> None:
         if self.store.is_empty():
-            QMessageBox.warning(self, "提示", "尚未录入任何人脸,请先在「录入」页登记")
+            QMessageBox.warning(self, tr("tip"), tr("no_enroll_warn"))
             return
         self.start_btn.setEnabled(False)
         self.instruction.setStyleSheet(_INSTR_BASE)
-        self.instruction.setText("准备中…")
+        self.instruction.setText(tr("preparing"))
         self.worker = AuthWorker(self.detector, self.store)
         self.worker.preview.connect(lambda img: _show_frame(self.preview, img))
         self.worker.instruction.connect(self.instruction.setText)
@@ -315,14 +317,14 @@ class AuthTab(QWidget):
         self.start_btn.setEnabled(True)
         if result.success:
             self.instruction.setStyleSheet(_INSTR_BASE + f"color:{SUCCESS};")
-            self.instruction.setText(f"✅ 解锁通过 — {result.name}(相似度 {result.similarity:.3f})")
+            self.instruction.setText(tr("unlock_pass", name=result.name, sim=result.similarity))
         else:
             self.instruction.setStyleSheet(_INSTR_BASE + f"color:{DANGER};")
-            self.instruction.setText(f"❌ 拒绝 — {result.reason}")
+            self.instruction.setText(tr("unlock_reject", reason=result.reason))
 
     def _on_fail(self, msg: str) -> None:
         self.start_btn.setEnabled(True)
-        self.instruction.setText(f"❌ 错误:{msg}")
+        self.instruction.setText(tr("error_fmt", msg=msg))
 
 
 class SettingsTab(QWidget):
@@ -331,14 +333,21 @@ class SettingsTab(QWidget):
         self.store = store
 
         self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["用户名", "录入日期", "剩余天数", "状态"])
+        self.table.setHorizontalHeaderLabels(
+            [tr("col_user"), tr("col_enroll_date"), tr("col_days_left"), tr("col_status")]
+        )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
 
-        self.del_btn = QPushButton("删除选中用户")
+        self.del_btn = QPushButton(tr("delete_selected"))
         self.del_btn.clicked.connect(self._delete_selected)
 
         s = self.store.get_settings()
+        # 界面语言下拉:userData 存语言码,显示名固定中英两种(与当前界面语言无关)
+        self.lang_combo = QComboBox()
+        self.lang_combo.addItem("中文", "zh")
+        self.lang_combo.addItem("English", "en")
+        self.lang_combo.setCurrentIndex(0 if s.get("language", "zh") != "en" else 1)
         self.match_spin = self._dspin(0.0, 1.0, 0.01, s["match_threshold"])
         self.yaw_spin = self._dspin(5.0, 45.0, 1.0, s["yaw_threshold_deg"])
         self.blink_spin = QSpinBox()
@@ -350,24 +359,25 @@ class SettingsTab(QWidget):
         self.samples_spin = QSpinBox()
         self.samples_spin.setRange(3, 30)
         self.samples_spin.setValue(s["enroll_samples"])
-        self.liveness_check = QCheckBox("启用活体检测(关闭=直接识别,牺牲防照片能力)")
+        self.liveness_check = QCheckBox(tr("liveness_check"))
         self.liveness_check.setChecked(s["liveness_enabled"])
 
-        save_btn = QPushButton("保存设置")
+        save_btn = QPushButton(tr("save_settings"))
         save_btn.setObjectName("accent")
         save_btn.clicked.connect(self._save)
 
         form = QVBoxLayout()
+        form.addLayout(self._row(tr("language_label"), self.lang_combo))
         form.addWidget(self.liveness_check)
-        form.addLayout(self._row("匹配阈值(越高越严):", self.match_spin))
-        form.addLayout(self._row("转头判定角度(°):", self.yaw_spin))
-        form.addLayout(self._row("眨眼挑战次数:", self.blink_spin))
-        form.addLayout(self._row("人脸有效期(天):", self.renew_spin))
-        form.addLayout(self._row("录入采集帧数:", self.samples_spin))
+        form.addLayout(self._row(tr("match_threshold_label"), self.match_spin))
+        form.addLayout(self._row(tr("yaw_label"), self.yaw_spin))
+        form.addLayout(self._row(tr("blink_count_label"), self.blink_spin))
+        form.addLayout(self._row(tr("renew_label"), self.renew_spin))
+        form.addLayout(self._row(tr("samples_label"), self.samples_spin))
 
-        users_title = QLabel("已录入用户")
+        users_title = QLabel(tr("enrolled_users"))
         users_title.setObjectName("h2")
-        params_title = QLabel("参数与安全策略")
+        params_title = QLabel(tr("params_security"))
         params_title.setObjectName("h2")
 
         layout = QVBoxLayout(self)
@@ -403,7 +413,7 @@ class SettingsTab(QWidget):
         profiles = self.store.list_profiles()
         self.table.setRowCount(len(profiles))
         for r, p in enumerate(profiles):
-            status = "⚠ 已过期" if p.is_expired else "正常"
+            status = tr("expired_mark") if p.is_expired else tr("normal_status")
             cells = [p.name, p.enroll_date.isoformat(), str(p.days_left), status]
             for c, text in enumerate(cells):
                 self.table.setItem(r, c, QTableWidgetItem(text))
@@ -413,13 +423,15 @@ class SettingsTab(QWidget):
         if row < 0:
             return
         name = self.table.item(row, 0).text()
-        if QMessageBox.question(self, "确认", f"删除用户「{name}」?") == QMessageBox.Yes:
+        if QMessageBox.question(self, tr("confirm_title"), tr("delete_user_q", name=name)) == QMessageBox.Yes:
             self.store.remove_profile(name)
             self.store.save()
             self.refresh()
 
     def _save(self) -> None:
+        lang = self.lang_combo.currentData()
         self.store.update_settings(
+            language=lang,
             liveness_enabled=self.liveness_check.isChecked(),
             match_threshold=self.match_spin.value(),
             yaw_threshold_deg=self.yaw_spin.value(),
@@ -428,7 +440,9 @@ class SettingsTab(QWidget):
             enroll_samples=self.samples_spin.value(),
         )
         self.store.save()
-        QMessageBox.information(self, "已保存", "设置已保存")
+        # 写明文镜像,锁屏磁贴(C++ CP,SYSTEM)据此切换语言;尽力而为,失败不阻断保存
+        save_lang_mirror(lang)
+        QMessageBox.information(self, tr("saved_title"), tr("settings_saved"))
 
 
 def _is_admin() -> bool:
@@ -449,7 +463,8 @@ def _run_service(*args: str) -> tuple[int, str]:
     return p.returncode, (p.stdout + p.stderr).strip()
 
 
-_SVC_STATES = {1: "已停止", 2: "启动中", 3: "停止中", 4: "运行中", 7: "已暂停"}
+# 服务状态码 → 文案 key(在 tr 之前于模块加载期求值会绑死语言,故只存 key,调用时再 tr)
+_SVC_STATE_KEYS = {1: "svc_stopped", 2: "svc_starting", 3: "svc_stopping", 4: "svc_running", 7: "svc_paused"}
 
 
 def _service_status() -> str:
@@ -457,9 +472,10 @@ def _service_status() -> str:
         import win32serviceutil
 
         st = win32serviceutil.QueryServiceStatus(ServiceTab.SERVICE_NAME)[1]
-        return _SVC_STATES.get(st, f"状态码 {st}")
+        key = _SVC_STATE_KEYS.get(st)
+        return tr(key) if key else tr("svc_code", st=st)
     except Exception:  # noqa: BLE001 多半是未安装
-        return "未安装"
+        return tr("svc_not_installed")
 
 
 class ServiceTab(QWidget):
@@ -474,26 +490,26 @@ class ServiceTab(QWidget):
 
         self.pwd_edit = QLineEdit()
         self.pwd_edit.setEchoMode(QLineEdit.Password)
-        self.pwd_edit.setPlaceholderText("锁屏解锁用的密码")
-        save_pwd_btn = QPushButton("保存解锁密码")
+        self.pwd_edit.setPlaceholderText(tr("unlock_pwd_placeholder"))
+        save_pwd_btn = QPushButton(tr("save_unlock_pwd"))
         save_pwd_btn.setObjectName("accent")
         save_pwd_btn.clicked.connect(self._save_pwd)
 
-        install_btn = QPushButton("安装并设为开机自启")
+        install_btn = QPushButton(tr("install_autostart"))
         install_btn.setObjectName("accent")
         install_btn.clicked.connect(self._install)
-        start_btn = QPushButton("启动")
+        start_btn = QPushButton(tr("btn_start"))
         start_btn.clicked.connect(lambda: self._svc_cmd("start"))
-        stop_btn = QPushButton("停止")
+        stop_btn = QPushButton(tr("btn_stop"))
         stop_btn.clicked.connect(lambda: self._svc_cmd("stop"))
-        remove_btn = QPushButton("卸载")
+        remove_btn = QPushButton(tr("btn_uninstall"))
         remove_btn.clicked.connect(self._remove)
-        refresh_btn = QPushButton("刷新状态")
+        refresh_btn = QPushButton(tr("btn_refresh"))
         refresh_btn.clicked.connect(self._refresh_status)
-        register_btn = QPushButton("注册 CP 磁贴")
+        register_btn = QPushButton(tr("register_cp"))
         register_btn.setObjectName("accent")
         register_btn.clicked.connect(lambda: self._register_cp(unregister=False))
-        unregister_btn = QPushButton("反注册")
+        unregister_btn = QPushButton(tr("unregister_cp"))
         unregister_btn.clicked.connect(lambda: self._register_cp(unregister=True))
         self.svc_status = QLabel("—")
         self.svc_status.setObjectName("hint")
@@ -504,15 +520,15 @@ class ServiceTab(QWidget):
             register_btn, unregister_btn,
         ]
 
-        account_lbl = QLabel(f"当前账户:{self.user}")
+        account_lbl = QLabel(tr("current_account", user=self.user))
         account_lbl.setObjectName("hint")
-        step1 = QLabel("① 解锁密码(写入 LSA,刷脸时替你提交;微软账户登录的机器通常填本地登录密码)")
+        step1 = QLabel(tr("step1"))
         step1.setObjectName("h2")
         step1.setWordWrap(True)
-        step2 = QLabel("② 认证服务(LocalSystem,开机自启,锁屏时为凭据提供程序刷脸)")
+        step2 = QLabel(tr("step2"))
         step2.setObjectName("h2")
         step2.setWordWrap(True)
-        step3 = QLabel("③ 锁屏磁贴(Credential Provider;安装包会自动注册,此处用于排错或重编后手动刷新)")
+        step3 = QLabel(tr("step3"))
         step3.setObjectName("h2")
         step3.setWordWrap(True)
 
@@ -521,7 +537,7 @@ class ServiceTab(QWidget):
         layout.setSpacing(8)
         layout.addWidget(account_lbl)
         if not self.is_admin:
-            warn = QLabel("⚠ 设置密码与管理服务需要管理员权限,请以管理员身份重新运行本管理台。")
+            warn = QLabel(tr("admin_warn"))
             warn.setStyleSheet(f"color:{DANGER};")
             warn.setWordWrap(True)
             layout.addWidget(warn)
@@ -558,21 +574,21 @@ class ServiceTab(QWidget):
     def _save_pwd(self) -> None:
         pwd = self.pwd_edit.text()
         if not pwd:
-            QMessageBox.warning(self, "提示", "请输入密码")
+            QMessageBox.warning(self, tr("tip"), tr("enter_pwd"))
             return
         try:
             cred_vault.store_password(self.user, pwd)
         except Exception as e:  # noqa: BLE001
-            QMessageBox.critical(self, "失败", f"写入 LSA 失败:{e}")
+            QMessageBox.critical(self, tr("failed_title"), tr("lsa_write_fail", e=e))
             return
         self.pwd_edit.clear()
-        QMessageBox.information(self, "完成", f"已为账户「{self.user}」保存解锁密码")
+        QMessageBox.information(self, tr("done_title"), tr("pwd_saved", user=self.user))
 
     def _svc_cmd(self, action: str) -> None:
         rc, out = _run_service(action)
         self._refresh_status()
         if rc != 0:
-            QMessageBox.warning(self, action, out or f"{action} 返回码 {rc}")
+            QMessageBox.warning(self, action, out or tr("ret_code", action=action, rc=rc))
 
     def _install(self) -> None:
         # 注意:HandleCommandLine 要求选项在命令之前(--startup auto install)
@@ -580,60 +596,59 @@ class ServiceTab(QWidget):
         if rc == 0:
             _run_service("start")
             self._refresh_status()
-            QMessageBox.information(self, "安装", "服务已安装并设为开机自启,已尝试启动")
+            QMessageBox.information(self, tr("install_title"), tr("install_ok"))
         else:
             self._refresh_status()
-            QMessageBox.warning(self, "安装", out or f"返回码 {rc}")
+            QMessageBox.warning(self, tr("install_title"), out or tr("ret_code_simple", rc=rc))
 
     def _remove(self) -> None:
         _run_service("stop")
         rc, out = _run_service("remove")
         self._refresh_status()
         if rc != 0:
-            QMessageBox.warning(self, "卸载", out or f"返回码 {rc}")
+            QMessageBox.warning(self, tr("uninstall_title"), out or tr("ret_code_simple", rc=rc))
 
     def _register_cp(self, unregister: bool) -> None:
         """regsvr32 注册/反注册 CP DLL(锁屏磁贴)。安装包已自动做,此处供排错/手动刷新。"""
         import subprocess
 
-        action = "反注册" if unregister else "注册"
+        action = tr("act_unregister") if unregister else tr("act_register")
         dll = config.CP_DLL
         if not dll.exists():
-            QMessageBox.warning(
-                self, "未找到 DLL",
-                f"未找到 CP DLL:\n{dll}\n请先用 MSBuild 编译 cp\\FaceHelloCP.sln。",
-            )
+            QMessageBox.warning(self, tr("dll_not_found_title"), tr("dll_not_found", dll=dll))
             return
         args = ["regsvr32", "/s"] + (["/u"] if unregister else []) + [str(dll)]
         p = subprocess.run(args, capture_output=True, text=True)
         if p.returncode == 0:
-            QMessageBox.information(self, action, f"CP 磁贴已{action}")
+            QMessageBox.information(self, action, tr("cp_action_done", action=action))
         else:
             msg = (p.stdout + p.stderr).strip()
-            QMessageBox.warning(self, action, msg or f"regsvr32 返回码 {p.returncode}")
+            QMessageBox.warning(self, action, msg or tr("regsvr_code", rc=p.returncode))
 
     def _refresh_status(self) -> None:
-        self.svc_status.setText("服务状态:" + _service_status())
+        self.svc_status.setText(tr("svc_status_prefix") + _service_status())
 
 
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Face_hello 管理台")
         self.detector = FaceDetector()  # 惰性加载,首次推理时才载入模型
         self.store = FaceStore().load()
+        # 建任何控件前先按持久化设置定语言;切换语言改的是设置,重启控制台后整体生效
+        set_lang(self.store.get_settings().get("language", "zh"))
+        self.setWindowTitle(tr("app_title"))
 
         tabs = QTabWidget()
         self.settings_tab = SettingsTab(self.store)
         self.enroll_tab = EnrollTab(self.detector, self.store, self.settings_tab.refresh)
         self.auth_tab = AuthTab(self.detector, self.store)
         self.service_tab = ServiceTab()
-        tabs.addTab(self.enroll_tab, "录入人脸")
-        tabs.addTab(self.auth_tab, "测试解锁")
-        tabs.addTab(self.service_tab, "服务与凭据")
-        tabs.addTab(self.settings_tab, "设置与安全")
+        tabs.addTab(self.enroll_tab, tr("tab_enroll"))
+        tabs.addTab(self.auth_tab, tr("tab_test"))
+        tabs.addTab(self.service_tab, tr("tab_service"))
+        tabs.addTab(self.settings_tab, tr("tab_settings"))
 
-        self.status_label = QLabel("● 模型加载中…")
+        self.status_label = QLabel(tr("model_loading"))
         self.status_label.setStyleSheet(f"color:{WARN};padding:2px 4px;")
 
         layout = QVBoxLayout(self)
@@ -650,15 +665,15 @@ class MainWindow(QWidget):
         self._warn_expired()
 
     def _on_ready(self) -> None:
-        self.status_label.setText("● 就绪")
+        self.status_label.setText(tr("model_ready"))
         self.status_label.setStyleSheet(f"color:{SUCCESS};padding:2px 4px;")
 
     def _warn_expired(self) -> None:
         expired = [p.name for p in self.store.list_profiles() if p.is_expired]
         if expired:
             QMessageBox.warning(
-                self, "人脸已过期",
-                "以下用户人脸已超过有效期,建议重新录入:\n" + "、".join(expired),
+                self, tr("expired_title"),
+                tr("expired_body") + tr("list_sep").join(expired),
             )
 
 
