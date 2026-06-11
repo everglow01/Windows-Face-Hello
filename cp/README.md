@@ -1,53 +1,94 @@
-# FaceHello Credential Provider（阶段 5-3，C++）
+# FaceHello Credential Provider (C++)
 
-锁屏/登录界面上的「刷脸」磁贴。COM in-proc DLL，注册为 Windows Credential Provider。
+The "Face Unlock" tile on the lock / sign-in screen. A COM in-proc DLL registered as a Windows Credential Provider; selecting the tile runs face recognition in the background and, once recognized, **submits the real credential to actually sign in / unlock**.
 
-- **CLSID**：`{E071A7CE-5D7F-4063-9A10-AE39AEC64EE8}`
-- **当前进度：里程碑 a**（空磁贴）——能注册、登录/解锁界面能看到「Face Unlock」磁贴，点提交只弹占位提示，**不做任何认证、不提交任何凭据**。
+> [中文](./README_zh.md) ｜ Overall design: [DESIGN.md](../DESIGN.md), developer guide: [contribute.md](../contribute.md)
 
-## ⚠️ 安全红线
+- **CLSID**: `{E071A7CE-5D7F-4063-9A10-AE39AEC64EE8}`
+- **Status**: tile → named pipe → LocalSystem service → InsightFace recognition → read the LSA password → pack a Kerberos credential to actually unlock. **Both local accounts and Microsoft accounts (MSA local login) are verified end-to-end.**
+- **Boundary of responsibility**: the CP only handles the lock-screen UI and credential submission; **all camera capture, liveness, and recognition happen in the Python service**. The two are coupled only through the local named pipe `\\.\pipe\FaceHello` (JSON). Changing the Python side does not require rebuilding the DLL.
 
-- **绝不在主机上 `regsvr32` 注册本 DLL。** 只在 **Windows 虚拟机（已打快照）**里注册测试。
-- 一个有缺陷的 Credential Provider 可能让 LogonUI 异常，导致**登录界面进不去**。每次注册前先打快照。
-- 本 CP **不替换/不过滤**系统自带的密码/PIN 提供程序，始终保留兜底登录方式。
-- 出问题的恢复路径：VM 回滚快照 / 安全模式 / 另一个管理员账户登录后 `regsvr32 /u` 卸载或删注册表键。
+---
 
-## 构建（主机上做没问题，编译不等于注册）
+## ⚠️ Safety notice
 
-需要 Visual Studio 2022 + “使用 C++ 的桌面开发”工作负载。
+- **After editing the C++ code, never `regsvr32`-register this DLL on your host machine until it's debugged and stable.** Register and test only inside a **snapshotted Windows VM**. And if you've changed the C++ code, always validate on real hardware before committing the new code.
+- A buggy Credential Provider can break LogonUI and potentially **lock you out of the sign-in screen**. Take a snapshot before every registration, and keep a **spare administrator account**.
+- This CP **never replaces or filters** the system's built-in password / PIN providers — the fallback login is always there. It only **adds** a tile.
+- Recovery paths when things go wrong: roll back the VM snapshot / boot into Safe Mode / sign in with another administrator account and `regsvr32 /u` to unregister (or manually delete the two registry keys listed below).
+
+---
+
+## How it works — the unlock chain
+
+```
+Select the "Face Unlock" tile
+  → SetSelected starts the background scan thread
+  → PipeClient::AuthStart            (\\.\pipe\FaceHello, asks the service to run one auth)
+  → PipeClient::AuthPoll every ~400ms (fetch the liveness prompt; SetFieldString pushes it to the tile's status text)
+  → service recognizes the face → cache the username + SignalAutoLogon
+  → CredentialsChanged → LogonUI calls GetCredentialCount (pbAutoLogonWithDefault=TRUE)
+  → LogonUI calls GetSerialization automatically
+       → CredVault::RetrievePassword reads the user's sign-in password from the LSA Secret (the CP is SYSTEM, so it can)
+       → KerbInteractiveUnlockLogon{Init,Pack} packs the KERB credential
+       → handed to LogonUI to submit → actual unlock
+```
+
+**Key points**:
+- **The password never travels over the named pipe.** The service only returns `{ok, user, similarity}`; the CP reads the LSA itself in the SYSTEM context.
+- **Identity contract**: the account name the tile submits == the `user` the service returns == the LSA key `L$FaceHello_<user>` == the enrolled profile name. All four must match for the unlock to succeed.
+- The tile is shown only in the `CPUS_LOGON` and `CPUS_UNLOCK_WORKSTATION` scenarios; for all others it returns `E_NOTIMPL` and does not take over.
+
+### Two customizable parts of the tile
+
+- **Custom avatar**: drop a PNG/JPG/BMP into `C:\ProgramData\FaceHello\`. `GetBitmapValue` uses WIC to read the **first** image, center-crops it to a square by the shorter side, then scales it to 128×128; if nothing is found or decoding fails, it falls back to a solid-blue placeholder. That path is pure ASCII and SYSTEM-readable (the CP can't read OneDrive / non-ASCII paths).
+- **Multi-language**: at startup the CP reads `C:\ProgramData\FaceHello\lang.txt` (written by the console when you change language, and synced by the service as SYSTEM on startup). When its content is `en`, the tile's **own text** (title, status, etc.) is English, otherwise Chinese. The liveness prompts ("Turn your head left", etc.) arrive **already localized from the Python service**, and the CP displays them as-is.
+
+> Prerequisites: the FaceHello service is running, and the user's LSA sign-in password has been set (both can be done in one click on the console's "Service & credentials" tab).
+
+---
+
+## Build
+
+Requires Visual Studio 2022 with the "Desktop development with C++" workload. **Build with PowerShell, not Bash** — in practice MSYS mangles the `/p:` arguments.
 
 ```powershell
-# 用 VS 打开 cp\FaceHelloCP.sln，选 Release|x64 生成；或命令行：
 & "F:\VS2022\MSBuild\Current\Bin\MSBuild.exe" cp\FaceHelloCP.sln /p:Configuration=Release /p:Platform=x64
 ```
 
-产物：`cp\x64\Release\FaceHelloCP.dll`。
+- Output: `cp\x64\Release\FaceHelloCP.dll`.
+- The project is set to `/MT` (statically linked CRT), so it ships with the installer without depending on the VC++ runtime.
 
-## 在 VM 里注册 / 卸载（仅虚拟机！）
+## Register & unregister
 
-把 `FaceHelloCP.dll` 拷进 VM，**管理员**命令行：
+`regsvr32` calls the DLL's exported `DllRegisterServer` / `DllUnregisterServer`, which write / delete two registry keys each:
 
-```cmd
-regsvr32 FaceHelloCP.dll        :: 注册（写 HKCR\CLSID 和 HKLM\...\Credential Providers）
-regsvr32 /u FaceHelloCP.dll     :: 卸载
+```powershell
+regsvr32 FaceHelloCP.dll        # register
+regsvr32 /u FaceHelloCP.dll     # unregister
 ```
 
-注册后锁屏（Win+L）或注销，应能看到蓝色磁贴「Face Unlock」。点它会显示占位提示——这就是里程碑 a 的预期结果。
+| Location | Contents |
+|---|---|
+| `HKCR\CLSID\{CLSID}` + `InprocServer32` | DLL path + `ThreadingModel=Apartment` |
+| `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{CLSID}` | registers it as a Credential Provider |
 
-## 文件
+After registering, lock with `Win+L` or sign out, and you should see the "Face Unlock" tile.
+> For a real install, the Inno installer registers / unregisters this automatically; the manual commands here are only for development and troubleshooting.
 
-| 文件 | 作用 |
-|------|------|
-| `guid.h` | 本 CP 的 CLSID |
-| `common.h` | 磁贴字段定义（图标/标题/提交/状态）+ 共享声明 |
-| `helpers.h` | 字段描述符深拷贝辅助 |
-| `CFaceProvider.{h,cpp}` | `ICredentialProvider`：枚举出 1 个磁贴 |
-| `CFaceCredential.{h,cpp}` | `ICredentialProviderCredential`：磁贴字段 + 提交逻辑 |
-| `dll.cpp` | DllMain / 类工厂 / `DllRegisterServer` 等导出 |
-| `FaceHelloCP.def` | 导出表 |
+---
 
-## 后续里程碑
+## Files
 
-- **b**：接命名管道客户端，点磁贴调服务 `ping`，状态栏显示已录入用户（验证锁屏下 CP↔服务通信）。
-- **c**：`GetSerialization` 里调 `authenticate` → 读 LSA Secret `L$FaceHello_<user>` 密码 → 打包 `KERB_INTERACTIVE_UNLOCK_LOGON` 真解锁。
-- **d**：认证放到工作线程，识别时 UI 不卡；错误兜底。
+| File | Purpose |
+|------|---------|
+| `guid.h` | the CP's CLSID definition |
+| `common.h` | tile field enum (image / label / submit / status) + shared declarations |
+| `helpers.h` | deep-copy of field descriptors (`FieldDescriptorCoAllocCopy`) |
+| `CFaceProvider.{h,cpp}` | `ICredentialProvider`: enumerates one tile; `SignalAutoLogon` triggers auto-submit |
+| `CFaceCredential.{h,cpp}` | `ICredentialProviderCredential`: background scan thread, status refresh, avatar / language, `GetSerialization` unlock |
+| `PipeClient.{h,cpp}` | named-pipe client (`AuthStart` / `AuthPoll`), retries when the pipe is busy / during the rebuild gap |
+| `CredVault.{h,cpp}` | reads the sign-in password from the LSA Secret (`L$FaceHello_<user>`) |
+| `KerbHelpers.{h,cpp}` | packs `KERB_INTERACTIVE_UNLOCK_LOGON` + retrieves the Negotiate auth package |
+| `dll.cpp` | `DllMain` / class factory / `DllRegisterServer` and other exports + registry read/write |
+| `FaceHelloCP.def` | export table (4 standard COM exports) |
