@@ -179,16 +179,19 @@ models/            model weights (gitignored)
 
 ## FAQ
 
-**Q: In the console app the camera opens and recognizes faces accurately — why does the camera often fail to open after the PC locks or cold-boots, making Face Hello unusable?**
+**Q: In the console app the camera opens and recognizes faces accurately — why does the camera often fail to open after the PC locks or cold-boots, making Face Hello unusable?**      
+
 A: 1. Some USB or built-in laptop cameras *aren't powered* on the lock screen, so OpenCV can't grab the camera — make sure your camera device is powered at the lock screen or on cold boot (just powered on, woken from sleep, etc.). 2. On some laptop brands the camera may be turned off when not on AC power or in power-saving mode — you may need to force it on. 3. Make sure you've enabled camera permission in Windows settings. 4. Make sure the camera isn't occupied by another app on the lock screen. 5. A very few external cameras refuse lock-screen access for security reasons — there's no fix for that but to switch cameras.
 
-**Q: The lock screen shows "service not started" and face unlock doesn't work.**
+**Q: The lock screen shows "service not started" and face unlock doesn't work.**      
+
 A: Enter the console with admin privileges and check the service status under "Service & credentials." If it's not running, click the start button. If the status is "Running," please file an issue with your machine's environment so we can investigate further.
 
-**Q: Why is my face recognition unstable at the lock screen — Face Hello takes a long time to start and finally fails, yet sometimes it works fine?**
+**Q: Why is my face recognition unstable at the lock screen — Face Hello takes a long time to start and finally fails, yet sometimes it works fine?**     
+
 A: This is indeed a current bug. We've fixed and optimized the slow-start / sometimes-won't-start problems, and on the few machines the author tested the chance of hitting it is extremely low, near zero. If you run into it often, please file an issue so we can look into it. Such a bug can come from a daemon thread not running properly, an unstable camera index, and so on.     
 
-**Q: Why can't I use Face Hello after restarting my computer following a Windows update?**
+**Q: Why can't I use Face Hello after restarting my computer following a Windows update?**      
 
 A: This is normal. Windows updates typically refresh Windows services, which may cause the Face Hello service to hang. After unlocking the system with your password, the service will resume the next time you lock the screen. You don't need to run the service again in the console.
 
