@@ -1,6 +1,6 @@
 <div align="center">
 
-# 👋 Face_hello
+# 👋 Face Hello
 
 ### 让普通 RGB 摄像头也能给 Windows 做人脸解锁
 

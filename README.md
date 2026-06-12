@@ -1,6 +1,6 @@
 <div align="center">
 
-# 👋 Face_hello
+# 👋 Face Hello
 
 ### Face unlock for Windows — with any ordinary RGB webcam
 
