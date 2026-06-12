@@ -23,6 +23,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         "no_face": "未检测到人脸",
         "auth_pass": "认证通过",
         "face_mismatch": "人脸不匹配(相似度 {sim:.3f} < {thr:.2f})",
+        "ambiguous_match": "身份不明确(与他人过于接近,差值 {margin:.3f} < {m:.2f})",
         "incomplete": "未完成",
         # --- 核心:服务(service.py,会回给磁贴显示)---
         "starting": "启动中…",
@@ -66,6 +67,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         "save_settings": "保存设置",
         "language_label": "界面语言(重启后生效):",
         "match_threshold_label": "匹配阈值(越高越严):",
+        "match_margin_label": "多账户安全间隔(0=关):",
         "yaw_label": "转头判定角度(°):",
         "blink_count_label": "眨眼挑战次数:",
         "renew_label": "人脸有效期(天):",
@@ -139,6 +141,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         "no_face": "No face detected",
         "auth_pass": "Authenticated",
         "face_mismatch": "Face doesn't match (similarity {sim:.3f} < {thr:.2f})",
+        "ambiguous_match": "Ambiguous identity (too close to another person, margin {margin:.3f} < {m:.2f})",
         "incomplete": "Not completed",
         # --- core: service (returned to the tile) ---
         "starting": "Starting…",
@@ -182,6 +185,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         "save_settings": "Save settings",
         "language_label": "Language (applies after restart):",
         "match_threshold_label": "Match threshold (higher = stricter):",
+        "match_margin_label": "Multi-account safety margin (0 = off):",
         "yaw_label": "Head-turn angle (°):",
         "blink_count_label": "Blink challenge count:",
         "renew_label": "Face validity (days):",

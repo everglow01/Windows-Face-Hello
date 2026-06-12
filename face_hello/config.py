@@ -62,6 +62,9 @@ DEFAULTS = {
     "language": "zh",
     # buffalo_l 的 normed_embedding 走余弦,经验阈值需实测校准
     "match_threshold": 0.40,
+    # 多账户防错配:最佳与「最相似的另一个人」相似度差需 ≥ 此值才算确定身份,
+    # 否则判为歧义、拒绝(避免把 A 解成 B)。只录一个人时不触发。0 = 关闭 margin 校验。
+    "match_margin": 0.05,
     # 活体
     "liveness_enabled": True,   # 关掉则跳过活体直接识别(测试/低安全模式;牺牲防照片能力)
     "ear_threshold": 0.16,      # 低于判定闭眼(实测标定:睁眼中位~0.27,眨眼min~0.01)

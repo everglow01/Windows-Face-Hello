@@ -101,6 +101,7 @@ A passive anti-spoof CNN (trained on CASIA-SURF / replay) is listed as a **candi
 - **Liveness is the floor**, otherwise a single photo unlocks the machine; don't disable it by default for "convenience."
 - The password is stored in an LSA Secret and **never travels over IPC**; the gallery stores feature vectors (not photos), encrypted on disk with machine-scoped DPAPI.
 - **Never remove the system's password / PIN provider** — a fallback sign-in must always remain. Register the CP / test on real hardware only after taking a snapshot + keeping a spare admin account + a system restore point.
+- **Multi-account anti-misrouting (margin)**: when several people enroll on one machine, they share a single gallery and threshold, and `best_match` returns the single most-similar template across the whole gallery — if two people's features are close, A can be matched as B and thus **unlock the wrong account** (an inherent monocular-RGB weakness). To guard against this, recognition adds a **margin check**: beyond `similarity ≥ match_threshold`, it also requires `best − most-similar-other-person ≥ match_margin` (default 0.05); if the two are too close it's judged "ambiguous identity" and rejected outright — better to fall back to the password than to risk unlocking the wrong account. With only one person enrolled there is no rival (margin = ∞) so it never triggers; the value is tunable on the Settings tab, and `match_margin = 0` disables it. Rivals are distinguished by profile name, so multiple templates of the same person don't compete with each other.
 
 ---
 

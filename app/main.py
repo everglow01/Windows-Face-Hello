@@ -349,6 +349,7 @@ class SettingsTab(QWidget):
         self.lang_combo.addItem("English", "en")
         self.lang_combo.setCurrentIndex(0 if s.get("language", "zh") != "en" else 1)
         self.match_spin = self._dspin(0.0, 1.0, 0.01, s["match_threshold"])
+        self.margin_spin = self._dspin(0.0, 0.5, 0.01, s.get("match_margin", 0.05))
         self.yaw_spin = self._dspin(5.0, 45.0, 1.0, s["yaw_threshold_deg"])
         self.blink_spin = QSpinBox()
         self.blink_spin.setRange(1, 5)
@@ -370,6 +371,7 @@ class SettingsTab(QWidget):
         form.addLayout(self._row(tr("language_label"), self.lang_combo))
         form.addWidget(self.liveness_check)
         form.addLayout(self._row(tr("match_threshold_label"), self.match_spin))
+        form.addLayout(self._row(tr("match_margin_label"), self.margin_spin))
         form.addLayout(self._row(tr("yaw_label"), self.yaw_spin))
         form.addLayout(self._row(tr("blink_count_label"), self.blink_spin))
         form.addLayout(self._row(tr("renew_label"), self.renew_spin))
@@ -434,6 +436,7 @@ class SettingsTab(QWidget):
             language=lang,
             liveness_enabled=self.liveness_check.isChecked(),
             match_threshold=self.match_spin.value(),
+            match_margin=self.margin_spin.value(),
             yaw_threshold_deg=self.yaw_spin.value(),
             required_blinks=self.blink_spin.value(),
             renew_days=self.renew_spin.value(),

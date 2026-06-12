@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from .detector import FaceDetector
 from .i18n import t
 from .liveness import FaceMeshTracker, LivenessSession
-from .matcher import best_match
+from .matcher import best_match_with_margin
 from .store import FaceStore
 
 
@@ -71,14 +71,21 @@ class AuthSession:
         if face is None:
             self._finish(AuthResult(False, t("no_face", self._lang)))
             return
-        idx, sim = best_match(face.embedding, self._gallery)
+        names = [p.name for p in self._profiles]
+        idx, sim, margin = best_match_with_margin(face.embedding, self._gallery, names)
         thr = self.settings["match_threshold"]
-        if idx >= 0 and sim >= thr:
-            self._finish(AuthResult(True, t("auth_pass", self._lang), self._profiles[idx].name, sim))
-        else:
+        min_margin = self.settings.get("match_margin", 0.0)
+        if idx < 0 or sim < thr:
             self._finish(
                 AuthResult(False, t("face_mismatch", self._lang, sim=sim, thr=thr), None, sim)
             )
+        elif margin < min_margin:
+            # 过了阈值但与「另一个人」贴得太近——多账户下宁可拒绝也不解错账户
+            self._finish(
+                AuthResult(False, t("ambiguous_match", self._lang, margin=margin, m=min_margin), None, sim)
+            )
+        else:
+            self._finish(AuthResult(True, t("auth_pass", self._lang), names[idx], sim))
 
     def _finish(self, result: AuthResult) -> None:
         self.result = result

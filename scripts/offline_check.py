@@ -20,7 +20,13 @@ def check_matcher() -> None:
     assert abs(matcher.cosine_similarity(a, b)) < 1e-6
     idx, sim = matcher.best_match(a, [b, a])
     assert idx == 1 and sim > 0.99
-    print("[ok] matcher 余弦相似度")
+    # margin:单人无竞争者 → inf;probe 偏向 a 但离 b 不远 → margin 小
+    _, _, m1 = matcher.best_match_with_margin(a, [a], ["alice"])
+    assert m1 == float("inf")
+    probe = np.array([1.0, 0.6, 0.0], dtype=np.float32)  # 既像 a 又有点像 b
+    idx2, _, m2 = matcher.best_match_with_margin(probe, [a, b], ["alice", "bob"])
+    assert idx2 == 0 and 0.0 < m2 < 0.5
+    print("[ok] matcher 余弦相似度 + 多账户 margin")
 
 
 def check_store(tmp_path) -> None:
