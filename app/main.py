@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QGridLayout,
     QHBoxLayout,
@@ -30,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.workers import AuthWorker, EnrollWorker, WarmupWorker
+from app.workers import AuthWorker, CameraTestWorker, EnrollWorker, WarmupWorker
 from face_hello import config, cred_vault
 from face_hello.auth import AuthResult
 from face_hello.detector import FaceDetector
@@ -273,10 +274,11 @@ class EnrollTab(QWidget):
         if not name:
             QMessageBox.warning(self, tr("tip"), tr("enter_username"))
             return
-        samples = self.store.get_settings()["enroll_samples"]
+        s = self.store.get_settings()
+        samples = s["enroll_samples"]
         self.start_btn.setEnabled(False)
         self.status.setText(tr("opening_camera"))
-        self.worker = EnrollWorker(self.detector, samples)
+        self.worker = EnrollWorker(self.detector, samples, camera_index=s.get("camera_index", 0))
         self.worker.preview.connect(lambda img: _show_frame(self.preview, img))
         self.worker.status.connect(self.status.setText)
         self.worker.progress.connect(
@@ -348,7 +350,10 @@ class AuthTab(QWidget):
         self.start_btn.setEnabled(False)
         self.instruction.setStyleSheet(_INSTR_BASE)
         self.instruction.setText(tr("preparing"))
-        self.worker = AuthWorker(self.detector, self.store)
+        self.worker = AuthWorker(
+            self.detector, self.store,
+            camera_index=self.store.get_settings().get("camera_index", 0),
+        )
         self.worker.preview.connect(lambda img: _show_frame(self.preview, img))
         self.worker.instruction.connect(self.instruction.setText)
         self.worker.finished_result.connect(self._on_result)
@@ -393,10 +398,16 @@ class SettingsTab(QWidget):
         self.lockout_secs_spin = QSpinBox()
         self.lockout_secs_spin.setRange(0, 600)
         self.lockout_secs_spin.setValue(s.get("lockout_seconds", 30))
+        self.camera_spin = QSpinBox()
+        self.camera_spin.setRange(0, 10)
+        self.camera_spin.setValue(int(s.get("camera_index", 0)))
         for sp in (self.match_spin, self.margin_spin, self.yaw_spin, self.blink_spin,
                    self.renew_spin, self.samples_spin, self.lockout_fails_spin,
-                   self.lockout_secs_spin):
+                   self.lockout_secs_spin, self.camera_spin):
             sp.setFixedWidth(100)  # 窄而对齐,消除右侧大留白
+        self.camera_test_btn = QPushButton(tr("camera_test_btn"))
+        self.camera_test_btn.clicked.connect(self._test_camera)
+        self._cam_test: CameraTestWorker | None = None
         self.liveness_check = QCheckBox(tr("liveness_check"))
         self.liveness_check.setChecked(s["liveness_enabled"])
 
@@ -431,6 +442,18 @@ class SettingsTab(QWidget):
             grid.addWidget(w2, r, 3)
             r += 1
 
+        group("grp_camera")
+        grid.addWidget(QLabel(tr("camera_index_label")), r, 0)
+        cam_row = QHBoxLayout()
+        cam_row.setContentsMargins(0, 0, 0, 0)
+        cam_row.setSpacing(8)
+        cam_row.addWidget(self.camera_spin)
+        cam_row.addWidget(self.camera_test_btn)
+        cam_row.addStretch(1)
+        cam_w = QWidget()
+        cam_w.setLayout(cam_row)
+        grid.addWidget(cam_w, r, 1, 1, 3)
+        r += 1
         group("grp_recognition")
         pair("match_threshold_label", self.match_spin, "match_margin_label", self.margin_spin)
         group("grp_liveness")
@@ -467,9 +490,34 @@ class SettingsTab(QWidget):
             enroll_samples=self.samples_spin.value(),
             lockout_max_fails=self.lockout_fails_spin.value(),
             lockout_seconds=self.lockout_secs_spin.value(),
+            camera_index=self.camera_spin.value(),
         )
         self.store.save()
         QMessageBox.information(self, tr("saved_title"), tr("settings_saved"))
+
+    def _test_camera(self) -> None:
+        """用当前(未保存的)索引抓一帧弹窗预览,确认是不是想要的那台摄像头。"""
+        idx = self.camera_spin.value()
+        self.camera_test_btn.setEnabled(False)  # 防重入
+        self._cam_test = CameraTestWorker(idx)
+        self._cam_test.ok.connect(self._on_cam_test_ok)
+        self._cam_test.failed.connect(lambda _e: self._on_cam_test_fail(idx))
+        self._cam_test.finished.connect(lambda: self.camera_test_btn.setEnabled(True))
+        self._cam_test.start()
+
+    def _on_cam_test_ok(self, img: QImage) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle(tr("camera_test_title"))
+        lbl = QLabel()
+        lbl.setFixedSize(PREVIEW_W // 2, PREVIEW_H // 2)
+        lbl.setAlignment(Qt.AlignCenter)
+        _show_frame(lbl, img)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(lbl)
+        dlg.exec()
+
+    def _on_cam_test_fail(self, idx: int) -> None:
+        QMessageBox.warning(self, tr("camera_test_title"), tr("camera_test_fail", idx=idx))
 
 
 def _is_admin() -> bool:

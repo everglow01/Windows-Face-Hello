@@ -115,7 +115,8 @@ def authenticate_blocking(
 
     session = AuthSession(detector, store)
     last = None
-    cam = Camera()
+    idx = int(store.get_settings().get("camera_index", 0))
+    cam = Camera(idx)
     cam.open(timeout_s=camera_timeout_s)
     try:
         while not session.done:

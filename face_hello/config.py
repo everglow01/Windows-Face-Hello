@@ -81,6 +81,8 @@ DEFAULTS = {
     "lockout_seconds": 30,
     # 录入
     "enroll_samples": 8,        # 录入采集合格帧数
+    # 摄像头索引(0=默认/第一个)。多摄像头(内置+USB+虚拟)时改这里;控制台「测试」按钮可预览确认。
+    "camera_index": 0,
 }
 
 

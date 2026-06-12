@@ -64,11 +64,13 @@ class EnrollWorker(QThread):
     finished_ok = Signal(object)      # np.ndarray embedding
     failed = Signal(str)
 
-    def __init__(self, detector: FaceDetector, samples: int, capture_interval: float = 0.4):
+    def __init__(self, detector: FaceDetector, samples: int, capture_interval: float = 0.4,
+                 camera_index: int = 0):
         super().__init__()
         self.detector = detector
         self.samples = samples
         self.interval = capture_interval
+        self.camera_index = camera_index
         self._stop = False
 
     def stop(self) -> None:
@@ -87,7 +89,7 @@ class EnrollWorker(QThread):
     def _capture(self) -> list:
         """阶段一:只采集原始帧,不做检测,保证预览流畅。"""
         frames: list = []
-        with Camera() as cam:
+        with Camera(self.camera_index) as cam:
             self.status.emit(tr("capture_start"))
             next_cap = time.monotonic()
             while not self._stop and len(frames) < self.samples:
@@ -122,10 +124,11 @@ class AuthWorker(QThread):
     finished_result = Signal(object)  # AuthResult
     failed = Signal(str)
 
-    def __init__(self, detector: FaceDetector, store: FaceStore):
+    def __init__(self, detector: FaceDetector, store: FaceStore, camera_index: int = 0):
         super().__init__()
         self.detector = detector
         self.store = store
+        self.camera_index = camera_index
         self._stop = False
 
     def stop(self) -> None:
@@ -135,7 +138,7 @@ class AuthWorker(QThread):
         try:
             session = AuthSession(self.detector, self.store)
             last_instr = ""
-            with Camera() as cam:
+            with Camera(self.camera_index) as cam:
                 while not self._stop and not session.done:
                     frame = cam.read()
                     session.feed(frame)
@@ -150,3 +153,24 @@ class AuthWorker(QThread):
                 self.finished_result.emit(AuthResult(False, tr("cancelled")))
         except Exception as e:  # noqa: BLE001
             self.failed.emit(str(e))
+
+
+class CameraTestWorker(QThread):
+    """一次性抓一帧:供设置页「测试」按钮预览所选摄像头。短超时,无效 index 不干等。"""
+
+    ok = Signal(QImage)
+    failed = Signal(str)
+
+    def __init__(self, index: int):
+        super().__init__()
+        self.index = index
+
+    def run(self) -> None:
+        cam = Camera(self.index)
+        try:
+            cam.open(timeout_s=3.0)
+            self.ok.emit(bgr_to_qimage(cam.read()))
+        except Exception as e:  # noqa: BLE001 打不开就回失败,UI 提示换索引
+            self.failed.emit(str(e))
+        finally:
+            cam.release()

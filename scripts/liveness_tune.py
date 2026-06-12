@@ -11,6 +11,7 @@ import numpy as np
 
 from face_hello.camera import Camera
 from face_hello.liveness import FaceMeshTracker
+from face_hello.store import FaceStore
 
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -19,8 +20,9 @@ def main() -> None:
     tracker = FaceMeshTracker()
     ears: list[float] = []
     yaws: list[float] = []
+    idx = int(FaceStore().load().get_settings().get("camera_index", 0))  # 与解锁用同一台摄像头
     try:
-        with Camera() as cam:
+        with Camera(idx) as cam:
             while True:
                 frame = cam.read()
                 m = tracker.process(frame)
