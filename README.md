@@ -82,11 +82,11 @@ Launch the installed app with admin privileges to enter the console desktop app:
 
 ![GUI](README_image/GUI.png)
 
-1. **Enroll** — the username defaults to your current Windows account name (the text shown on the lock screen); face the camera to collect several good frames, averaged into a template.
+1. **Enroll** — the username defaults to your current Windows account name (the text shown on the lock screen); face the camera to collect several good frames, averaged into a template. The enrolled-users list (view / delete) lives on this tab.
    > The username must equal your Windows sign-in account name, otherwise lock-screen unlock won't match (Microsoft accounts use the local login name).
    > Not sure of your account name? Press Win+L to see the name shown on the lock screen — it's usually the same.
 2. **Test unlock** — follow the random liveness prompt (blink N times / turn left / turn right), then recognition runs and shows the similarity and result.
-3. **Settings** — view / delete enrolled users; tune the match threshold, turn angle, blink count, and face validity period; toggle "enable liveness".
+3. **Settings** — pick the camera (with a **Test** button that previews the selected one, handy on multi-camera machines); tune the match threshold, turn angle, blink count, and face validity period; toggle **liveness** and **passive anti-spoofing**.
 4. **Service & credentials** — set the sign-in password used for lock-screen unlock (written to an LSA Secret) and install / start / stop the auth service in one click. **Requires Administrator**, otherwise the relevant buttons are disabled.
 
 *Some stutter on the first enrollment and test is normal.*
@@ -130,8 +130,9 @@ MSBuild.exe cp\FaceHelloCP.sln /p:Configuration=Release /p:Platform=x64
 ## ⚙️ How It Works (in brief)
 
 ```
-Camera (OpenCV) → Liveness (MediaPipe FaceLandmarker: EAR blink + solvePnP head turn)
-               → Face detection + recognition (InsightFace ArcFace, 512-d embedding)
+Camera (OpenCV) → Active liveness (MediaPipe FaceLandmarker: EAR blink + solvePnP head turn)
+               → Face detection + recognition (InsightFace SCRFD + ArcFace, 512-d embedding)
+               → Passive anti-spoofing (Silent-Face MiniFASNet: reject screen / photo / video replay)
                → Cosine similarity vs gallery → pass / reject
 ```
 
@@ -154,7 +155,8 @@ You can drop your own avatar image into the default path `C:\ProgramData\FaceHel
 
 - The gallery stores **feature vectors, not photos**, encrypted on disk with Windows DPAPI in the local `data/`, uploaded to no cloud server, keeping your face data private and secure.
 - The sign-in password is kept in an **LSA Secret**, read by the Credential Provider itself in the SYSTEM context — it **never travels over IPC**.
-- Monocular RGB liveness can't tell apart high-quality photos / video streams. **Don't use this on a machine others might physically access.** Any data leak or loss is the result of the user's own operation and of not understanding this project's risks, and you bear the consequences yourself.
+- **Passive anti-spoofing** (Silent-Face MiniFASNet) runs on the recognition frame to reject screen / photo / video replays — on by default, with a toggle in Settings. It meaningfully raises the bar, but being single-RGB it is **not** foolproof.
+- Even with active liveness + passive anti-spoofing, monocular RGB still can't match IR / depth. **Don't use this on a machine others might physically access.** Any data leak or loss is the result of the user's own operation and of not understanding this project's risks, and you bear the consequences yourself.
 - With **liveness** turned off, startup compresses to under 1s for an almost-instant experience — but for safety we still don't recommend turning it off.
 
 ---
@@ -167,6 +169,7 @@ face_hello/        core library (no Qt dependency)
   detector.py        InsightFace detection + 512-d embedding
   matcher.py         cosine-similarity matching
   liveness.py        FaceLandmarker → EAR blink + solvePnP turn + random challenge
+  antispoof.py       passive anti-spoofing (MiniFASNet + RetinaFace crop)
   enroll.py          multi-frame averaged enrollment
   store.py           DPAPI-encrypted gallery + settings
   auth.py            auth orchestration (liveness → recognition) state machine
@@ -184,7 +187,7 @@ models/            model weights (gitignored)
 
 ## 🚧 Known Limitations
 
-- Anti-spoofing is limited by the monocular RGB camera (see the Security notice above); it may be bypassed by a determined attacker through illicit means. Again: do not use this on a computer holding sensitive data.
+- Anti-spoofing: a passive model (MiniFASNet) now rejects most screen / photo / replay attacks, but being single-RGB it isn't foolproof and a determined attacker may still bypass it. Again: do not use this on a computer holding sensitive data.
 - The first cold start loads the ~191 MB recognition model from disk, taking a few seconds (about 2s on a modern CPU); after sleep the camera needs a couple of seconds to re-enumerate (retries are built in).
 - When the working directory contains Chinese paths, OpenCV / MediaPipe are handled specially, but encoding glitches may still occur.
 - The installer and the app itself are fairly large, bounded by the Python-related dependencies.

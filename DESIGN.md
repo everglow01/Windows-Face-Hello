@@ -1,4 +1,4 @@
-# Face_hello — Face Unlock for Windows with an Ordinary Webcam (Design Doc)
+# Face Hello — Face Unlock for Windows with an Ordinary Webcam (Design Doc)
 
 > [中文](./DESIGN_zh.md) ｜ Let an ordinary RGB webcam (laptop front camera / USB camera) that Windows Hello doesn't support unlock your PC by face.
 
@@ -22,10 +22,11 @@ This is the **design & decision record**: why it's built this way, where it stan
 | One-click clean uninstall (stop/remove service, unregister CP, wipe LSA password + gallery) | ✅ done |
 | Size trimming: PySide6-Essentials + buffalo_l pruning → `setup.exe` ~322 MB | ✅ done |
 | GitHub Release automation (push a tag → CI builds setup.exe) | ✅ done |
-| **5-4 hardening: pipe ACL limited to SYSTEM, failure fallback / lockout, better logging** | ⏳ to do |
+| **5-4 hardening: pipe ACL limited to SYSTEM, failure fallback / lockout, better logging** | ⏳ Halfway done |
 | **Code signing (Authenticode / EV cert to clear SmartScreen)** | ⏳ tbd |
 | Further slimming: opencv-headless, drop scipy/onnx transitive deps | ⏳ to do |
-| Passive liveness (anti-spoof CNN), pytest test framework | ⏳ to do |
+| Passive anti-spoofing (Silent-Face MiniFASNet, default-on + fail-open if model missing) | ✅ done |
+| pytest test framework | ⏳ to do |
 
 See [§7 Roadmap](#7-roadmap) for the full plan; remaining hardening is in [§9.2](#92-remaining-hardening-5-4) and [§10.5 Uninstall](#105-uninstall-completely-clean-red-line-no-broken-cp).
 
@@ -88,9 +89,10 @@ Windows Hello face doesn't support ordinary webcams — not because the models a
 |-------|--------------|-------|
 | Face detection | InsightFace `det_10g` (buffalo_l) | Same package as recognition, `DET_SIZE=(320,320)` |
 | Feature recognition | **ArcFace `w600k_r50`** (buffalo_l, 512-d) | onnxruntime CPU inference, high accuracy |
-| Liveness | **Active**: blink (EAR) + head turn (solvePnP) random challenge | MediaPipe Tasks `FaceLandmarker`, 468 landmarks |
+| Active liveness | blink (EAR) + head turn (solvePnP) random challenge | MediaPipe Tasks `FaceLandmarker`, 468 landmarks |
+| Passive anti-spoofing | **Silent-Face MiniFASNetV2** (`2.7_80x80`) detects screen/replay | bundles its own RetinaFace crop; default-on, can disable; fail-open if model missing |
 
-A passive anti-spoof CNN (trained on CASIA-SURF / replay) is listed as a **candidate defense-in-depth layer**, currently not enabled (see [§11](#11-lessons-from-a-similar-project-facewinunlock-tauri)).
+Passive anti-spoofing is enabled (toggle in Settings): one MiniFASNet inference on the recognition frame rejects screen/photo/video replays before matching — covering the recorded-video replay that active liveness can't. Two gotchas: (1) MiniFASNet is extremely crop-sensitive, so it must use its companion RetinaFace box (InsightFace's tighter box misjudges); (2) input is BGR in [0,255] (the official ToTensor leaves `/255` commented out).
 
 ---
 
@@ -126,7 +128,8 @@ A passive anti-spoof CNN (trained on CASIA-SURF / replay) is listed as a **candi
 - [x] **Distribution — setup.exe**: portable package + Inno Chinese wizard + clean uninstall + Release automation, shipped as `v0.1.2` (see §10).
 - [ ] **Hardening (5-4)**: pipe ACL limited to SYSTEM, failure fallback / lockout, better logging.
 - [ ] **Pre-release**: code signing (EV cert to clear SmartScreen).
-- [ ] **Optional enhancements**: passive liveness, GPU inference, pytest, further slimming.
+- [x] **Passive anti-spoofing**: Silent-Face MiniFASNet (`2.7_80x80`) + RetinaFace crop, one inference on the recognition frame to detect replays; default-on, can disable, fail-open if model missing.
+- [ ] **Optional enhancements**: GPU inference, pytest, further slimming.
 
 ---
 
