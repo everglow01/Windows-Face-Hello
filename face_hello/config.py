@@ -75,6 +75,10 @@ DEFAULTS = {
     "required_blinks": 2,       # "眨眼"挑战需要的次数
     # 安全
     "renew_days": 90,           # 人脸到期重录天数
+    # 失败锁定(只对真生物特征拒绝计数,基础设施错误不计):连续 N 次后冷却 T 秒,
+    # 期间 auth_start 直接拒并提示走密码;成功或冷却到期清零。N=0 关闭锁定。
+    "lockout_max_fails": 5,
+    "lockout_seconds": 30,
     # 录入
     "enroll_samples": 8,        # 录入采集合格帧数
 }

@@ -19,6 +19,9 @@ class AuthResult:
     reason: str
     name: str | None = None
     similarity: float = 0.0
+    # True = 真生物特征结果(匹配/不匹配/歧义/活体/未见人脸),计入失败锁定;
+    # 基础设施错误(未录入、摄像头不可用、异常)为 False,不计数。
+    biometric: bool = False
 
 
 class AuthSession:
@@ -60,7 +63,7 @@ class AuthSession:
             self._liveness.update(self._tracker.process(frame_bgr))
             if self._liveness.done:
                 if not self._liveness.passed:
-                    self._finish(AuthResult(False, t("liveness_failed", self._lang)))
+                    self._finish(AuthResult(False, t("liveness_failed", self._lang), biometric=True))
                     return
                 self.phase = "recognize"
         if self.phase == "recognize":  # 活体通过 或 活体关闭,都在此识别
@@ -69,7 +72,7 @@ class AuthSession:
     def _recognize(self, frame_bgr) -> None:
         face = self.detector.largest_face(frame_bgr)
         if face is None:
-            self._finish(AuthResult(False, t("no_face", self._lang)))
+            self._finish(AuthResult(False, t("no_face", self._lang), biometric=True))
             return
         names = [p.name for p in self._profiles]
         idx, sim, margin = best_match_with_margin(face.embedding, self._gallery, names)
@@ -77,15 +80,15 @@ class AuthSession:
         min_margin = self.settings.get("match_margin", 0.0)
         if idx < 0 or sim < thr:
             self._finish(
-                AuthResult(False, t("face_mismatch", self._lang, sim=sim, thr=thr), None, sim)
+                AuthResult(False, t("face_mismatch", self._lang, sim=sim, thr=thr), None, sim, biometric=True)
             )
         elif margin < min_margin:
             # 过了阈值但与「另一个人」贴得太近——多账户下宁可拒绝也不解错账户
             self._finish(
-                AuthResult(False, t("ambiguous_match", self._lang, margin=margin, m=min_margin), None, sim)
+                AuthResult(False, t("ambiguous_match", self._lang, margin=margin, m=min_margin), None, sim, biometric=True)
             )
         else:
-            self._finish(AuthResult(True, t("auth_pass", self._lang), names[idx], sim))
+            self._finish(AuthResult(True, t("auth_pass", self._lang), names[idx], sim, biometric=True))
 
     def _finish(self, result: AuthResult) -> None:
         self.result = result
@@ -99,22 +102,29 @@ class AuthSession:
             self._tracker = None
 
 
-def authenticate_blocking(detector: FaceDetector, store: FaceStore, on_instruction=None) -> AuthResult:
+def authenticate_blocking(
+    detector: FaceDetector, store: FaceStore, on_instruction=None, camera_timeout_s: float = 8.0
+) -> AuthResult:
     """无界面认证:开摄像头跑完整 liveness→识别,返回结果。
 
     供认证服务调用(无 Qt)。liveness 自带超时,循环必然结束。
     on_instruction(text):活体提示变化时回调(服务端可打印,供测试者照做)。
+    camera_timeout_s:锁屏路径用短超时,摄像头缺失/被占时快速回退到密码,而非干等 30s。
     """
     from .camera import Camera
 
     session = AuthSession(detector, store)
     last = None
-    with Camera() as cam:
+    cam = Camera()
+    cam.open(timeout_s=camera_timeout_s)
+    try:
         while not session.done:
             session.feed(cam.read())
             if on_instruction is not None and session.instruction != last:
                 last = session.instruction
                 on_instruction(session.instruction)
+    finally:
+        cam.release()
     if session.result is not None:
         return session.result
     return AuthResult(False, t("incomplete", session._lang))

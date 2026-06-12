@@ -14,6 +14,7 @@ package=false、face_hello 没装进 venv)。本模块只定义服务类。
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 
@@ -21,7 +22,7 @@ import win32service
 import win32serviceutil
 
 from . import config
-from .service import serve
+from .service import serve, setup_logging
 
 
 class FaceHelloService(win32serviceutil.ServiceFramework):
@@ -51,16 +52,12 @@ class FaceHelloService(win32serviceutil.ServiceFramework):
         # 固定到可写缓存目录 + 非交互后端绕开它;须在其被导入前设好(serve 里才会触发导入)。
         os.environ.setdefault("MPLBACKEND", "Agg")
         os.environ.setdefault("MPLCONFIGDIR", str(config.DATA_DIR / "mpl"))
-        # 服务无控制台,把 stdout/stderr 落到 data/service.log 便于排错
-        log = open(config.DATA_DIR / "service.log", "a", encoding="utf-8", buffering=1)
-        sys.stdout = sys.stderr = log
+        # 服务无控制台:结构化日志落 data/service.log(滚动),并把 stdout/stderr 转进 logger。
+        setup_logging(console=False, capture_streams=True)
         try:
             serve(should_continue=lambda: self._running)
         except BaseException:  # noqa: BLE001 把真 traceback 落盘(pywin32 抓不到)
-            import traceback
-
-            traceback.print_exc(file=log)
-            log.flush()
+            logging.getLogger("facehello").exception("服务异常退出")
             raise
 
 

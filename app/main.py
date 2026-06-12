@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -215,11 +216,10 @@ def _show_frame(label: QLabel, img: QImage) -> None:
 
 
 class EnrollTab(QWidget):
-    def __init__(self, detector: FaceDetector, store: FaceStore, on_changed):
+    def __init__(self, detector: FaceDetector, store: FaceStore):
         super().__init__()
         self.detector = detector
         self.store = store
-        self.on_changed = on_changed
         self.worker: EnrollWorker | None = None
 
         self.name_edit = QLineEdit()
@@ -233,10 +233,27 @@ class EnrollTab(QWidget):
         self.status = QLabel(tr("enroll_hint"))
         self.status.setObjectName("hint")
 
+        # 已录入用户管理(原在「设置与安全」页,挪到此处:录入与管理同处一页)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(
+            [tr("col_user"), tr("col_enroll_date"), tr("col_days_left"), tr("col_status")]
+        )
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setMaximumHeight(160)  # 约 3 行高度封顶,超出滚动,不顶坏布局
+        self.del_btn = QPushButton(tr("delete_selected"))
+        self.del_btn.clicked.connect(self._delete_selected)
+        users_title = QLabel(tr("enrolled_users"))
+        users_title.setObjectName("h2")
+
         top = QHBoxLayout()
         top.addWidget(QLabel(tr("username_label")))
         top.addWidget(self.name_edit, 1)
         top.addWidget(self.start_btn)
+
+        del_row = QHBoxLayout()
+        del_row.addWidget(self.del_btn)
+        del_row.addStretch(1)  # 按钮不再整行宽
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -244,6 +261,12 @@ class EnrollTab(QWidget):
         layout.addLayout(top)
         layout.addWidget(self.preview, alignment=Qt.AlignCenter)
         layout.addWidget(self.status)
+        layout.addSpacing(8)
+        layout.addWidget(users_title)
+        layout.addWidget(self.table)
+        layout.addLayout(del_row)
+
+        self.refresh()
 
     def _start(self) -> None:
         name = self.name_edit.text().strip()
@@ -269,12 +292,31 @@ class EnrollTab(QWidget):
         self.store.save()
         self.status.setText(tr("enrolled_ok", name=name))
         self.start_btn.setEnabled(True)
-        self.on_changed()
+        self.refresh()  # 录入完即时刷新本页用户表
         QMessageBox.information(self, tr("done_title"), tr("enroll_success", name=name))
 
     def _on_fail(self, msg: str) -> None:
         self.status.setText(tr("failed_fmt", msg=msg))
         self.start_btn.setEnabled(True)
+
+    def refresh(self) -> None:
+        profiles = self.store.list_profiles()
+        self.table.setRowCount(len(profiles))
+        for r, p in enumerate(profiles):
+            status = tr("expired_mark") if p.is_expired else tr("normal_status")
+            cells = [p.name, p.enroll_date.isoformat(), str(p.days_left), status]
+            for c, text in enumerate(cells):
+                self.table.setItem(r, c, QTableWidgetItem(text))
+
+    def _delete_selected(self) -> None:
+        row = self.table.currentRow()
+        if row < 0:
+            return
+        name = self.table.item(row, 0).text()
+        if QMessageBox.question(self, tr("confirm_title"), tr("delete_user_q", name=name)) == QMessageBox.Yes:
+            self.store.remove_profile(name)
+            self.store.save()
+            self.refresh()
 
 
 class AuthTab(QWidget):
@@ -332,22 +374,7 @@ class SettingsTab(QWidget):
         super().__init__()
         self.store = store
 
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(
-            [tr("col_user"), tr("col_enroll_date"), tr("col_days_left"), tr("col_status")]
-        )
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-
-        self.del_btn = QPushButton(tr("delete_selected"))
-        self.del_btn.clicked.connect(self._delete_selected)
-
         s = self.store.get_settings()
-        # 界面语言下拉:userData 存语言码,显示名固定中英两种(与当前界面语言无关)
-        self.lang_combo = QComboBox()
-        self.lang_combo.addItem("中文", "zh")
-        self.lang_combo.addItem("English", "en")
-        self.lang_combo.setCurrentIndex(0 if s.get("language", "zh") != "en" else 1)
         self.match_spin = self._dspin(0.0, 1.0, 0.01, s["match_threshold"])
         self.margin_spin = self._dspin(0.0, 0.5, 0.01, s.get("match_margin", 0.05))
         self.yaw_spin = self._dspin(5.0, 45.0, 1.0, s["yaw_threshold_deg"])
@@ -360,6 +387,16 @@ class SettingsTab(QWidget):
         self.samples_spin = QSpinBox()
         self.samples_spin.setRange(3, 30)
         self.samples_spin.setValue(s["enroll_samples"])
+        self.lockout_fails_spin = QSpinBox()
+        self.lockout_fails_spin.setRange(0, 20)
+        self.lockout_fails_spin.setValue(s.get("lockout_max_fails", 5))
+        self.lockout_secs_spin = QSpinBox()
+        self.lockout_secs_spin.setRange(0, 600)
+        self.lockout_secs_spin.setValue(s.get("lockout_seconds", 30))
+        for sp in (self.match_spin, self.margin_spin, self.yaw_spin, self.blink_spin,
+                   self.renew_spin, self.samples_spin, self.lockout_fails_spin,
+                   self.lockout_secs_spin):
+            sp.setFixedWidth(100)  # 窄而对齐,消除右侧大留白
         self.liveness_check = QCheckBox(tr("liveness_check"))
         self.liveness_check.setChecked(s["liveness_enabled"])
 
@@ -367,33 +404,49 @@ class SettingsTab(QWidget):
         save_btn.setObjectName("accent")
         save_btn.clicked.connect(self._save)
 
-        form = QVBoxLayout()
-        form.addLayout(self._row(tr("language_label"), self.lang_combo))
-        form.addWidget(self.liveness_check)
-        form.addLayout(self._row(tr("match_threshold_label"), self.match_spin))
-        form.addLayout(self._row(tr("match_margin_label"), self.margin_spin))
-        form.addLayout(self._row(tr("yaw_label"), self.yaw_spin))
-        form.addLayout(self._row(tr("blink_count_label"), self.blink_spin))
-        form.addLayout(self._row(tr("renew_label"), self.renew_spin))
-        form.addLayout(self._row(tr("samples_label"), self.samples_spin))
-
-        users_title = QLabel(tr("enrolled_users"))
-        users_title.setObjectName("h2")
         params_title = QLabel(tr("params_security"))
         params_title.setObjectName("h2")
+
+        # 两列网格:每组一个小标题横跨整行,组内左右各一对「标签 + 控件」
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(8)
+        grid.setColumnStretch(4, 1)  # 末列吃掉富余宽度,内容靠左不散开
+        r = 0
+        grid.addWidget(self.liveness_check, r, 0, 1, 4)
+        r += 1
+
+        def group(title_key: str) -> None:
+            nonlocal r
+            h = QLabel(tr(title_key))
+            h.setStyleSheet("color:#666;font-weight:600;margin-top:6px;")
+            grid.addWidget(h, r, 0, 1, 4)
+            r += 1
+
+        def pair(l1: str, w1, l2: str, w2) -> None:
+            nonlocal r
+            grid.addWidget(QLabel(tr(l1)), r, 0)
+            grid.addWidget(w1, r, 1)
+            grid.addWidget(QLabel(tr(l2)), r, 2)
+            grid.addWidget(w2, r, 3)
+            r += 1
+
+        group("grp_recognition")
+        pair("match_threshold_label", self.match_spin, "match_margin_label", self.margin_spin)
+        group("grp_liveness")
+        pair("yaw_label", self.yaw_spin, "blink_count_label", self.blink_spin)
+        group("grp_lockout")
+        pair("lockout_fails_label", self.lockout_fails_spin, "lockout_secs_label", self.lockout_secs_spin)
+        group("grp_enroll")
+        pair("renew_label", self.renew_spin, "samples_label", self.samples_spin)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(10)
-        layout.addWidget(users_title)
-        layout.addWidget(self.table)
-        layout.addWidget(self.del_btn)
-        layout.addSpacing(12)
         layout.addWidget(params_title)
-        layout.addLayout(form)
+        layout.addLayout(grid)
+        layout.addStretch(1)
         layout.addWidget(save_btn)
-
-        self.refresh()
 
     @staticmethod
     def _dspin(lo, hi, step, val) -> QDoubleSpinBox:
@@ -403,37 +456,8 @@ class SettingsTab(QWidget):
         sp.setValue(val)
         return sp
 
-    @staticmethod
-    def _row(label, widget) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(QLabel(label))
-        row.addStretch(1)
-        row.addWidget(widget)
-        return row
-
-    def refresh(self) -> None:
-        profiles = self.store.list_profiles()
-        self.table.setRowCount(len(profiles))
-        for r, p in enumerate(profiles):
-            status = tr("expired_mark") if p.is_expired else tr("normal_status")
-            cells = [p.name, p.enroll_date.isoformat(), str(p.days_left), status]
-            for c, text in enumerate(cells):
-                self.table.setItem(r, c, QTableWidgetItem(text))
-
-    def _delete_selected(self) -> None:
-        row = self.table.currentRow()
-        if row < 0:
-            return
-        name = self.table.item(row, 0).text()
-        if QMessageBox.question(self, tr("confirm_title"), tr("delete_user_q", name=name)) == QMessageBox.Yes:
-            self.store.remove_profile(name)
-            self.store.save()
-            self.refresh()
-
     def _save(self) -> None:
-        lang = self.lang_combo.currentData()
         self.store.update_settings(
-            language=lang,
             liveness_enabled=self.liveness_check.isChecked(),
             match_threshold=self.match_spin.value(),
             match_margin=self.margin_spin.value(),
@@ -441,10 +465,10 @@ class SettingsTab(QWidget):
             required_blinks=self.blink_spin.value(),
             renew_days=self.renew_spin.value(),
             enroll_samples=self.samples_spin.value(),
+            lockout_max_fails=self.lockout_fails_spin.value(),
+            lockout_seconds=self.lockout_secs_spin.value(),
         )
         self.store.save()
-        # 写明文镜像,锁屏磁贴(C++ CP,SYSTEM)据此切换语言;尽力而为,失败不阻断保存
-        save_lang_mirror(lang)
         QMessageBox.information(self, tr("saved_title"), tr("settings_saved"))
 
 
@@ -642,14 +666,30 @@ class MainWindow(QWidget):
         self.setWindowTitle(tr("app_title"))
 
         tabs = QTabWidget()
-        self.settings_tab = SettingsTab(self.store)
-        self.enroll_tab = EnrollTab(self.detector, self.store, self.settings_tab.refresh)
+        self.enroll_tab = EnrollTab(self.detector, self.store)
         self.auth_tab = AuthTab(self.detector, self.store)
         self.service_tab = ServiceTab()
+        self.settings_tab = SettingsTab(self.store)
         tabs.addTab(self.enroll_tab, tr("tab_enroll"))
         tabs.addTab(self.auth_tab, tr("tab_test"))
         tabs.addTab(self.service_tab, tr("tab_service"))
         tabs.addTab(self.settings_tab, tr("tab_settings"))
+
+        # 全局语言选择器:常驻标签栏右上角,任何 tab 下都可见——看不懂中文的人也能一眼找到。
+        # 切换写设置 + 明文镜像,重启后整体生效(同设计:语言重启生效)。
+        lang_box = QWidget()
+        lang_row = QHBoxLayout(lang_box)
+        lang_row.setContentsMargins(0, 0, 8, 0)
+        lang_row.setSpacing(4)
+        self.lang_combo = QComboBox()
+        self.lang_combo.addItem("中文", "zh")
+        self.lang_combo.addItem("English", "en")
+        self.lang_combo.setCurrentIndex(0 if self.store.get_settings().get("language", "zh") != "en" else 1)
+        self.lang_combo.setToolTip("重启后生效 / Takes effect after restart")
+        self.lang_combo.currentIndexChanged.connect(self._on_lang_changed)  # 连在 setCurrentIndex 之后,避免启动误触
+        lang_row.addWidget(QLabel("🌐"))
+        lang_row.addWidget(self.lang_combo)
+        tabs.setCornerWidget(lang_box, Qt.TopRightCorner)
 
         self.status_label = QLabel(tr("model_loading"))
         self.status_label.setStyleSheet(f"color:{WARN};padding:2px 4px;")
@@ -666,6 +706,17 @@ class MainWindow(QWidget):
         self._warmup.start()
 
         self._warn_expired()
+
+    def _on_lang_changed(self) -> None:
+        lang = self.lang_combo.currentData()
+        self.store.update_settings(language=lang)
+        self.store.save()
+        save_lang_mirror(lang)  # 锁屏磁贴(C++ CP)据此切换;尽力而为
+        # 双语提示:切换后当前进程仍是旧语言,故消息固定双语,两种用户都读得懂
+        QMessageBox.information(
+            self, "Language / 语言",
+            "已切换,重启控制台后整体生效。\nSwitched. Restart the console to apply.",
+        )
 
     def _on_ready(self) -> None:
         self.status_label.setText(tr("model_ready"))
