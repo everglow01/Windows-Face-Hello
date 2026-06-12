@@ -9,7 +9,11 @@ __pycache__/
 data/
 
 # 模型权重(首次运行自动下载,体积大,勿入库)
-models/
+models/*
+# 例外:反欺骗模型小(~3.6MB)且无公开下载源,入库随安装包打包分发(CI build_release 直接拷 models/)
+!models/antispoof.onnx
+!models/antispoof_detector.prototxt
+!models/antispoof_detector.caffemodel
 
 # Inno Setup 打包产物(setup.exe ~300MB,走 GitHub Release 分发,勿入库)
 installer/Output/
