@@ -52,6 +52,14 @@ class WarmupWorker(QThread):
             tracker.close()
         except Exception:  # noqa: BLE001
             pass
+        try:
+            from face_hello.antispoof import get_antispoof
+
+            m = get_antispoof()  # 模型缺失返回 None(fail-open),不报错
+            if m is not None:
+                m.load()
+        except Exception:  # noqa: BLE001
+            pass
         self.ready.emit()
 
 

@@ -34,6 +34,9 @@ class AuthSession:
         self._gallery = store.embeddings()
         self._profiles = store.list_profiles()
         self.result: AuthResult | None = None
+        # 被动反欺骗(独立于主动活体;关了活体也照样守门)。模型懒加载在 _recognize。
+        self._antispoof_on = self.settings.get("antispoof_enabled", True)
+        self._antispoof_thr = self.settings.get("antispoof_threshold", 0.55)
         # 活体可关:关掉则不建 tracker,直接进识别阶段
         if self.settings.get("liveness_enabled", True):
             self._tracker = FaceMeshTracker()
@@ -74,6 +77,21 @@ class AuthSession:
         if face is None:
             self._finish(AuthResult(False, t("no_face", self._lang), biometric=True))
             return
+        # 反欺骗门:翻拍/假体在比对前就拒掉。模型不可用 / 推理异常一律 fail-open(跳过)。
+        if self._antispoof_on:
+            from .antispoof import get_antispoof
+
+            model = get_antispoof()
+            if model is not None:
+                try:
+                    real = model.score(frame_bgr)  # 自带 RetinaFace 检测+裁剪
+                except Exception:  # noqa: BLE001 运行时异常也 fail-open
+                    real = None
+                if real is not None and real < self._antispoof_thr:
+                    self._finish(
+                        AuthResult(False, t("spoof_detected", self._lang, p=real), None, biometric=True)
+                    )
+                    return
         names = [p.name for p in self._profiles]
         idx, sim, margin = best_match_with_margin(face.embedding, self._gallery, names)
         thr = self.settings["match_threshold"]

@@ -61,6 +61,27 @@ def check_detector() -> None:
     print("[ok] InsightFace 模型加载 + 检测(空白图 0 张脸)")
 
 
+def check_antispoof() -> None:
+    from face_hello import config
+    from face_hello.antispoof import get_antispoof
+
+    files_ready = (
+        config.ANTISPOOF_MODEL.exists()
+        and config.ANTISPOOF_DET_PROTO.exists()
+        and config.ANTISPOOF_DET_MODEL.exists()
+    )
+    m = get_antispoof()
+    if files_ready:
+        # 三件套齐:应加载成功;空白帧无脸 → score 返回 None(不抛)
+        assert m is not None
+        assert m.score(np.zeros((480, 640, 3), dtype=np.uint8)) is None
+        print("[ok] 反欺骗模型加载(检测器+分类器);空白帧无脸返回 None")
+    else:
+        # 文件不全:必须 fail-open 返回 None,不抛
+        assert m is None
+        print("[ok] 反欺骗 fail-open(文件不全返回 None,不报错)")
+
+
 def main() -> None:
     import tempfile
     from pathlib import Path
@@ -70,6 +91,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as d:
         check_store(Path(d) / "faces.dat")
     check_detector()
+    check_antispoof()
     print("\n[PASS] 全部离线自检通过")
 
 

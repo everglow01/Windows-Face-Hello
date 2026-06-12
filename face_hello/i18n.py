@@ -20,6 +20,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         # --- 核心:认证编排(auth.py)---
         "recognizing": "识别中…",
         "liveness_failed": "活体检测失败(超时或未完成动作)",
+        "spoof_detected": "检测到翻拍/假体(real={p:.2f}),已拒绝",
         "no_face": "未检测到人脸",
         "auth_pass": "认证通过",
         "face_mismatch": "人脸不匹配(相似度 {sim:.3f} < {thr:.2f})",
@@ -65,6 +66,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         "col_status": "状态",
         "delete_selected": "删除选中用户",
         "liveness_check": "启用活体检测(关闭=直接识别,牺牲防照片能力)",
+        "antispoof_check": "启用被动反欺骗(防屏幕翻拍/视频回放)",
         "save_settings": "保存设置",
         "language_label": "界面语言(重启后生效):",
         "match_threshold_label": "匹配阈值(越高越严):",
@@ -150,6 +152,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         # --- core: auth orchestration ---
         "recognizing": "Recognizing…",
         "liveness_failed": "Liveness check failed (timed out or action not completed)",
+        "spoof_detected": "Spoof detected (real={p:.2f}), rejected",
         "no_face": "No face detected",
         "auth_pass": "Authenticated",
         "face_mismatch": "Face doesn't match (similarity {sim:.3f} < {thr:.2f})",
@@ -195,6 +198,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         "col_status": "Status",
         "delete_selected": "Delete selected user",
         "liveness_check": "Enable liveness (off = recognize directly, weaker photo resistance)",
+        "antispoof_check": "Enable passive anti-spoofing (screen/replay)",
         "save_settings": "Save settings",
         "language_label": "Language (applies after restart):",
         "match_threshold_label": "Match threshold (higher = stricter):",

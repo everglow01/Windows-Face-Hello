@@ -410,6 +410,8 @@ class SettingsTab(QWidget):
         self._cam_test: CameraTestWorker | None = None
         self.liveness_check = QCheckBox(tr("liveness_check"))
         self.liveness_check.setChecked(s["liveness_enabled"])
+        self.antispoof_check = QCheckBox(tr("antispoof_check"))
+        self.antispoof_check.setChecked(s.get("antispoof_enabled", True))
 
         save_btn = QPushButton(tr("save_settings"))
         save_btn.setObjectName("accent")
@@ -425,6 +427,8 @@ class SettingsTab(QWidget):
         grid.setColumnStretch(4, 1)  # 末列吃掉富余宽度,内容靠左不散开
         r = 0
         grid.addWidget(self.liveness_check, r, 0, 1, 4)
+        r += 1
+        grid.addWidget(self.antispoof_check, r, 0, 1, 4)
         r += 1
 
         def group(title_key: str) -> None:
@@ -482,6 +486,7 @@ class SettingsTab(QWidget):
     def _save(self) -> None:
         self.store.update_settings(
             liveness_enabled=self.liveness_check.isChecked(),
+            antispoof_enabled=self.antispoof_check.isChecked(),
             match_threshold=self.match_spin.value(),
             match_margin=self.margin_spin.value(),
             yaw_threshold_deg=self.yaw_spin.value(),

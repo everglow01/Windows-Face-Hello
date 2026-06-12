@@ -56,6 +56,18 @@ FACE_LANDMARKER_URL = (
     "face_landmarker/float16/1/face_landmarker.task"
 )
 
+# 被动反欺骗(Silent-Face MiniFASNet 2.7_80x80)。三个文件:分类 onnx + RetinaFace 检测器
+# (prototxt + caffemodel)。MiniFASNet 对裁剪框极敏感,必须用配套的 RetinaFace 框,
+# 不能用 InsightFace 的框(实测会判错),故单独带这个检测器。
+# 任一文件缺失/加载失败 → 认证侧 fail-open(跳过反欺骗,照常解锁,见 antispoof.py)。
+# URL 留空则不自动下载;自备文件放 models/ 或托管到 Release 后填直链。
+ANTISPOOF_MODEL = MODELS_DIR / "antispoof.onnx"
+ANTISPOOF_MODEL_URL = ""
+ANTISPOOF_DET_PROTO = MODELS_DIR / "antispoof_detector.prototxt"
+ANTISPOOF_DET_MODEL = MODELS_DIR / "antispoof_detector.caffemodel"
+ANTISPOOF_DET_PROTO_URL = ""
+ANTISPOOF_DET_MODEL_URL = ""
+
 # 默认设置(可被 store 中持久化的 settings 覆盖)
 DEFAULTS = {
     # 界面语言:"zh" / "en"。控制台、活体提示、锁屏磁贴共用同一值(见 i18n.py)。
@@ -83,6 +95,11 @@ DEFAULTS = {
     "enroll_samples": 8,        # 录入采集合格帧数
     # 摄像头索引(0=默认/第一个)。多摄像头(内置+USB+虚拟)时改这里;控制台「测试」按钮可预览确认。
     "camera_index": 0,
+    # 被动反欺骗(RGB 活体):识别帧上跑一次 MiniFASNet 判屏幕翻拍/视频回放。
+    # 模型缺失/加载失败则 fail-open(跳过,照常解锁)。默认开,安全优先。
+    "antispoof_enabled": True,
+    # real 概率阈值,低于判翻拍而拒绝(可被 settings 覆盖;UI 暂不暴露,留作后续标定)。
+    "antispoof_threshold": 0.55,
 }
 
 

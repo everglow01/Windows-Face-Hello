@@ -217,6 +217,18 @@ def _warm_liveness() -> None:
         pass
 
 
+def _warm_antispoof() -> None:
+    """预热反欺骗模型,首次认证不卡。模型缺失走 fail-open,静默忽略。"""
+    try:
+        from .antispoof import get_antispoof
+
+        m = get_antispoof()
+        if m is not None:
+            m.load()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _handle(req: dict, detector: FaceDetector, store: FaceStore) -> dict:
     cmd = req.get("cmd")
     if cmd == "ping":
@@ -287,6 +299,7 @@ def serve(should_continue=None) -> None:
     detector = FaceDetector()
     detector.load()
     _warm_liveness()
+    _warm_antispoof()
     store = FaceStore().load()
     # 以 SYSTEM 身份把语言镜像同步成 settings 的值,保证重启后锁屏磁贴语言与控制台一致
     # (控制台非管理员时可能写不进 ProgramData,这里兜底)。
