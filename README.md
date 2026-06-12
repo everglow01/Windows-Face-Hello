@@ -1,14 +1,28 @@
-# Face_hello
+<div align="center">
 
-A project that lets an **ordinary RGB webcam** do face unlock for Windows — aimed at laptops, desktop front cameras, and USB cameras that Windows Hello doesn't support.
+# 👋 Face_hello
 
-Inspired by a Surface Pro 4 the author once owned~
+### Face unlock for Windows — with any ordinary RGB webcam
 
-> [中文](./README_zh.md) ｜ Design & technical decisions: [DESIGN.md](./DESIGN.md)
+*Bringing Windows Hello-style face unlock to laptops, desktop front cameras, and USB cameras that Windows Hello doesn't support.*
+
+*Inspired by a Surface Pro 4 the author once owned~*
+
+<br>
+
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org)
+[![License](https://img.shields.io/badge/License-Apache%202.0-D22128?logo=apache&logoColor=white)](./LICENSE)
+[![Recognition](https://img.shields.io/badge/Recognition-InsightFace%20ArcFace-FF6F00)](https://github.com/deepinsight/insightface)
+[![Liveness](https://img.shields.io/badge/Liveness-MediaPipe-00BFA5?logo=google&logoColor=white)](https://developers.google.com/mediapipe)
+
+**[🇨🇳 中文](./README_zh.md)**　｜　**[📐 Design & Decisions](./DESIGN.md)**
+
+</div>
 
 ---
 
-## Safety Notice (read before use)
+## ⚠️ Safety Notice (read before use)
 
 - This project is only meant for **Windows 10 / 11**; using it on any other OS is not recommended.
 - It touches system-affecting operations like modifying Windows services. The author has added plenty of safeguards and validated it on real hardware, but there's still a chance of serious system problems like **being unable to sign in, a service crash, or a BSOD**. The odds are very small, but be aware.
@@ -17,7 +31,7 @@ Inspired by a Surface Pro 4 the author once owned~
 
 ---
 
-## Requirements
+## 📋 Requirements
 
 - **Windows 10 / 11 (x64)**
 - A working **RGB webcam**
@@ -26,7 +40,7 @@ Inspired by a Surface Pro 4 the author once owned~
 
 ---
 
-## Install & Use (recommended: the one-click installer)
+## 🚀 Install & Use (recommended: the one-click installer)
 
 Regular users don't need Python / uv — just grab the installer from the Release page:
 
@@ -40,7 +54,7 @@ Regular users don't need Python / uv — just grab the installer from the Releas
 
 ---
 
-## Dev Environment
+## 🛠️ Dev Environment
 
 If you want to run the console and service from source, or contribute:
 
@@ -62,7 +76,7 @@ For detailed developer docs and a contribution guide, see [contribute.md](./cont
 
 ---
 
-## Using the Console
+## 🖥️ Using the Console
 
 Launch the installed app with admin privileges to enter the console desktop app:
 
@@ -87,7 +101,7 @@ uv run python -m scripts.liveness_tune
 
 ---
 
-## How Lock-screen Unlock Works
+## 🔓 How Lock-screen Unlock Works
 
 Full unlock chain: lock-screen "Face Unlock" tile → (named pipe) → LocalSystem service → InsightFace recognition → read the password saved in the LSA → pack a Kerberos credential to actually unlock. Both local accounts and Microsoft accounts (MSA local login) are verified end-to-end. **Fully validated and working on the author's physical machine.**
 
@@ -113,7 +127,7 @@ MSBuild.exe cp\FaceHelloCP.sln /p:Configuration=Release /p:Platform=x64
 
 ---
 
-## How It Works (in brief)
+## ⚙️ How It Works (in brief)
 
 ```
 Camera (OpenCV) → Liveness (MediaPipe FaceLandmarker: EAR blink + solvePnP head turn)
@@ -126,7 +140,7 @@ Camera (OpenCV) → Liveness (MediaPipe FaceLandmarker: EAR blink + solvePnP hea
 
 ---
 
-## Custom Lock-screen Avatar
+## 🖼️ Custom Lock-screen Avatar
 
 You can drop your own avatar image into the default path `C:\ProgramData\FaceHello`. The program takes the **first** image in that directory, scales and crops it to a square, and places it on the lock-screen tile; newer Windows displays it as a circle automatically.
 
@@ -136,7 +150,7 @@ You can drop your own avatar image into the default path `C:\ProgramData\FaceHel
 
 ![avatar](README_image/touxiang.png)
 
-## Security & Privacy
+## 🔐 Security & Privacy
 
 - The gallery stores **feature vectors, not photos**, encrypted on disk with Windows DPAPI in the local `data/`, uploaded to no cloud server, keeping your face data private and secure.
 - The sign-in password is kept in an **LSA Secret**, read by the Credential Provider itself in the SYSTEM context — it **never travels over IPC**.
@@ -145,7 +159,7 @@ You can drop your own avatar image into the default path `C:\ProgramData\FaceHel
 
 ---
 
-## Project Layout
+## 📂 Project Layout
 
 ```
 face_hello/        core library (no Qt dependency)
@@ -168,7 +182,7 @@ models/            model weights (gitignored)
 
 ---
 
-## Known Limitations
+## 🚧 Known Limitations
 
 - Anti-spoofing is limited by the monocular RGB camera (see the Security notice above); it may be bypassed by a determined attacker through illicit means. Again: do not use this on a computer holding sensitive data.
 - The first cold start loads the ~191 MB recognition model from disk, taking a few seconds (about 2s on a modern CPU); after sleep the camera needs a couple of seconds to re-enumerate (retries are built in).
@@ -177,7 +191,7 @@ models/            model weights (gitignored)
 
 ---
 
-## FAQ
+## ❓ FAQ
 
 **Q: In the console app the camera opens and recognizes faces accurately — why does the camera often fail to open after the PC locks or cold-boots, making Face Hello unusable?**      
 
@@ -195,7 +209,7 @@ A: This is indeed a current bug. We've fixed and optimized the slow-start / some
 
 A: This is normal. Windows updates typically refresh Windows services, which may cause the Face Hello service to hang. After unlocking the system with your password, the service will resume the next time you lock the screen. You don't need to run the service again in the console.
 
-## TODO
+## 📝 TODO
 
 1. Optimize startup speed, model-loading speed, service-startup speed (OpenCV DNN)
 2. Polish or refactor the PySide6 frontend
@@ -203,6 +217,6 @@ A: This is normal. Windows updates typically refresh Windows services, which may
 4. Detailed usage docs (?)
 5. GPU inference support
 
-## License
+## 📄 License
 
 Apache-2.0 (see LICENSE); due to the bundled InsightFace model being limited to non-commercial use, this distribution is for non-commercial purposes only. See THIRD_PARTY_LICENSES.md for details.
