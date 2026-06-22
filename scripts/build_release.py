@@ -125,9 +125,10 @@ def step_copy_payload() -> None:
     if not models.exists():
         raise SystemExit("models/ 不存在,请先在开发态跑一次 offline_check 下载模型")
     # 排除 insightface 下载后残留的 buffalo_l.zip(~281MB):它是解压前的原始包,运行时
-    # 只用解压出的 .onnx,带上它白白让安装包大一倍(CI 全新下载才有,本地早删了)
+    # 只用解压出的 .onnx,带上它白白让安装包大一倍(CI 全新下载才有,本地早删了)。
+    # 也排除 *.fp32.bak(quantize_model.py 量化前留的 fp32 原件,~166MB,仅供本地回退,绝不入包)。
     shutil.copytree(models, BUILD / "models", dirs_exist_ok=True,
-                    ignore=shutil.ignore_patterns("*.zip"))
+                    ignore=shutil.ignore_patterns("*.zip", "*.bak"))
 
     dll = ROOT / "cp" / "x64" / "Release" / "FaceHelloCP.dll"
     if not dll.exists():

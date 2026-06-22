@@ -41,7 +41,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: models                  # 与 ci.yml 共享同一缓存(换模型时一起 bump v1)
-          key: models-${{ runner.os }}-v1
+          key: models-${{ runner.os }}-v2
           restore-keys: |
             models-${{ runner.os }}-
 
@@ -64,6 +64,13 @@ jobs:
           }
           # insightface 解压后残留的原始包(~281MB),删掉避免 models 缓存膨胀
           if (Test-Path "models/buffalo_l.zip") { Remove-Item "models/buffalo_l.zip" -Force; Write-Host "pruned buffalo_l.zip" }
+
+      - name: Quantize recognition model to FP16 (shrink cold-boot read 174MB->~87MB)
+        env:
+          PYTHONPATH: ${{ github.workspace }}   # 与 offline_check 同:把仓库根加进 sys.path
+        # onnxconverter-common 仅转换时需要,用 --with 临时装,不进运行时/分发依赖。
+        # 脚本幂等:已是 fp16 则跳过(缓存复跑安全)。
+        run: uv run --with onnxconverter-common python scripts/quantize_model.py
 
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2          # 让 build_release 内部能调到 msbuild 编 DLL

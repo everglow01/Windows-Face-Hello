@@ -129,13 +129,20 @@ def authenticate_blocking(
     on_instruction(text):活体提示变化时回调(服务端可打印,供测试者照做)。
     camera_timeout_s:锁屏路径用短超时,摄像头缺失/被占时快速回退到密码,而非干等 30s。
     """
+    import logging
+    import time
+
     from .camera import Camera
 
+    log = logging.getLogger("facehello")
     session = AuthSession(detector, store)
     last = None
     idx = int(store.get_settings().get("camera_index", 0))
     cam = Camera(idx)
+    _t0 = time.perf_counter()
     cam.open(timeout_s=camera_timeout_s)
+    _t_cam = time.perf_counter()
+    log.info("[计时] 解锁:摄像头打开 %.2fs", _t_cam - _t0)
     try:
         while not session.done:
             session.feed(cam.read())
@@ -144,6 +151,10 @@ def authenticate_blocking(
                 on_instruction(session.instruction)
     finally:
         cam.release()
+    log.info(
+        "[计时] 解锁:总 %.2fs(摄像头打开 %.2fs + 活体&识别 %.2fs)",
+        time.perf_counter() - _t0, _t_cam - _t0, time.perf_counter() - _t_cam,
+    )
     if session.result is not None:
         return session.result
     return AuthResult(False, t("incomplete", session._lang))

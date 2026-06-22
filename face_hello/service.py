@@ -296,10 +296,18 @@ def serve(should_continue=None) -> None:
     if should_continue is None:
         should_continue = lambda: True  # noqa: E731
     _log.info("FaceHello 服务:加载模型中…")
+    _t = time.perf_counter()
     detector = FaceDetector()
     detector.load()
+    _t_det = time.perf_counter()
     _warm_liveness()
+    _t_liv = time.perf_counter()
     _warm_antispoof()
+    _t_anti = time.perf_counter()
+    _log.info(
+        "[计时] 预热合计 %.2fs(detector %.2fs / 活体 %.2fs / 反欺骗 %.2fs)",
+        _t_anti - _t, _t_det - _t, _t_liv - _t_det, _t_anti - _t_liv,
+    )
     store = FaceStore().load()
     # 以 SYSTEM 身份把语言镜像同步成 settings 的值,保证重启后锁屏磁贴语言与控制台一致
     # (控制台非管理员时可能写不进 ProgramData,这里兜底)。

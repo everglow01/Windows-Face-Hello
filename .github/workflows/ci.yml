@@ -35,8 +35,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: models                  # InsightFace(buffalo_l)+ MediaPipe(face_landmarker.task)都下到这
-          # 模型版本固定;换模型(config 的 INSIGHTFACE_MODEL / FACE_LANDMARKER_URL)时把 v1 手动 bump 成 v2
-          key: models-${{ runner.os }}-v1
+          # 模型版本固定;换模型(config 的 INSIGHTFACE_MODEL / FACE_LANDMARKER_URL,或 release 改 FP16 量化)时手动 bump
+          key: models-${{ runner.os }}-v2
           restore-keys: |
             models-${{ runner.os }}-
 

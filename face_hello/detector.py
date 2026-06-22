@@ -53,11 +53,19 @@ class FaceDetector:
 
         只 prepare 不推理的话,解锁时第一次 get() 要付 onnxruntime 冷启动代价。
         """
-        app = self._ensure_loaded()
+        import logging
+        import time
+
+        log = logging.getLogger("facehello")
+        t0 = time.perf_counter()
+        app = self._ensure_loaded()  # 读模型 + 建 onnxruntime 会话(191MB 冷读疑似大头)
+        t1 = time.perf_counter()
+        log.info("[计时] detector 读模型+建会话 %.2fs", t1 - t0)
         try:
             app.get(_sample_face_image())  # 带人脸的样例图,预热检测+识别两条链路
         except Exception:  # noqa: BLE001 预热失败不致命
             pass
+        log.info("[计时] detector 样例推理预热 %.2fs", time.perf_counter() - t1)
 
     def _ensure_loaded(self):
         with self._lock:
