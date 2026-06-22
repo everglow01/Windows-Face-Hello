@@ -41,14 +41,15 @@ C++ Credential Provider(VS2022 + “使用 C++ 的桌面开发”;**用 PowerShe
 
 **`face_hello/` 核心库**(无 Qt 依赖,可被 GUI、服务、脚本共用):
 - `config.py` — 集中路径/模型/阈值。`DEFAULTS` 是阈值默认值,被 store 里持久化的 `settings` 覆盖。
-- `camera.py` — OpenCV 采集,Windows 用 `CAP_DSHOW` 后端。
+- `platform_backend.py` — 阶段 6 跨平台抽象层:把 OS 耦合三件事(静态加密 `protect`/`unprotect`、摄像头后端 `open_capture`、用户名 `current_user`)收敛到一处。Windows 行为与重构前逐字节一致(DPAPI 机器范围 / DSHOW / GetUserName);非 Windows 给默认实现,静态加密留 `NotImplementedError`。store/camera/cred_vault 都委托它。
+- `camera.py` — OpenCV 采集,后端经 `platform_backend.open_capture`(Windows=`CAP_DSHOW`)。
 - `detector.py` — InsightFace `FaceAnalysis`(CPU),输出 512 维 `normed_embedding`。惰性加载 + `load()` 显式预热。
 - `matcher.py` — 余弦相似度;embedding 已 L2 归一化,余弦即点积。
 - `liveness.py` — MediaPipe Tasks `FaceLandmarker` 取 468 点 → EAR 判眨眼 + solvePnP 估 yaw 判转头。`LivenessSession` 是随机挑战(眨眼/左转/右转)+ 双重超时的逐帧状态机。
 - `enroll.py` — `Enroller` 累积合格帧(过滤低分/太小的脸),取平均特征后重新归一化作模板。
-- `store.py` — `FaceStore`:DPAPI(`win32crypt`)加密的 pickle 落盘到 `data/faces.dat`,存特征(非照片)+ 元数据 + settings。同名 profile 覆盖。
+- `store.py` — `FaceStore`:经 `platform_backend`(Windows=DPAPI 机器范围)加密的 pickle 落盘到 `data/faces.dat`,存特征(非照片)+ 元数据 + settings。同名 profile 覆盖。
 - `auth.py` — `AuthSession` 编排状态机:`liveness → recognize → done`,逐帧 `feed()` 驱动。`authenticate_blocking()` 是无 Qt 的阻塞版(开摄像头跑完整流程),供服务调用。
-- `cred_vault.py` — 阶段 5 用:把登录密码存进 LSA Secret(键 `L$FaceHello_<user>`,UTF-16LE)。密码**永不经过 IPC**,由 CP 自己在 SYSTEM 上下文读。`current_user()` 返回 `GetUserName()`。
+- `cred_vault.py` — 阶段 5 用:把登录密码存进 LSA Secret(键 `L$FaceHello_<user>`,UTF-16LE)。密码**永不经过 IPC**,由 CP 自己在 SYSTEM 上下文读。`current_user()` 从 `platform_backend` re-export(Windows=`GetUserName()`)。
 - `service.py` — 命名管道(`\\.\pipe\FaceHello`)服务端,**单实例串行**(`nMaxInstances=1`),JSON 消息模式。同步命令 `ping`/`authenticate`;里程碑 d 加的异步对:`auth_start`(后台线程跑一次认证,立即返回)+ `auth_poll`(取实时活体提示与最终结果),让锁屏能边识别边刷提示。响应只回 `{ok, user, similarity}`,不回密码。
 - `win_service.py` + 仓库根 `winservice_main.py` — 把 `serve()` 封成 LocalSystem Windows 服务(开机自启,锁定/睡眠唤醒都常驻)。服务 ImagePath 用 venv 的 python 直接跑 `winservice_main.py` 引导脚本(把根目录加进 `sys.path`),**不用**默认 `PythonService.exe`——后者在 SCM 上下文 import 不到 `face_hello`(`package=false`,没装进 venv)。
 

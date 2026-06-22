@@ -13,19 +13,15 @@ A 路线下"刷脸匹配 ≠ 密码",必须存一份可释放的密码,供 Crede
 """
 from __future__ import annotations
 
-import win32api
 import win32security
+
+from .platform_backend import current_user  # 身份名收敛到 platform_backend(Windows=GetUserName SAM 名)
 
 _KEY_PREFIX = "L$FaceHello_"
 
-
-def current_user() -> str:
-    """当前账户的 SAM 名 —— 与 CP 在锁屏用 GetUserName() 取到的本地后备名一致。
-
-    人脸档案名、LSA 键、CP 提交 KERB 用的账户名三者必须是这同一个字符串。
-    微软账户登录的机器也返回本地后备名(见 scripts/logon_probe.py 实测)。
-    """
-    return win32api.GetUserName()
+# current_user 由 platform_backend 提供并在此 re-export(向后兼容 `cred_vault.current_user()` 的旧调用)。
+# 人脸档案名、LSA 键、CP 提交 KERB 用的账户名三者必须是这同一个字符串;
+# 微软账户登录的机器也返回本地后备名(见 scripts/logon_probe.py 实测)。
 
 
 def _key(username: str) -> str:

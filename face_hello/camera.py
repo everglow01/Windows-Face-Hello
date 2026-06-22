@@ -5,6 +5,8 @@ import time
 
 import cv2
 
+from . import platform_backend
+
 
 class Camera:
     """普通 RGB 摄像头采集。Windows 下用 DSHOW 后端打开更快更稳。"""
@@ -25,7 +27,7 @@ class Camera:
         while True:
             attempt += 1
             t0 = time.monotonic()
-            cap = cv2.VideoCapture(self.index, cv2.CAP_DSHOW)
+            cap = platform_backend.open_capture(self.index)
             opened = cap.isOpened()
             read_ok = False
             if opened:

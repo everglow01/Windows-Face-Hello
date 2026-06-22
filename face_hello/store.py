@@ -1,9 +1,8 @@
-"""人脸库:DPAPI 加密落盘。
+"""人脸库:静态加密落盘。
 
 存特征向量(非照片)+ 元数据(录入日期、renew_days)+ 设置。
-用 Windows DPAPI(win32crypt)以**机器范围**加密:同一台机器上的任意账户都能解密,
-含跑在 SYSTEM 上下文的认证服务(它必须能读录入用户写的人脸库);换机器无法解密。
-存的是特征向量(非照片),机器范围的暴露面可接受。
+加密走 `platform_backend`(Windows = DPAPI 机器范围:同机任意账户含 SYSTEM 服务可解、
+换机不可解;存的是特征向量,机器范围暴露面可接受)。
 """
 from __future__ import annotations
 
@@ -15,22 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from . import config
-
-_ENTROPY = b"face_hello_v1"  # 附加熵,降低跨程序解密风险
-_LOCAL_MACHINE = 0x4  # CRYPTPROTECT_LOCAL_MACHINE:机器范围,SYSTEM 服务才能解密录入用户写的库
-
-
-def _protect(raw: bytes) -> bytes:
-    import win32crypt
-
-    return win32crypt.CryptProtectData(raw, "face_hello", _ENTROPY, None, None, _LOCAL_MACHINE)
-
-
-def _unprotect(blob: bytes) -> bytes:
-    import win32crypt
-
-    _desc, raw = win32crypt.CryptUnprotectData(blob, _ENTROPY, None, None, 0)
-    return raw
+from .platform_backend import protect as _protect, unprotect as _unprotect
 
 
 @dataclass
