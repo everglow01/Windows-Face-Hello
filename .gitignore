@@ -4,6 +4,7 @@ __pycache__/
 *.log
 .env
 .vscode/
+CLAUDE.md
 
 # 加密人脸库(隐私)
 data/

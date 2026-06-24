@@ -29,7 +29,15 @@
 - This project uses vision algorithms like OpenCV to do single-RGB-camera face unlock — i.e. **Windows Hello-like** — but the actual security is far below the real Windows Hello. A single RGB camera can't sense spatial information the way infrared / depth cameras can, and may well be bypassed by a high-quality video or photo. **Do not use this on a work computer that stores sensitive data** — the risk is significant, and you bear the consequences of any major loss yourself.
 - The vision recognition runs onnx-model inference on the CPU, which puts some demand on your hardware. From testing, a CPU with fewer than 4 cores is not recommended — inference latency rises noticeably, defeating the fast-unlock spirit of the original Windows Hello.
 
----
+---  
+
+## 💽Cloud Drive Distribution
+
+Quark Cloud Drive:    
+Link: https://pan.quark.cn/s/db1464cf9c2d?pwd=afnw    
+Extraction Code: afnw    
+
+---  
 
 ## 📋 Requirements
 
