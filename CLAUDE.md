@@ -9,6 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```powershell
 uv sync                                      # 创建 .venv 并装依赖
 uv run python scripts/offline_check.py       # 离线自检(不需摄像头/显示器)——改完核心库先跑这个
+uv run python scripts/doctor.py              # 实机自检(摄像头取帧+模型加载+服务管道 ping);管道项需管理员终端
+uv run --group test pytest -q                # 跑安全逻辑单测(锁定/margin/反欺骗门;纯逻辑,无摄像头/模型)
 uv run python -m app.main                     # 启动 PySide6 管理台 GUI
 uv run python -m scripts.liveness_tune        # 标定活体阈值(实时显示 EAR/yaw,退出给建议值)
 uv run python -m face_hello.service           # 启动命名管道认证服务(常驻)
