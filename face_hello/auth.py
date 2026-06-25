@@ -27,7 +27,7 @@ class AuthResult:
 class AuthSession:
     """一次认证:liveness -> recognize -> done。"""
 
-    def __init__(self, detector: FaceDetector, store: FaceStore):
+    def __init__(self, detector: FaceDetector, store: FaceStore, tracker: FaceMeshTracker | None = None):
         self.detector = detector
         self.settings = store.get_settings()
         self._lang = self.settings.get("language", "zh")
@@ -39,11 +39,18 @@ class AuthSession:
         self._antispoof_thr = self.settings.get("antispoof_threshold", 0.55)
         # 活体可关:关掉则不建 tracker,直接进识别阶段
         if self.settings.get("liveness_enabled", True):
-            self._tracker = FaceMeshTracker()
+            # 传入 tracker(服务的长寿命共享实例)则复用、不负责关;否则各会话自建并在 _finish 关。
+            if tracker is not None:
+                self._tracker = tracker
+                self._owns_tracker = False
+            else:
+                self._tracker = FaceMeshTracker()
+                self._owns_tracker = True
             self._liveness = LivenessSession(self.settings)
             self.phase = "liveness"  # liveness | recognize | done
         else:
             self._tracker = None
+            self._owns_tracker = False
             self._liveness = None
             self.phase = "recognize"
 
@@ -111,9 +118,10 @@ class AuthSession:
     def _finish(self, result: AuthResult) -> None:
         self.result = result
         self.phase = "done"
-        if self._tracker is not None:
+        if self._tracker is not None and self._owns_tracker:
+            # 只关自己建的 tracker;注入的(服务长寿命共享实例)留给持有者复用。
             # MediaPipe 的 close() 会阻塞约 40s(等内部图/线程退出),丢到后台守护线程,
-            # 不卡解锁主流程。tracker 本身按会话新建,后台关旧的即可。
+            # 不卡解锁主流程。
             import threading
 
             threading.Thread(target=self._tracker.close, daemon=True).start()
@@ -121,13 +129,15 @@ class AuthSession:
 
 
 def authenticate_blocking(
-    detector: FaceDetector, store: FaceStore, on_instruction=None, camera_timeout_s: float = 8.0
+    detector: FaceDetector, store: FaceStore, on_instruction=None, camera_timeout_s: float = 8.0,
+    tracker: FaceMeshTracker | None = None,
 ) -> AuthResult:
     """无界面认证:开摄像头跑完整 liveness→识别,返回结果。
 
     供认证服务调用(无 Qt)。liveness 自带超时,循环必然结束。
     on_instruction(text):活体提示变化时回调(服务端可打印,供测试者照做)。
     camera_timeout_s:锁屏路径用短超时,摄像头缺失/被占时快速回退到密码,而非干等 30s。
+    tracker:服务的长寿命共享 FaceMeshTracker;传入则复用(不在会话结束时关),None 则各会话自建。
     """
     import logging
     import time
@@ -135,7 +145,7 @@ def authenticate_blocking(
     from .camera import Camera
 
     log = logging.getLogger("facehello")
-    session = AuthSession(detector, store)
+    session = AuthSession(detector, store, tracker=tracker)
     last = None
     idx = int(store.get_settings().get("camera_index", 0))
     cam = Camera(idx)

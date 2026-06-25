@@ -122,6 +122,7 @@ class _AuthRunner:
         self._result: AuthResult | None = None
         self._fails = 0            # 连续生物特征失败次数
         self._locked_until = 0.0   # time.monotonic();在此之前拒绝认证
+        self.tracker = None        # serve() 预热后注入的长寿命共享 FaceMeshTracker(跨多次解锁复用)
 
     @property
     def _running(self) -> bool:
@@ -161,7 +162,7 @@ class _AuthRunner:
             if store.is_empty():
                 result = AuthResult(False, t("no_enrolled", store.get_settings().get("language", "zh")))
             else:
-                result = authenticate_blocking(detector, store, on_instruction=on_instr)
+                result = authenticate_blocking(detector, store, on_instruction=on_instr, tracker=self.tracker)
         except Exception as e:  # noqa: BLE001
             result = AuthResult(False, f"认证异常: {e}")
             _log.exception("认证线程异常")
@@ -202,8 +203,13 @@ class _AuthRunner:
 _runner = _AuthRunner()
 
 
-def _warm_liveness() -> None:
-    """预热 MediaPipe,首次 authenticate 不卡。"""
+def _warm_liveness():
+    """预热 MediaPipe 并返回长寿命 tracker:首次 authenticate 不卡,且后续解锁复用同一实例。
+
+    返回的 tracker 由 _AuthRunner 持有、跨多次异步解锁复用(服务路径严格串行,安全),
+    不再每会话建/弃(避免 close() 的 40s 退出在重试时堆积)。预热失败返回 None,
+    _run 退回各会话自建。
+    """
     try:
         import numpy as np
 
@@ -211,10 +217,9 @@ def _warm_liveness() -> None:
 
         tr = FaceMeshTracker()
         tr.process(np.zeros((480, 640, 3), dtype=np.uint8))
-        # close() 阻塞约 40s(同 auth._finish),丢后台守护线程,别卡服务启动/建管道
-        threading.Thread(target=tr.close, daemon=True).start()
+        return tr  # 保活复用;进程退出由 OS 回收,不显式 close
     except Exception:  # noqa: BLE001
-        pass
+        return None
 
 
 def _warm_antispoof() -> None:
@@ -300,7 +305,7 @@ def serve(should_continue=None) -> None:
     detector = FaceDetector()
     detector.load()
     _t_det = time.perf_counter()
-    _warm_liveness()
+    _runner.tracker = _warm_liveness()  # 长寿命共享 tracker,注入异步解锁路径复用
     _t_liv = time.perf_counter()
     _warm_antispoof()
     _t_anti = time.perf_counter()

@@ -148,7 +148,7 @@ CP 磁贴选中 → 服务 auth_start 起后台线程 → AuthSession.feed() 逐
 ### MediaPipe Tasks API
 - MediaPipe 0.10.x **已移除 legacy `solutions`**,只能用 Tasks API,别退回旧写法。
 - `FaceLandmarker` 用 `RunningMode.VIDEO` + 严格递增时间戳(`detect_for_video`,每帧 `_ts_ms += 33`)。IMAGE 模式偶发单帧卡死数十秒。
-- **`FaceLandmarker.close()` 会阻塞约 40s**(等内部图 / 线程退出)。**绝不能在主流程同步调**——`AuthSession._finish` 和 `service._warm_liveness` 都把它丢到 daemon 线程关，否则容易出现解锁程序在锁屏界面卡死的问题，在测试中曾经卡死延迟超过40秒
+- **`FaceLandmarker.close()` 会阻塞约 40s**(等内部图 / 线程退出)。**绝不能在主流程同步调**——`AuthSession._finish` 把它丢到 daemon 线程关，否则容易出现解锁程序在锁屏界面卡死的问题，在测试中曾经卡死延迟超过40秒。服务侧已改为**复用一个长寿命 tracker**:`_warm_liveness()` 预热后返回,由 `_AuthRunner.tracker` 持有、跨多次异步解锁复用(服务路径单实例串行,安全),不再每会话建/弃;`_finish` 只关**自己建的** tracker(`_owns_tracker`,即 GUI/CLI/同步开发路径),注入的(服务共享)不关
 
 ### 性能 / 预热
 - 首次推理有冷启动代价(onnxruntime + TFLite ~0.7s),已在启动期预热挪走。`detector.load()` 真跑一次带人脸的样例图;`FaceMeshTracker` 也要预热一个实例。**改启动路径别破坏这个。**
