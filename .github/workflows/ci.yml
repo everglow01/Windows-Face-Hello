@@ -52,7 +52,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: uv run python scripts/offline_check.py
 
-      - name: Run unit tests (security logic: lockout / match margin / anti-spoof gate)
+      - name: "Run unit tests (security logic: lockout / match margin / anti-spoof gate)"
         env:
           PYTHONPATH: ${{ github.workspace }}   # 同上;pytest 配置里也设了 pythonpath,双保险
         # --group test 显式装 test 依赖组(uv sync 默认不装自定义组)
