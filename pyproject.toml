@@ -27,7 +27,17 @@ dist = [
     "PySide6-Essentials",
     "pywin32",
 ]
+# 测试依赖:独立组,不进运行时 / 分发(dist)。装它:uv sync --group test。
+test = [
+    "pytest",
+]
 
 [tool.uv]
 # 应用型项目,不把自身作为可安装包(根级 face_hello/ app/ 直接在 sys.path)
 package = false
+
+[tool.pytest.ini_options]
+# package=false:face_hello 没装进 venv,靠 pythonpath 把仓库根加进 sys.path
+# (与 CI 里给 offline_check 设 PYTHONPATH=仓库根 同理)。
+pythonpath = ["."]
+testpaths = ["tests"]
