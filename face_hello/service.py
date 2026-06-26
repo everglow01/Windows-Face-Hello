@@ -4,6 +4,7 @@
   请求  {"cmd": "ping"}            -> {"ok": true, "ready": true, "users": [...]}
   请求  {"cmd": "authenticate"}    -> {"ok": true, "user": "owen", "similarity": 0.6}
                                    或 {"ok": false, "reason": "..."}
+        （仅开发态:绕过失败锁定,正式部署(安装态)禁用;锁屏走 auth_start/auth_poll）
 
 设计:密码不经过本服务——服务只回 {ok, user},由 CP 自己读 LSA Secret 提交。
 当前为控制台常驻进程(开发/自测用);正式部署再封成 Windows 服务(阶段 5-4)。
@@ -238,7 +239,10 @@ def _handle(req: dict, detector: FaceDetector, store: FaceStore) -> dict:
     cmd = req.get("cmd")
     if cmd == "ping":
         return {"ok": True, "ready": True, "users": [p.name for p in store.list_profiles()]}
-    if cmd == "authenticate":  # 同步认证(开发/自测路径,不走失败锁定计数)
+    if cmd == "authenticate":  # 同步认证:开发/自测路径,绕过失败锁定计数,故仅开发态可用
+        if config.IS_INSTALLED:  # 生产态只暴露 ping + auth_start/auth_poll(后者强制锁定),收掉这个无限认证口
+            _log.warning("生产态拒绝 authenticate 命令(绕过锁定的开发口已禁用)")
+            return {"ok": False, "reason": "authenticate disabled in production"}
         store.load()  # 取最新人脸库
         if store.is_empty():
             _log.info("认证拒绝:尚未录入任何人脸")
