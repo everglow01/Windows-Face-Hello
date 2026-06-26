@@ -41,9 +41,9 @@ uv run python -m app.main                 # 启管理台 GUI
 
 > 首次运行自动下模型到 `models/`:InsightFace `buffalo_l`(~191MB)、MediaPipe `face_landmarker.task`(~3.7MB)。`models/` 和 `data/`(加密人脸库)都 gitignored,别入库。
 
-**没有 pytest 之类的测试框架。** `scripts/offline_check.py` 是断言式自检,等价于冒烟测试——它不需要摄像头 / 显示器,验证 matcher、DPAPI 加密往返、FaceMesh、InsightFace 加载这四条核心链路。**改完 `face_hello/` 里的东西,提交前务必先跑断言式自检**   
+**安全逻辑有 pytest 单测**(`uv run --group test pytest -q`:锁定 / margin / 反欺骗门 / `authenticate` 门控,纯逻辑、无摄像头 / 模型,已接进 CI)。`scripts/offline_check.py` 是断言式冒烟自检——不需要摄像头 / 显示器,验证 matcher、DPAPI 加密往返、FaceMesh、InsightFace 加载这四条核心链路。**改完 `face_hello/` 里的东西,提交前这两个都先跑。**   
 
-有计划加入pytest和其他的测试用例，但当前项目体量较小，作者精力有限，有想法的开发者欢迎提交issue讨论pytest事宜。   
+欢迎补充更多测试覆盖,开 issue 或 PR 讨论。   
 
 ---
 
@@ -54,22 +54,23 @@ uv run python -m app.main                 # 启管理台 GUI
 | 文件 | 职责 |
 |------|------|
 | `config.py` | 集中路径 / 模型 / 阈值。`DEFAULTS` 是阈值默认值,被 store 里持久化的 `settings` 覆盖。也是**安装态 / 开发态分流**的地方(见下) |
+| `platform_backend.py` | 阶段 6 跨平台抽象层:把三处 OS 耦合(静态加密 `protect`/`unprotect`、摄像头后端 `open_capture`、`current_user`)收敛到一处;Windows 行为逐字节不变(DPAPI 机器范围 / DSHOW / GetUserName)。`store`/`camera`/`cred_vault` 都委托它 |
 | `camera.py` | OpenCV 采集,Windows 用 `CAP_DSHOW` 后端,带冷启动 / 唤醒退避重试 |
 | `detector.py` | InsightFace `FaceAnalysis`(CPU),输出 512 维 `normed_embedding`。惰性加载 + `load()` 显式预热 |
 | `matcher.py` | 余弦相似度;embedding 已 L2 归一化,余弦即点积 |
 | `liveness.py` | MediaPipe Tasks `FaceLandmarker` 取 468 点 → EAR 判眨眼 + solvePnP 估 yaw 判转头。`LivenessSession` 是随机挑战(眨眼 / 左转 / 右转)+ 双重超时的逐帧状态机 |
 | `enroll.py` | `Enroller` 累积合格帧(过滤低分 / 太小的脸),取平均特征后重新归一化作模板 |
 | `store.py` | `FaceStore`:DPAPI 加密的 pickle 落盘到 `data/faces.dat`,存特征(**非照片**)+ 元数据 + settings。同名 profile 覆盖 |
-| `auth.py` | `AuthSession` 编排 `liveness → recognize → done` 状态机,逐帧 `feed()` 驱动。`authenticate_blocking()` 是无 Qt 的阻塞版,供服务调用 |
+| `auth.py` | `AuthSession` 编排 `liveness → recognize → done` 状态机,逐帧 `feed()` 驱动;比对前过反欺骗门 `_antispoof_gate`(多帧采样:判假即拒、没检到脸的帧继续采样,连续 `antispoof_max_frames` 帧没脸才 fail-open)。`authenticate_blocking()` 是无 Qt 的阻塞版,供服务调用 |
 | `cred_vault.py` | 把登录密码存进 LSA Secret(键 `L$FaceHello_<user>`)。密码**永不经过 IPC**,由 CP 自己在 SYSTEM 读 |
-| `service.py` | 命名管道服务端,**单实例串行**,JSON 消息。同步 `ping`/`authenticate`;异步对 `auth_start`(后台跑一次认证)+ `auth_poll`(取实时活体提示与结果),让锁屏边识别边刷提示 |
+| `service.py` | 命名管道服务端,**单实例串行**,JSON 消息。同步 `ping`/`authenticate`(`authenticate` 绕过失败锁定,故**仅开发态**——安装态拒绝);异步对 `auth_start`(后台跑一次认证)+ `auth_poll`(取实时活体提示与结果),让锁屏边识别边刷提示 |
 | `win_service.py` | 把 `serve()` 封成 LocalSystem Windows 服务 |
 
 ### 其它目录
 
 - `app/` —— PySide6 管理台。`main.py` 是 UI;`workers.py` 把所有摄像头 + 推理塞进 `QThread`,Signal 回主线程更新,避免卡死。
-- `cp/` —— C++ Credential Provider(COM in-proc DLL)。`CFaceProvider`(枚举磁贴)、`CFaceCredential`(扫描线程 + 提交凭据)、`PipeClient`(管道客户端)。详见 [cp/README.md](./cp/README.md)。
-- `scripts/` —— `offline_check.py`(自检)、`liveness_tune.py`(标定活体阈值)、`auth_client.py`(模拟 CP 调服务)、`cred_vault_cli.py`(LSA 读写测试)、`build_release.py`(打便携包)。
+- `cp/` —— C++ Credential Provider(COM in-proc DLL)。`CFaceProvider`(枚举磁贴)、`CFaceCredential`(扫描线程 + 3 次重试后退回密码 + 提交凭据)、`PipeClient`(管道客户端)。详见 [cp/README.md](./cp/README.md)。
+- `scripts/` —— `offline_check.py`(自检)、`doctor.py`(实机自检:摄像头取帧 + 模型加载 + 服务管道 ping)、`liveness_tune.py`(标定活体阈值)、`auth_client.py`(模拟 CP 调服务)、`cred_vault_cli.py`(LSA 读写测试)、`build_release.py`(打便携包)。
 - `winservice_main.py` / `uninstall_cleanup.py` —— 仓库根的引导脚本(服务宿主、卸载清理)。
 - `installer/` —— Inno Setup 脚本 + 中文语言文件,打 setup.exe。
 - `.github/workflows/` —— `ci.yml`(每次 push 的构建安全验证)、`release.yml`(git推送release)。
@@ -81,6 +82,7 @@ uv run python -m app.main                 # 启管理台 GUI
 ```powershell
 uv sync                                                   # 装依赖
 uv run python scripts/offline_check.py                    # 离线自检(改核心库先跑)
+uv run --group test pytest -q                             # 安全逻辑单测(锁定 / margin / 反欺骗门 / authenticate 门控)
 uv run python -m app.main                                 # 管理台 GUI
 uv run python -m scripts.liveness_tune                    # 标定活体阈值(实时 EAR/yaw,退出给建议值)
 uv run python -m face_hello.service                       # 前台跑命名管道服务(调试用)

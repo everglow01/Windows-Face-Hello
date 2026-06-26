@@ -17,16 +17,17 @@ This is the **design & decision record**: why it's built this way, where it stan
 | Local account + Microsoft account (MSA-backed) unlock | ✅ verified end-to-end |
 | Live liveness prompts at the lock screen (`auth_start`/`auth_poll` async pair) | ✅ done |
 | Custom lock-screen tile avatar (WIC reads `ProgramData`, falls back to solid blue) | ✅ done |
+| Lock-screen 3-attempt face retry (press "→" to retry), then fall back to password (CP-side) | ✅ done |
 | Installed-mode / dev-mode path split (`.installed` marker + `FACEHELLO_HOME`) | ✅ done |
 | Portable package (standalone CPython + deps) + Inno installer + Chinese wizard | ✅ done |
 | One-click clean uninstall (stop/remove service, unregister CP, wipe LSA password + gallery) | ✅ done |
 | Size trimming: PySide6-Essentials + buffalo_l pruning → `setup.exe` ~322 MB | ✅ done |
 | GitHub Release automation (push a tag → CI builds setup.exe) | ✅ done |
-| **5-4 hardening: pipe ACL limited to SYSTEM, failure fallback / lockout, better logging** | ⏳ Halfway done |
+| **5-4 hardening: pipe ACL (SYSTEM+Admins), failure fallback / lockout, better logging, dev-only `authenticate`** | ✅ done (Python side; one CP-side pipe-PID check deferred) |
 | **Code signing (Authenticode / EV cert to clear SmartScreen)** | ⏳ tbd |
 | Further slimming: opencv-headless, drop scipy/onnx transitive deps | ⏳ to do |
 | Passive anti-spoofing (Silent-Face MiniFASNet, default-on + fail-open if model missing) | ✅ done |
-| pytest test framework | ⏳ to do |
+| pytest for security logic (lockout / margin / anti-spoof gate / `authenticate` gating), wired into CI | ✅ done |
 
 See [§7 Roadmap](#7-roadmap) for the full plan; remaining hardening is in [§9.2](#92-remaining-hardening-5-4) and [§10.5 Uninstall](#105-uninstall-completely-clean-red-line-no-broken-cp).
 
@@ -92,7 +93,7 @@ Windows Hello face doesn't support ordinary webcams — not because the models a
 | Active liveness | blink (EAR) + head turn (solvePnP) random challenge | MediaPipe Tasks `FaceLandmarker`, 468 landmarks |
 | Passive anti-spoofing | **Silent-Face MiniFASNetV2** (`2.7_80x80`) detects screen/replay | bundles its own RetinaFace crop; default-on, can disable; fail-open if model missing |
 
-Passive anti-spoofing is enabled (toggle in Settings): one MiniFASNet inference on the recognition frame rejects screen/photo/video replays before matching — covering the recorded-video replay that active liveness can't. Two gotchas: (1) MiniFASNet is extremely crop-sensitive, so it must use its companion RetinaFace box (InsightFace's tighter box misjudges); (2) input is BGR in [0,255] (the official ToTensor leaves `/255` commented out).
+Passive anti-spoofing is enabled (toggle in Settings): during recognition MiniFASNet **samples several frames** to reject screen/photo/video replays before matching — a sub-threshold score rejects at once, while a frame with no detected face is inconclusive and samples more, and only after `antispoof_max_frames` consecutive no-face frames does it fail-open (so a replay can't slip through on a single detection-miss frame). It covers the recorded-video replay that active liveness can't. Two gotchas: (1) MiniFASNet is extremely crop-sensitive, so it must use its companion RetinaFace box (InsightFace's tighter box misjudges); (2) input is BGR in [0,255] (the official ToTensor leaves `/255` commented out).
 
 ---
 
@@ -126,10 +127,10 @@ Passive anti-spoofing is enabled (toggle in Settings): one MiniFASNet inference 
 - [x] **Stage 4 — Auth orchestration + console**: `auth` state machine + PySide6 console (`app/`).
 - [x] **Stage 5 — Credential Provider**: C++ COM lock-screen integration + LSA credential + KERB unlock. **Main path done, verified on real hardware** (see §9).
 - [x] **Distribution — setup.exe**: portable package + Inno Chinese wizard + clean uninstall + Release automation, shipped as `v0.1.2` (see §10).
-- [ ] **Hardening (5-4)**: pipe ACL limited to SYSTEM, failure fallback / lockout, better logging.
+- [x] **Hardening (5-4)**: pipe ACL (SYSTEM+Admins), failure fallback / lockout, better logging, dev-only `authenticate` (Python side; one CP-side pipe-PID check deferred).
 - [ ] **Pre-release**: code signing (EV cert to clear SmartScreen).
-- [x] **Passive anti-spoofing**: Silent-Face MiniFASNet (`2.7_80x80`) + RetinaFace crop, one inference on the recognition frame to detect replays; default-on, can disable, fail-open if model missing.
-- [ ] **Optional enhancements**: GPU inference, pytest, further slimming.
+- [x] **Passive anti-spoofing**: Silent-Face MiniFASNet (`2.7_80x80`) + RetinaFace crop, multi-frame sampling during recognition to detect replays; default-on, can disable, fail-open if model missing.
+- [ ] **Optional enhancements**: GPU inference, further slimming (security-logic pytest already landed + in CI).
 
 ---
 
@@ -151,10 +152,11 @@ Passive anti-spoofing is enabled (toggle in Settings): one MiniFASNet inference 
 ### 9.1 Done (milestones a→d)
 
 - [x] **Credential vault `cred_vault`** (LSA Secret read/write) + test CLI. Admin write → SYSTEM read verified.
-- [x] **Service-ization**: named pipe `\\.\pipe\FaceHello`, **single-instance serial**, JSON messages; synchronous `ping`/`authenticate` + the async pair `auth_start`/`auth_poll` (the lock screen refreshes liveness prompts while recognizing). Self-tested with `scripts/auth_client.py`.
+- [x] **Service-ization**: named pipe `\\.\pipe\FaceHello`, **single-instance serial**, JSON messages; synchronous `ping`/`authenticate` (the latter bypasses lockout, so it's **dev-only** — rejected in installed mode) + the async pair `auth_start`/`auth_poll` (the lock screen refreshes liveness prompts while recognizing). Self-tested with `scripts/auth_client.py`.
 - [x] **C++ Credential Provider** (based on Microsoft's SampleV2CredentialProvider): tile enumeration, scan-thread polling, `SignalAutoLogon` auto-submit, `GetSerialization` reads the LSA → KERB unlock.
 - [x] **Custom lock-screen tile avatar**: the CP uses WIC to read the first image (PNG/JPG/BMP) in `C:\ProgramData\FaceHello\`, scales it to 128×128, and falls back to a solid blue placeholder on failure.
-- [x] **End-to-end verification**: VM (snapshotted) + real hardware, **both local and Microsoft accounts** unlock by face successfully. A SYSTEM/session-0 process can open the camera at the lock screen (the service can run as LocalSystem).
+- [x] **Lock-screen retry (post-d)**: on a failed scan the tile keeps the "→" submit button as a retry entry — up to 3 attempts (`kMaxFaceAttempts`, any failure counts), then it stops scanning and prompts the user to use their password. The Python service is unchanged (its own lockout, 5 fails / 30s, stays the brute-force gate; 3 < 5).
+- [x] **End-to-end verification**: VM (snapshotted) + real hardware, **both local and Microsoft accounts** unlock by face successfully. A SYSTEM/session-0 process can open the camera at the lock screen (the service can run as LocalSystem). The 3-attempt retry is verified on real hardware.
 
 ### 9.2 Hardening (5-4, all landed, Python-side only)
 
@@ -162,6 +164,7 @@ Passive anti-spoofing is enabled (toggle in Settings): one MiniFASNet inference 
   - **Residual risk (known, deferred)**: the service is a single-instance serial loop ("create pipe → answer → close → recreate"), so there's a microsecond gap on `close → recreate`; the DACL can't stop "another process creating the same pipe name first" (that's its own kernel object). Fully closing squatting needs the **CP to verify, after connecting, that the server process is SYSTEM via `GetNamedPipeServerProcessId`** — that's a C++ DLL change, not done in this (Python-only) round. The main mitigation is that the **LocalSystem service auto-starts at boot before any user-mode code runs and owns the name from the first instance**, leaving a tiny squatting window.
 - [x] **Failure fallback / lockout**: in-memory counting in `_AuthRunner` — **only genuine biometric rejections count** (mismatch / ambiguous identity / liveness failure / no face seen); infrastructure errors (not enrolled / camera unavailable / exception) don't. After `lockout_max_fails` (default 5) consecutive fails it cools down for `lockout_seconds` (default 30); during the cooldown `auth_start` returns "locked, use password" without opening the camera; a success or cooldown expiry resets it. Thresholds are tunable on the Settings tab (0 = off). The camera path's open timeout is cut from 30s to 8s (`authenticate_blocking(camera_timeout_s=8)`) so a missing/busy camera falls back to the password fast instead of stalling. The system password / PIN provider always remains as the inherent fallback.
 - [x] **Better logging**: `service.py` adopts `logging` + `RotatingFileHandler` (`service.log`, ~1MB×3, with timestamps / levels), replacing bare `print`; in service mode a `_StreamToLogger` shim routes `sys.stdout/stderr` (native-lib prints and uncaught tracebacks) into the same rotating log (purely C-level stderr noise may not land — those are just startup banners, not audit content). **Passwords are never logged**; the username + similarity are (a local log, readable by SYSTEM / admins).
+- [x] **Further hardening (post-v0.1.2)**: the sync `authenticate` command (which bypasses lockout) is now **dev-only**, rejected in installed mode, so the production pipe only exposes `ping` + `auth_start`/`auth_poll`; passive anti-spoofing **samples multiple frames** instead of one, so a replay can't slip through on a single detection-miss frame; the security state machines (lockout / margin / anti-spoof gate / `authenticate` gating) got **pytest** coverage wired into CI.
 
 ---
 

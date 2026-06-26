@@ -112,6 +112,8 @@ uv run python -m scripts.liveness_tune
 
 完整解锁链路:锁屏「Face Unlock」磁贴 →(命名管道)→ LocalSystem 系统服务 → InsightFace 识别 → 读取 LSA 中保存的密码 → 打包 Kerberos 凭据真解锁。本地账户与微软账户(MSA 本地登录)均已端到端验证。**在作者实体机上已得到完整验证可用。**
 
+> 刷脸失败时,按磁贴上的 **→** 按钮可再试一次——共 **3 次**机会,用尽后回退到密码登录(系统密码 / PIN 始终保留)。
+
 认证服务的命令(管理员;`<venv>` = `.venv\Scripts\python.exe`):
 
 ```powershell

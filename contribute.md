@@ -41,9 +41,9 @@ uv run python -m app.main                 # launch the console GUI
 
 > On first run, models auto-download to `models/`: InsightFace `buffalo_l` (~191 MB), MediaPipe `face_landmarker.task` (~3.7 MB). Both `models/` and `data/` (the encrypted gallery) are gitignored — don't commit them.
 
-**There's no pytest-style test framework.** `scripts/offline_check.py` is an assertion-based self-check, equivalent to a smoke test — it needs no camera / display and verifies four core links: matcher, the DPAPI encrypt round-trip, FaceMesh, and InsightFace loading. **After changing anything in `face_hello/`, always run the self-check before committing.**
+**Security logic has pytest coverage** (`uv run --group test pytest -q`: lockout / margin / anti-spoof gate / `authenticate` gating — pure logic, no camera or models, wired into CI). `scripts/offline_check.py` is an assertion-based smoke self-check — it needs no camera / display and verifies four core links: matcher, the DPAPI encrypt round-trip, FaceMesh, and InsightFace loading. **After changing anything in `face_hello/`, run both before committing.**
 
-There are plans to add pytest and other test cases, but the project is still small and the author's time is limited — developers with ideas are welcome to open an issue to discuss pytest.
+More test coverage is welcome — open an issue or PR to discuss.
 
 ---
 
@@ -54,22 +54,23 @@ There are plans to add pytest and other test cases, but the project is still sma
 | File | Responsibility |
 |------|----------------|
 | `config.py` | Central paths / models / thresholds. `DEFAULTS` are the threshold defaults, overridden by the persisted `settings` in the store. Also where **installed-mode / dev-mode is split** (see below) |
+| `platform_backend.py` | Phase-6 cross-platform shim: funnels the three OS-coupled bits (static encrypt `protect`/`unprotect`, camera backend `open_capture`, `current_user`) into one place; Windows behavior is byte-for-byte unchanged (machine-scope DPAPI / DSHOW / GetUserName). `store`/`camera`/`cred_vault` delegate to it |
 | `camera.py` | OpenCV capture, `CAP_DSHOW` backend on Windows, with cold-boot / wake backoff retries |
 | `detector.py` | InsightFace `FaceAnalysis` (CPU), outputs a 512-d `normed_embedding`. Lazy load + explicit `load()` warmup |
 | `matcher.py` | Cosine similarity; the embedding is already L2-normalized, so cosine is just a dot product |
 | `liveness.py` | MediaPipe Tasks `FaceLandmarker` gives 468 points → EAR for blink + solvePnP yaw for head turn. `LivenessSession` is a per-frame state machine: random challenge (blink / turn left / turn right) + dual timeouts |
 | `enroll.py` | `Enroller` accumulates qualifying frames (filtering low-score / too-small faces), averages the features, and re-normalizes into a template |
 | `store.py` | `FaceStore`: DPAPI-encrypted pickle to `data/faces.dat`, storing features (**not photos**) + metadata + settings. A same-named profile overwrites |
-| `auth.py` | `AuthSession` orchestrates the `liveness → recognize → done` state machine, driven frame-by-frame via `feed()`. `authenticate_blocking()` is the Qt-free blocking version for the service to call |
+| `auth.py` | `AuthSession` orchestrates the `liveness → recognize → done` state machine, driven frame-by-frame via `feed()`; before matching it runs the anti-spoof gate `_antispoof_gate` (multi-frame: a spoof verdict rejects, no-face frames sample more, fail-open only after `antispoof_max_frames` misses). `authenticate_blocking()` is the Qt-free blocking version for the service to call |
 | `cred_vault.py` | Stores the sign-in password in an LSA Secret (key `L$FaceHello_<user>`). The password **never travels over IPC**; the CP reads it itself as SYSTEM |
-| `service.py` | Named-pipe server, **single-instance serial**, JSON messages. Synchronous `ping`/`authenticate`; the async pair `auth_start` (run one auth in the background) + `auth_poll` (fetch live liveness prompts and the result), letting the lock screen refresh prompts while recognizing |
+| `service.py` | Named-pipe server, **single-instance serial**, JSON messages. Synchronous `ping`/`authenticate` (`authenticate` bypasses lockout, so it's **dev-only** — rejected in installed mode); the async pair `auth_start` (run one auth in the background) + `auth_poll` (fetch live liveness prompts and the result), letting the lock screen refresh prompts while recognizing |
 | `win_service.py` | Wraps `serve()` into a LocalSystem Windows service |
 
 ### Other directories
 
 - `app/` — the PySide6 console. `main.py` is the UI; `workers.py` pushes all camera + inference work into `QThread`s, with signals back to the main thread to update the UI, avoiding freezes.
-- `cp/` — the C++ Credential Provider (in-proc COM DLL). `CFaceProvider` (enumerates the tile), `CFaceCredential` (scan thread + submits the credential), `PipeClient` (pipe client). See [cp/README.md](./cp/README.md).
-- `scripts/` — `offline_check.py` (self-check), `liveness_tune.py` (calibrate liveness thresholds), `auth_client.py` (simulate the CP calling the service), `cred_vault_cli.py` (LSA read/write test), `build_release.py` (build the portable package).
+- `cp/` — the C++ Credential Provider (in-proc COM DLL). `CFaceProvider` (enumerates the tile), `CFaceCredential` (scan thread + 3-attempt retry then password fallback + submits the credential), `PipeClient` (pipe client). See [cp/README.md](./cp/README.md).
+- `scripts/` — `offline_check.py` (self-check), `doctor.py` (on-machine health check: camera frame + model load + service pipe ping), `liveness_tune.py` (calibrate liveness thresholds), `auth_client.py` (simulate the CP calling the service), `cred_vault_cli.py` (LSA read/write test), `build_release.py` (build the portable package).
 - `winservice_main.py` / `uninstall_cleanup.py` — bootstrap scripts at the repo root (service host, uninstall cleanup).
 - `installer/` — the Inno Setup script + Chinese language file, builds setup.exe.
 - `.github/workflows/` — `ci.yml` (build sanity check on every push), `release.yml` (release on git tag push).
@@ -81,6 +82,7 @@ There are plans to add pytest and other test cases, but the project is still sma
 ```powershell
 uv sync                                                   # install deps
 uv run python scripts/offline_check.py                    # offline self-check (run after touching the core lib)
+uv run --group test pytest -q                             # security-logic unit tests (lockout / margin / anti-spoof gate / authenticate gating)
 uv run python -m app.main                                 # console GUI
 uv run python -m scripts.liveness_tune                    # calibrate liveness thresholds (live EAR/yaw, prints suggestions on exit)
 uv run python -m face_hello.service                       # run the named-pipe service in the foreground (for debugging)

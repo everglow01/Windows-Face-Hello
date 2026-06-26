@@ -113,6 +113,8 @@ uv run python -m scripts.liveness_tune
 
 Full unlock chain: lock-screen "Face Unlock" tile → (named pipe) → LocalSystem service → InsightFace recognition → read the password saved in the LSA → pack a Kerberos credential to actually unlock. Both local accounts and Microsoft accounts (MSA local login) are verified end-to-end. **Fully validated and working on the author's physical machine.**
 
+> If a face check fails, press the tile's **→** button to try again — you get **3 attempts**, after which Face Hello falls back to password sign-in (the system password / PIN is always available).
+
 Auth service commands (Administrator; `<venv>` = `.venv\Scripts\python.exe`):
 
 ```powershell
@@ -163,7 +165,7 @@ You can drop your own avatar image into the default path `C:\ProgramData\FaceHel
 
 - The gallery stores **feature vectors, not photos**, encrypted on disk with Windows DPAPI in the local `data/`, uploaded to no cloud server, keeping your face data private and secure.
 - The sign-in password is kept in an **LSA Secret**, read by the Credential Provider itself in the SYSTEM context — it **never travels over IPC**.
-- **Passive anti-spoofing** (Silent-Face MiniFASNet) runs on the recognition frame to reject screen / photo / video replays — on by default, with a toggle in Settings. It meaningfully raises the bar, but being single-RGB it is **not** foolproof.
+- **Passive anti-spoofing** (Silent-Face MiniFASNet) samples several frames during recognition to reject screen / photo / video replays — on by default, with a toggle in Settings. It meaningfully raises the bar, but being single-RGB it is **not** foolproof.
 - Even with active liveness + passive anti-spoofing, monocular RGB still can't match IR / depth. **Don't use this on a machine others might physically access.** Any data leak or loss is the result of the user's own operation and of not understanding this project's risks, and you bear the consequences yourself.
 - With **liveness** turned off, startup compresses to under 1s for an almost-instant experience — but for safety we still don't recommend turning it off.
 
