@@ -34,9 +34,12 @@ class AuthSession:
         self._gallery = store.embeddings()
         self._profiles = store.list_profiles()
         self.result: AuthResult | None = None
-        # 被动反欺骗(独立于主动活体;关了活体也照样守门)。模型懒加载在 _recognize。
+        # 被动反欺骗(独立于主动活体;关了活体也照样守门)。模型懒加载在 _antispoof_gate。
         self._antispoof_on = self.settings.get("antispoof_enabled", True)
         self._antispoof_thr = self.settings.get("antispoof_threshold", 0.55)
+        self._antispoof_max = self.settings.get("antispoof_max_frames", 10)
+        self._spoof_cleared = False  # 反欺骗门已放行(判真 / fail-open),后续帧直接进识别
+        self._spoof_tries = 0        # 反欺骗已采样帧数(达 _antispoof_max 仍无脸则 fail-open)
         # 活体可关:关掉则不建 tracker,直接进识别阶段
         if self.settings.get("liveness_enabled", True):
             # 传入 tracker(服务的长寿命共享实例)则复用、不负责关;否则各会话自建并在 _finish 关。
@@ -80,25 +83,15 @@ class AuthSession:
             self._recognize(frame_bgr)
 
     def _recognize(self, frame_bgr) -> None:
+        # 反欺骗门先行:翻拍/假体在比对前就拒掉。模型在则需逐帧采样到判定才放行
+        # (避免单帧没检到脸就 fail-open);判假直接 _finish,本帧不进识别。
+        if self._antispoof_on and not self._spoof_cleared:
+            if not self._antispoof_gate(frame_bgr):
+                return
         face = self.detector.largest_face(frame_bgr)
         if face is None:
             self._finish(AuthResult(False, t("no_face", self._lang), biometric=True))
             return
-        # 反欺骗门:翻拍/假体在比对前就拒掉。模型不可用 / 推理异常一律 fail-open(跳过)。
-        if self._antispoof_on:
-            from .antispoof import get_antispoof
-
-            model = get_antispoof()
-            if model is not None:
-                try:
-                    real = model.score(frame_bgr)  # 自带 RetinaFace 检测+裁剪
-                except Exception:  # noqa: BLE001 运行时异常也 fail-open
-                    real = None
-                if real is not None and real < self._antispoof_thr:
-                    self._finish(
-                        AuthResult(False, t("spoof_detected", self._lang, p=real), None, biometric=True)
-                    )
-                    return
         names = [p.name for p in self._profiles]
         idx, sim, margin = best_match_with_margin(face.embedding, self._gallery, names)
         thr = self.settings["match_threshold"]
@@ -114,6 +107,41 @@ class AuthSession:
             )
         else:
             self._finish(AuthResult(True, t("auth_pass", self._lang), names[idx], sim, biometric=True))
+
+    def _antispoof_gate(self, frame_bgr) -> bool:
+        """逐帧反欺骗门。返回 True=放行(判真 / fail-open),可进入识别;
+        False=尚无定论(继续采下一帧)或已判假体并 _finish(此时 phase 已 done)。
+
+        - 模型不可用 / 推理异常 = 基础设施错误 → 立刻 fail-open(同缺模型,红线:不锁死用户);
+        - score < 阈值(检到脸、判假)→ 立刻拒(确认假体,不给更多机会);
+        - score ≥ 阈值(检到脸、判真)→ 放行;
+        - score = None(这帧 RetinaFace 没检到脸)→ 暂不定论,继续采样,
+          连续 _antispoof_max 帧仍没检到才 fail-open(堵住单帧漏检就跳过反欺骗)。
+        """
+        from .antispoof import get_antispoof
+
+        model = get_antispoof()
+        if model is None:
+            self._spoof_cleared = True
+            return True
+        try:
+            real = model.score(frame_bgr)  # 自带 RetinaFace 检测+裁剪
+        except Exception:  # noqa: BLE001 运行时异常也 fail-open
+            self._spoof_cleared = True
+            return True
+        self._spoof_tries += 1
+        if real is not None:
+            if real < self._antispoof_thr:
+                self._finish(
+                    AuthResult(False, t("spoof_detected", self._lang, p=real), None, biometric=True)
+                )
+                return False
+            self._spoof_cleared = True  # 判真
+            return True
+        if self._spoof_tries >= self._antispoof_max:  # 连续没检到脸达上限 → fail-open
+            self._spoof_cleared = True
+            return True
+        return False  # 这帧没检到脸,继续采样
 
     def _finish(self, result: AuthResult) -> None:
         self.result = result

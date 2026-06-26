@@ -35,6 +35,16 @@ class _FakeAntispoof:
         return self._value
 
 
+class _SeqAntispoof:
+    """按调用次序返回 values 里的值(用尽后返回 None),模拟逐帧的检测结果序列。"""
+
+    def __init__(self, values):
+        self._values = list(values)
+
+    def score(self, frame_bgr):
+        return self._values.pop(0) if self._values else None
+
+
 def _patch_antispoof(monkeypatch, model):
     monkeypatch.setattr("face_hello.antispoof.get_antispoof", lambda: model)
 
@@ -137,4 +147,31 @@ def test_antispoof_pass_then_match(tmp_path, monkeypatch):
     s = _session(tmp_path, det, [("alice", unit_vec(1, 0))])
     s.feed(FRAME)
     assert s.result.success is True
+    assert s.result.name == "alice"
+
+
+def test_antispoof_single_miss_not_fail_open(tmp_path, monkeypatch):
+    # #4 加固:某帧没检到脸(None)不立刻 fail-open——继续采样,后续帧判假 → 拒。
+    # 堵住「回放视频在识别那帧恰好躲过 RetinaFace 就溜进识别」的空子。
+    _patch_antispoof(monkeypatch, _SeqAntispoof([None, 0.04]))
+    det = FakeDetector(face=FakeFace(embedding=unit_vec(1, 0)))
+    s = _session(tmp_path, det, [("alice", unit_vec(1, 0))])
+    s.feed(FRAME)
+    assert s.done is False  # 第一帧 None:尚无定论,既不放行也不解锁
+    s.feed(FRAME)
+    assert s.done and s.result.success is False
+    assert s.result.reason == t("spoof_detected", "zh", p=0.04)
+
+
+def test_antispoof_all_miss_fail_open_after_cap(tmp_path, monkeypatch):
+    # 连续没检到脸达上限 → fail-open 照常解锁(红线:不锁死用户),但要采满 N 帧而非单帧即放
+    _patch_antispoof(monkeypatch, _SeqAntispoof([None, None, None]))
+    det = FakeDetector(face=FakeFace(embedding=unit_vec(1, 0)))
+    s = _session(tmp_path, det, [("alice", unit_vec(1, 0))], antispoof_max_frames=3)
+    s.feed(FRAME)
+    assert s.done is False  # 第 1 帧
+    s.feed(FRAME)
+    assert s.done is False  # 第 2 帧,仍未达上限
+    s.feed(FRAME)          # 第 3 帧达上限 → fail-open → 比对解锁
+    assert s.done and s.result.success is True
     assert s.result.name == "alice"

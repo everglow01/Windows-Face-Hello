@@ -100,6 +100,9 @@ DEFAULTS = {
     "antispoof_enabled": True,
     # real 概率阈值,低于判翻拍而拒绝(可被 settings 覆盖;UI 暂不暴露,留作后续标定)。
     "antispoof_threshold": 0.55,
+    # 反欺骗最多采样帧数:某帧 RetinaFace 没检到脸(score=None)不立刻放行,继续采样直到
+    # 拿到判真/判假定论;连续 N 帧都检测不到才 fail-open(堵住单帧漏检就跳过反欺骗的空子)。
+    "antispoof_max_frames": 10,
 }
 
 

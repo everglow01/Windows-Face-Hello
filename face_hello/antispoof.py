@@ -1,7 +1,7 @@
 """被动反欺骗(RGB 活体):Silent-Face 单个 MiniFASNet,判屏幕翻拍 / 视频回放。
 
-在识别那一帧上跑一次推理(见 auth.AuthSession._recognize),挡录好「眨眼+转头」
-的视频回放——主动活体(眨眼/转头)挡不住这类攻击。
+在识别阶段逐帧跑推理(见 auth.AuthSession._antispoof_gate:最多采样 N 帧直到拿到
+判真/判假定论),挡录好「眨眼+转头」的视频回放——主动活体(眨眼/转头)挡不住这类攻击。
 
 关键:MiniFASNet 对裁剪框极敏感,必须用它配套的 RetinaFace 检测框(实测用
 InsightFace 的紧框会把真脸判成假)。因此本模块自带一个 RetinaFace(cv2.dnn caffe)
@@ -14,8 +14,9 @@ InsightFace 的紧框会把真脸判成假)。因此本模块自带一个 Retina
   - 输出:1×3 logits;softmax 后 index 1 = real。real ≥ 阈值 放行。
     (实测:真脸 real≈1.0,手机翻拍 real≈0.04,分得很开。)
 
-fail-open:任一模型文件缺失 / 加载失败 / 某帧检测不到脸 → 返回 None,认证侧跳过
-反欺骗、照常解锁(符合「绝不锁死用户、密码永远兜底」)。
+fail-open:任一模型文件缺失 / 加载失败 → 认证侧跳过反欺骗、照常解锁(符合「绝不锁死
+用户、密码永远兜底」)。某帧检测不到脸只返回 None(单帧无定论),认证侧会多采几帧,
+连续 N 帧都没检到才 fail-open(见 auth._antispoof_gate),而非单帧漏检就放行。
 """
 from __future__ import annotations
 
