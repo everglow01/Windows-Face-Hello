@@ -53,11 +53,15 @@ private:
 
     enum class AuthState { Idle, Running, Success, Failed };
 
+    // 锁屏刷脸最多尝试次数(第 1 次自动,其余靠按「→」重试);用尽退回密码。
+    static const int kMaxFaceAttempts = 3;
+
     void _StartAuthThread();
     void _StopAuthThread();
     void _AuthLoop();
     static DWORD WINAPI _AuthThreadProc(LPVOID param);
     void _SetStatus(PCWSTR text);  // 线程安全地更新状态字段并通知 LogonUI
+    void _OnScanFailed(const std::wstring& reason);  // 一次扫描失败:计数 + 刷新状态(含剩余次数)
     PCWSTR _L(PCWSTR zh, PCWSTR en) const { return _en ? en : zh; }  // 按 lang.txt 选中/英文
 
     LONG _cRef;
@@ -72,4 +76,5 @@ private:
     volatile LONG _stopFlag;       // 1 = 请求停止扫描线程
     AuthState _authState;
     std::wstring _authUser;        // 认证通过的账户名(供 GetSerialization)
+    int _failCount;               // 已失败的刷脸次数(达 kMaxFaceAttempts 后停止重试,退回密码)
 };

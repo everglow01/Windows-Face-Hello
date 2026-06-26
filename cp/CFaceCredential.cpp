@@ -173,7 +173,7 @@ static bool _IsEnglishUI()
 CFaceCredential::CFaceCredential()
     : _cRef(1), _cpus(CPUS_INVALID), _pProvider(nullptr),
       _pCredProvCredentialEvents(nullptr), _hAuthThread(nullptr),
-      _stopFlag(0), _authState(AuthState::Idle), _en(false)
+      _stopFlag(0), _authState(AuthState::Idle), _en(false), _failCount(0)
 {
     ZeroMemory(_rgFieldStrings, sizeof(_rgFieldStrings));
     InitializeCriticalSection(&_cs);
@@ -285,7 +285,8 @@ void CFaceCredential::_StartAuthThread()
     bool canStart = false;
     EnterCriticalSection(&_cs);
     if (_hAuthThread == nullptr &&
-        (_authState == AuthState::Idle || _authState == AuthState::Failed))
+        (_authState == AuthState::Idle || _authState == AuthState::Failed) &&
+        _failCount < kMaxFaceAttempts)  // 用尽 3 次后:自动起与手动重试都不再刷脸
     {
         _authState = AuthState::Running;
         _stopFlag = 0;
@@ -339,10 +340,7 @@ void CFaceCredential::_AuthLoop()
     std::wstring reason;
     if (!PipeClient::AuthStart(reason))
     {
-        _SetStatus((std::wstring(_L(L"认证服务不可用: ", L"Auth service unavailable: ")) + reason).c_str());
-        EnterCriticalSection(&_cs);
-        _authState = AuthState::Failed;
-        LeaveCriticalSection(&_cs);
+        _OnScanFailed(std::wstring(_L(L"认证服务不可用: ", L"Auth service unavailable: ")) + reason);
         return;
     }
 
@@ -356,10 +354,7 @@ void CFaceCredential::_AuthLoop()
         std::wstring instr, user, rsn;
         if (!PipeClient::AuthPoll(done, success, instr, user, rsn))
         {
-            _SetStatus(_L(L"与认证服务通信中断", L"Lost connection to auth service"));
-            EnterCriticalSection(&_cs);
-            _authState = AuthState::Failed;
-            LeaveCriticalSection(&_cs);
+            _OnScanFailed(_L(L"与认证服务通信中断", L"Lost connection to auth service"));
             return;
         }
         if (!done)
@@ -385,10 +380,7 @@ void CFaceCredential::_AuthLoop()
         }
         else
         {
-            _SetStatus((std::wstring(_L(L"刷脸未通过: ", L"Face check failed: ")) + rsn).c_str());
-            EnterCriticalSection(&_cs);
-            _authState = AuthState::Failed;
-            LeaveCriticalSection(&_cs);
+            _OnScanFailed(std::wstring(_L(L"刷脸未通过: ", L"Face check failed: ")) + rsn);
         }
         return;
     }
@@ -406,6 +398,36 @@ void CFaceCredential::_SetStatus(PCWSTR text)
         _pCredProvCredentialEvents->SetFieldString(this, FFI_STATUS, _rgFieldStrings[FFI_STATUS]);
     }
     LeaveCriticalSection(&_cs);
+}
+
+// 一次刷脸扫描失败:计数 +1、置 Failed,据剩余次数刷新状态文字。
+// 任何失败都算(置信度低/反欺骗/活体/不匹配,或服务不可用/通信中断)。
+// 文案里的「→」是 LogonUI 渲染的提交按钮箭头;工程用 /utf-8 编译,直接写中文与 → 均可。
+void CFaceCredential::_OnScanFailed(const std::wstring& reason)
+{
+    int remaining;
+    EnterCriticalSection(&_cs);
+    ++_failCount;
+    _authState = AuthState::Failed;
+    remaining = kMaxFaceAttempts - _failCount;
+    LeaveCriticalSection(&_cs);
+
+    std::wstring msg;
+    if (remaining > 0)
+    {
+        // 例:"刷脸未通过: 相似度低(按 → 重试,剩 2 次)"
+        msg = reason;
+        msg += _L(L"(按 → 重试,剩 ", L" (press → to retry, ");
+        msg += std::to_wstring(remaining);
+        msg += _L(L" 次)", L" left)");
+    }
+    else
+    {
+        msg = _L(L"刷脸已失败 ", L"Face unlock failed ");
+        msg += std::to_wstring(kMaxFaceAttempts);
+        msg += _L(L" 次,请改用密码登录", L" times — use your password");
+    }
+    _SetStatus(msg.c_str());
 }
 
 IFACEMETHODIMP CFaceCredential::GetFieldState(
@@ -490,7 +512,19 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
     LeaveCriticalSection(&_cs);
     if (!ready)
     {
-        return S_OK;  // 还没识别通过,什么都不提交
+        // 用户按了「→」提交按钮但还没识别成功:当作"再试一次"。
+        // 还有机会且当前没有扫描在跑 → 重启刷脸;否则什么都不做——
+        // 状态文字已由 _OnScanFailed 设成「(按 → 重试,剩 N 次)」或用尽时的「请改用密码登录」,
+        // 扫描进行中(Running)则正由 _AuthLoop 刷活体提示,都不该被覆盖。
+        bool canRetry;
+        EnterCriticalSection(&_cs);
+        canRetry = (_failCount < kMaxFaceAttempts && _authState != AuthState::Running);
+        LeaveCriticalSection(&_cs);
+        if (canRetry)
+        {
+            _StartAuthThread();  // 发起下一次刷脸
+        }
+        return S_OK;  // 仍 NOT_FINISHED,不提交凭据
     }
     // 这次自动提交已消费:复位状态并清掉自动登录标志,避免失败后死循环重试。
     EnterCriticalSection(&_cs);
