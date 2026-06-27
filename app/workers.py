@@ -12,15 +12,28 @@ from face_hello.camera import Camera
 from face_hello.detector import FaceDetector
 from face_hello.enroll import Enroller
 from face_hello.i18n import tr
+from face_hello.matcher import best_match
 from face_hello.store import FaceStore
 
 _FRAME_INTERVAL = 0.03  # 限制循环频率,约 30fps 上限
+
+# 引导预览框颜色(BGR):合格=绿、偏小/偏暗=黄
+_BOX_OK = (0, 200, 0)
+_BOX_BAD = (0, 180, 255)
 
 
 def bgr_to_qimage(frame) -> QImage:
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     h, w, ch = rgb.shape
     return QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
+
+
+def _draw_face_box(frame, face, color) -> None:
+    """在帧上画人脸框 + ASCII 的 det_score(中文不进 cv2,见仓库中文路径坑)。"""
+    x1, y1, x2, y2 = (int(v) for v in face.bbox)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+    cv2.putText(frame, f"{face.det_score:.2f}", (x1, max(y1 - 8, 14)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
 
 class WarmupWorker(QThread):
@@ -64,13 +77,14 @@ class WarmupWorker(QThread):
 
 
 class EnrollWorker(QThread):
-    """录入:先快速拍 N 张原始帧(预览流畅),再统一处理提特征。"""
+    """录入:逐帧检测做实时引导,只在间隔到点且人脸合格时采纳一帧。"""
 
-    preview = Signal(QImage)
-    progress = Signal(int, int)       # captured, target
-    status = Signal(str)              # 阶段文案
-    finished_ok = Signal(object)      # np.ndarray embedding
+    preview = Signal(QImage)              # 帧上已画人脸框
+    guidance = Signal(str, int, int)      # (reason_key, collected, target)
+    finished_ok = Signal(object)          # np.ndarray embedding
     failed = Signal(str)
+
+    _TIMEOUT_S = 60.0  # 总时长上限:迟迟采不到足够人脸就放弃,不无限等
 
     def __init__(self, detector: FaceDetector, samples: int, capture_interval: float = 0.4,
                  camera_index: int = 0):
@@ -86,42 +100,84 @@ class EnrollWorker(QThread):
 
     def run(self) -> None:
         try:
-            frames = self._capture()
+            enr = Enroller(self.detector, self.samples)
+            deadline = time.monotonic() + self._TIMEOUT_S
+            next_cap = time.monotonic()
+            with Camera(self.camera_index) as cam:
+                while not self._stop and not enr.done:
+                    if time.monotonic() > deadline:
+                        self.failed.emit(tr("enroll_timeout"))
+                        return
+                    frame = cam.read()
+                    face = self.detector.largest_face(frame)
+                    if face is None:
+                        key = "guidance_no_face"
+                    else:
+                        ok, reason = enr.evaluate(face, frame.shape)
+                        if not ok:
+                            key = "guidance_" + reason  # too_small / low_score
+                            _draw_face_box(frame, face, _BOX_BAD)
+                        else:
+                            _draw_face_box(frame, face, _BOX_OK)
+                            now = time.monotonic()
+                            if now >= next_cap:
+                                enr.add(face)
+                                next_cap = now + self.interval
+                                key = "guidance_captured"
+                            else:
+                                key = "guidance_hold_still"
+                    self.preview.emit(bgr_to_qimage(frame))
+                    self.guidance.emit(key, enr.collected, self.samples)
+                    time.sleep(_FRAME_INTERVAL)
             if self._stop:
                 self.failed.emit(tr("cancelled"))
                 return
-            self._process(frames)
+            self.finished_ok.emit(enr.result())
         except Exception as e:  # noqa: BLE001 原型阶段直接上抛文案
             self.failed.emit(str(e))
 
-    def _capture(self) -> list:
-        """阶段一:只采集原始帧,不做检测,保证预览流畅。"""
-        frames: list = []
-        with Camera(self.camera_index) as cam:
-            self.status.emit(tr("capture_start"))
-            next_cap = time.monotonic()
-            while not self._stop and len(frames) < self.samples:
-                frame = cam.read()
-                self.preview.emit(bgr_to_qimage(frame))
-                now = time.monotonic()
-                if now >= next_cap:
-                    frames.append(frame.copy())
-                    self.progress.emit(len(frames), self.samples)
-                    next_cap = now + self.interval
-                time.sleep(_FRAME_INTERVAL)
-        return frames
 
-    def _process(self, frames: list) -> None:
-        """阶段二:统一对已拍帧提特征、取平均。"""
-        self.status.emit(tr("processing"))
-        enr = Enroller(self.detector, self.samples)
-        for f in frames:
-            enr.feed(f)
-        need = max(3, self.samples // 2)
-        if enr.collected < need:
-            self.failed.emit(tr("too_few_frames", collected=enr.collected, total=len(frames)))
-            return
-        self.finished_ok.emit(enr.result())
+class SimilarityMonitorWorker(QThread):
+    """实时比对(诊断用):逐帧算与录入模板的最佳余弦相似度,喂给直方图。
+
+    刻意不跑活体/反欺骗、不产出解锁结果——只是看相似度分布,绝不接入真实解锁。
+    """
+
+    preview = Signal(QImage)          # 帧上已画人脸框 + 相似度数字
+    sample = Signal(float)            # 当前帧最佳相似度;无脸发 -1.0
+    failed = Signal(str)
+
+    def __init__(self, detector: FaceDetector, store: FaceStore, camera_index: int = 0):
+        super().__init__()
+        self.detector = detector
+        self.store = store
+        self.camera_index = camera_index
+        self._stop = False
+
+    def stop(self) -> None:
+        self._stop = True
+
+    def run(self) -> None:
+        try:
+            gallery = [p.embedding for p in self.store.list_profiles()]
+            with Camera(self.camera_index) as cam:
+                while not self._stop:
+                    frame = cam.read()
+                    face = self.detector.largest_face(frame)
+                    if face is None:
+                        self.sample.emit(-1.0)
+                    else:
+                        _, sim = best_match(face.embedding, gallery)
+                        color = _BOX_OK if sim >= 0 else _BOX_BAD
+                        x1, y1, x2, y2 = (int(v) for v in face.bbox)
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                        cv2.putText(frame, f"{sim:.3f}", (x1, max(y1 - 8, 14)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                        self.sample.emit(float(sim))
+                    self.preview.emit(bgr_to_qimage(frame))
+                    time.sleep(_FRAME_INTERVAL)
+        except Exception as e:  # noqa: BLE001
+            self.failed.emit(str(e))
 
 
 class AuthWorker(QThread):

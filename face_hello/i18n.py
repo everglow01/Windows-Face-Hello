@@ -45,7 +45,6 @@ _CATALOG: dict[str, dict[str, str]] = {
         "username_label": "用户名:",
         "enter_username": "请输入用户名",
         "opening_camera": "正在打开摄像头…",
-        "capturing": "拍摄中 {cur}/{tot} …",
         "enrolled_ok": "✅ 已录入「{name}」",
         "enroll_success": "用户「{name}」录入成功",
         "failed_fmt": "❌ 失败:{msg}",
@@ -139,9 +138,20 @@ _CATALOG: dict[str, dict[str, str]] = {
         "expired_body": "以下用户人脸已超过有效期,建议重新录入:\n",
         # --- GUI:后台线程(workers.py)---
         "cancelled": "已取消",
-        "capture_start": "正对镜头,开始拍摄…",
-        "processing": "处理中…",
-        "too_few_frames": "有效人脸帧太少({collected}/{total})——请正对镜头、光线充足后重试",
+        "enroll_timeout": "超时:未采到足够人脸,请正对镜头、光线充足后重试",
+        # --- GUI:录入实时引导 ---
+        "guidance_no_face": "未检测到人脸,请正对摄像头",
+        "guidance_too_small": "请靠近一些",
+        "guidance_low_score": "请调整光线、正对镜头",
+        "guidance_hold_still": "很好,保持不动",
+        "guidance_captured": "已采集",
+        # --- GUI:实时相似度直方图 ---
+        "live_compare": "实时比对",
+        "stop_compare": "停止比对",
+        "hist_title": "实时相似度分布",
+        "hist_threshold": "阈值 {thr:.2f}",
+        "hist_current": "当前 {sim:.3f}",
+        "hist_no_face": "未检测到人脸",
     },
     "en": {
         # --- core: liveness prompts (shown in console and on the lock-screen tile) ---
@@ -177,7 +187,6 @@ _CATALOG: dict[str, dict[str, str]] = {
         "username_label": "Username:",
         "enter_username": "Please enter a username",
         "opening_camera": "Opening the camera…",
-        "capturing": "Capturing {cur}/{tot} …",
         "enrolled_ok": "✅ Enrolled “{name}”",
         "enroll_success": "User “{name}” enrolled successfully",
         "failed_fmt": "❌ Failed: {msg}",
@@ -271,9 +280,20 @@ _CATALOG: dict[str, dict[str, str]] = {
         "expired_body": "The enrolled face for these users has expired; re-enrollment is recommended:\n",
         # --- GUI: background workers ---
         "cancelled": "Cancelled",
-        "capture_start": "Face the camera; capturing…",
-        "processing": "Processing…",
-        "too_few_frames": "Too few valid face frames ({collected}/{total}) — face the camera in good light and retry",
+        "enroll_timeout": "Timed out: couldn't capture enough faces — face the camera in good light and retry",
+        # --- GUI: enroll live guidance ---
+        "guidance_no_face": "No face detected — face the camera",
+        "guidance_too_small": "Move closer",
+        "guidance_low_score": "Adjust lighting and face the camera",
+        "guidance_hold_still": "Good — hold still",
+        "guidance_captured": "Captured",
+        # --- GUI: real-time similarity histogram ---
+        "live_compare": "Live compare",
+        "stop_compare": "Stop compare",
+        "hist_title": "Live similarity distribution",
+        "hist_threshold": "Threshold {thr:.2f}",
+        "hist_current": "Now {sim:.3f}",
+        "hist_no_face": "No face detected",
     },
 }
 

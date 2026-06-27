@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import sys
+from collections import deque
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QPolygon
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QTableWidget,
@@ -31,7 +33,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.workers import AuthWorker, CameraTestWorker, EnrollWorker, WarmupWorker
+from app.workers import (
+    AuthWorker,
+    CameraTestWorker,
+    EnrollWorker,
+    SimilarityMonitorWorker,
+    WarmupWorker,
+)
 from face_hello import config, cred_vault
 from face_hello.auth import AuthResult
 from face_hello.detector import FaceDetector
@@ -233,6 +241,10 @@ class EnrollTab(QWidget):
         self.preview = _preview_label()
         self.status = QLabel(tr("enroll_hint"))
         self.status.setObjectName("hint")
+        self.progress_bar = QProgressBar()  # 只在采到合格帧时推进,给实时反馈
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setRange(0, self.store.get_settings()["enroll_samples"])
+        self.progress_bar.setValue(0)
 
         # 已录入用户管理(原在「设置与安全」页,挪到此处:录入与管理同处一页)
         self.table = QTableWidget(0, 4)
@@ -262,6 +274,7 @@ class EnrollTab(QWidget):
         layout.addLayout(top)
         layout.addWidget(self.preview, alignment=Qt.AlignCenter)
         layout.addWidget(self.status)
+        layout.addWidget(self.progress_bar)
         layout.addSpacing(8)
         layout.addWidget(users_title)
         layout.addWidget(self.table)
@@ -278,15 +291,22 @@ class EnrollTab(QWidget):
         samples = s["enroll_samples"]
         self.start_btn.setEnabled(False)
         self.status.setText(tr("opening_camera"))
+        self.progress_bar.setRange(0, samples)
+        self.progress_bar.setValue(0)
         self.worker = EnrollWorker(self.detector, samples, camera_index=s.get("camera_index", 0))
         self.worker.preview.connect(lambda img: _show_frame(self.preview, img))
-        self.worker.status.connect(self.status.setText)
-        self.worker.progress.connect(
-            lambda c, n: self.status.setText(tr("capturing", cur=c, tot=n))
-        )
+        self.worker.guidance.connect(self._on_guidance)
         self.worker.finished_ok.connect(self._on_done)
         self.worker.failed.connect(self._on_fail)
         self.worker.start()
+
+    def _on_guidance(self, key: str, collected: int, target: int) -> None:
+        # 合格/采集态附带计数(进度条已直观显示,文字再点一下进度);其余为静态引导短语
+        text = tr(key)
+        if key in ("guidance_hold_still", "guidance_captured"):
+            text = f"{text} ({collected}/{target})"
+        self.status.setText(text)
+        self.progress_bar.setValue(collected)
 
     def _on_done(self, embedding) -> None:
         name = self.name_edit.text().strip()
@@ -321,33 +341,113 @@ class EnrollTab(QWidget):
             self.refresh()
 
 
+class SimilarityHistogram(QWidget):
+    """自绘滚动相似度分布直方图(无新依赖,沿用 _make_arrow 的 QPainter 风格)。
+
+    喂入逐帧相似度,按 [0,1] 分桶画柱(≥阈值绿、<阈值灰),叠阈值竖线 + 当前值。
+    """
+
+    _BINS = 20        # [0,1] 分 20 桶,每桶 0.05
+    _WINDOW = 150     # 最近 ~150 帧(≈5s@30fps)
+
+    def __init__(self):
+        super().__init__()
+        self._samples: deque[float] = deque(maxlen=self._WINDOW)
+        self._threshold = 0.5
+        self._current: float | None = None
+        self.setMinimumHeight(150)
+
+    def set_threshold(self, thr: float) -> None:
+        self._threshold = float(thr)
+        self.update()
+
+    def clear(self) -> None:
+        self._samples.clear()
+        self._current = None
+        self.update()
+
+    def add_sample(self, sim: float) -> None:
+        if sim < 0:                 # 无脸:只更新当前态,不计入分布
+            self._current = None
+        else:
+            self._current = sim
+            self._samples.append(sim)
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        w, h = self.width(), self.height()
+        p.fillRect(0, 0, w, h, QColor("#FAFAFA"))
+        p.setPen(QColor("#E5E5E5"))
+        p.drawRect(0, 0, w - 1, h - 1)
+
+        pad_l, pad_r, pad_t, pad_b = 8, 8, 22, 18
+        plot_w, plot_h = w - pad_l - pad_r, h - pad_t - pad_b
+
+        counts = [0] * self._BINS
+        for s in self._samples:
+            counts[min(self._BINS - 1, max(0, int(s * self._BINS)))] += 1
+        peak = max(counts) if counts else 0
+
+        bar_w = plot_w / self._BINS
+        for i, c in enumerate(counts):
+            if c == 0 or peak == 0:
+                continue
+            bar_h = (c / peak) * plot_h
+            x = pad_l + i * bar_w
+            y = pad_t + (plot_h - bar_h)
+            center = (i + 0.5) / self._BINS
+            color = QColor(SUCCESS) if center >= self._threshold else QColor("#B0B0B0")
+            p.fillRect(int(x) + 1, int(y), max(1, int(bar_w) - 1), int(bar_h), color)
+
+        tx = pad_l + self._threshold * plot_w
+        p.setPen(QColor(DANGER))
+        p.drawLine(int(tx), pad_t, int(tx), pad_t + plot_h)
+
+        p.setPen(QColor("#5A5A5A"))
+        p.drawText(pad_l, 14, tr("hist_title"))
+        cur = tr("hist_current", sim=self._current) if self._current is not None else tr("hist_no_face")
+        p.drawText(pad_l, h - 5, f"{cur}    {tr('hist_threshold', thr=self._threshold)}")
+        p.end()
+
+
 class AuthTab(QWidget):
     def __init__(self, detector: FaceDetector, store: FaceStore):
         super().__init__()
         self.detector = detector
         self.store = store
         self.worker: AuthWorker | None = None
+        self.monitor: SimilarityMonitorWorker | None = None
 
         self.start_btn = QPushButton(tr("start_test_unlock"))
         self.start_btn.setObjectName("accent")
         self.start_btn.clicked.connect(self._start)
+        self.monitor_btn = QPushButton(tr("live_compare"))
+        self.monitor_btn.clicked.connect(self._toggle_monitor)
         self.preview = _preview_label()
         self.instruction = QLabel(tr("auth_idle_hint"))
         self.instruction.setAlignment(Qt.AlignCenter)
         self.instruction.setStyleSheet(_INSTR_BASE)
+        self.histogram = SimilarityHistogram()
+
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(self.start_btn, 1)
+        btn_row.addWidget(self.monitor_btn)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(12)
-        layout.addWidget(self.start_btn)
+        layout.addLayout(btn_row)
         layout.addWidget(self.preview, alignment=Qt.AlignCenter)
         layout.addWidget(self.instruction)
+        layout.addWidget(self.histogram)
 
     def _start(self) -> None:
         if self.store.is_empty():
             QMessageBox.warning(self, tr("tip"), tr("no_enroll_warn"))
             return
         self.start_btn.setEnabled(False)
+        self.monitor_btn.setEnabled(False)
         self.instruction.setStyleSheet(_INSTR_BASE)
         self.instruction.setText(tr("preparing"))
         self.worker = AuthWorker(
@@ -362,6 +462,7 @@ class AuthTab(QWidget):
 
     def _on_result(self, result: AuthResult) -> None:
         self.start_btn.setEnabled(True)
+        self.monitor_btn.setEnabled(True)
         if result.success:
             self.instruction.setStyleSheet(_INSTR_BASE + f"color:{SUCCESS};")
             self.instruction.setText(tr("unlock_pass", name=result.name, sim=result.similarity))
@@ -371,6 +472,44 @@ class AuthTab(QWidget):
 
     def _on_fail(self, msg: str) -> None:
         self.start_btn.setEnabled(True)
+        self.monitor_btn.setEnabled(True)
+        self.instruction.setText(tr("error_fmt", msg=msg))
+
+    # --- 实时比对(诊断:逐帧相似度直方图,不跑活体/反欺骗,不解锁)---
+    def _toggle_monitor(self) -> None:
+        if self.monitor is not None:
+            self.stop_monitor()
+            return
+        if self.store.is_empty():
+            QMessageBox.warning(self, tr("tip"), tr("no_enroll_warn"))
+            return
+        self.start_btn.setEnabled(False)
+        self.monitor_btn.setText(tr("stop_compare"))
+        self.instruction.setStyleSheet(_INSTR_BASE)
+        self.instruction.setText(tr("hist_title"))
+        self.histogram.set_threshold(self.store.get_settings()["match_threshold"])
+        self.histogram.clear()
+        self.monitor = SimilarityMonitorWorker(
+            self.detector, self.store,
+            camera_index=self.store.get_settings().get("camera_index", 0),
+        )
+        self.monitor.preview.connect(lambda img: _show_frame(self.preview, img))
+        self.monitor.sample.connect(self.histogram.add_sample)
+        self.monitor.failed.connect(self._on_monitor_fail)
+        self.monitor.start()
+
+    def stop_monitor(self) -> None:
+        if self.monitor is None:
+            return
+        self.monitor.stop()
+        self.monitor.wait()
+        self.monitor = None
+        self.monitor_btn.setText(tr("live_compare"))
+        self.monitor_btn.setEnabled(True)
+        self.start_btn.setEnabled(True)
+
+    def _on_monitor_fail(self, msg: str) -> None:
+        self.stop_monitor()
         self.instruction.setText(tr("error_fmt", msg=msg))
 
 
@@ -782,6 +921,10 @@ class MainWindow(QWidget):
                 self, tr("expired_title"),
                 tr("expired_body") + tr("list_sep").join(expired),
             )
+
+    def closeEvent(self, event) -> None:
+        self.auth_tab.stop_monitor()  # 关窗时停掉实时比对,释放摄像头
+        super().closeEvent(event)
 
 
 def main() -> None:

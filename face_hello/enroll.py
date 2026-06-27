@@ -17,16 +17,29 @@ class Enroller:
         self.target = target_samples
         self._embeddings: list[np.ndarray] = []
 
+    def evaluate(self, face: DetectedFace, frame_shape) -> tuple[bool, str]:
+        """纯判定:该脸是否合格作录入样本。返回 (ok, reason)，
+        reason ∈ {"ok","too_small","low_score"}。阈值集中此处。"""
+        if face.det_score < _MIN_DET_SCORE:
+            return False, "low_score"
+        h, w = frame_shape[:2]
+        if face.area < _MIN_FACE_FRAC * (w * h):
+            return False, "too_small"
+        return True, "ok"
+
+    def add(self, face: DetectedFace) -> None:
+        """采纳一帧合格人脸的特征。"""
+        self._embeddings.append(face.embedding)
+
     def feed(self, frame_bgr) -> tuple[bool, DetectedFace | None]:
         """返回 (本帧是否被采纳, 检到的最大人脸或 None)。"""
         face = self.detector.largest_face(frame_bgr)
         if face is None:
             return False, None
-        h, w = frame_bgr.shape[:2]
-        if face.det_score < _MIN_DET_SCORE or face.area < _MIN_FACE_FRAC * (w * h):
-            return False, face
-        self._embeddings.append(face.embedding)
-        return True, face
+        ok, _ = self.evaluate(face, frame_bgr.shape)
+        if ok:
+            self.add(face)
+        return ok, face
 
     @property
     def collected(self) -> int:
