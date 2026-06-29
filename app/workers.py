@@ -28,9 +28,20 @@ def bgr_to_qimage(frame) -> QImage:
     return QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
 
 
-def _draw_face_box(frame, face, color) -> None:
-    """在帧上画人脸框 + ASCII 的 det_score(中文不进 cv2,见仓库中文路径坑)。"""
+def _mirror(frame):
+    """水平翻转成自拍 / 镜子式预览。**只用于显示**:检测 / 识别 / 活体仍跑原始帧,
+    否则 GUI 录入的模板会相对锁屏服务(不翻转)左右镜像,降低匹配度。"""
+    return cv2.flip(frame, 1)
+
+
+def _draw_face_box(frame, face, color, mirror_width=None) -> None:
+    """在帧上画人脸框 + ASCII 的 det_score(中文不进 cv2,见仓库中文路径坑)。
+
+    mirror_width 给定时,把 bbox 的 x 翻到镜像帧坐标(预览已镜像,框 / 字才对得上;
+    字本身由 putText 正常绘制,可读)。"""
     x1, y1, x2, y2 = (int(v) for v in face.bbox)
+    if mirror_width is not None:
+        x1, x2 = mirror_width - x2, mirror_width - x1
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
     cv2.putText(frame, f"{face.det_score:.2f}", (x1, max(y1 - 8, 14)),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
@@ -109,16 +120,18 @@ class EnrollWorker(QThread):
                         self.failed.emit(tr("enroll_timeout"))
                         return
                     frame = cam.read()
-                    face = self.detector.largest_face(frame)
+                    face = self.detector.largest_face(frame)  # 识别用原始帧
+                    disp = _mirror(frame)                     # 预览镜像
+                    w = frame.shape[1]
                     if face is None:
                         key = "guidance_no_face"
                     else:
                         ok, reason = enr.evaluate(face, frame.shape)
                         if not ok:
                             key = "guidance_" + reason  # too_small / low_score
-                            _draw_face_box(frame, face, _BOX_BAD)
+                            _draw_face_box(disp, face, _BOX_BAD, mirror_width=w)
                         else:
-                            _draw_face_box(frame, face, _BOX_OK)
+                            _draw_face_box(disp, face, _BOX_OK, mirror_width=w)
                             now = time.monotonic()
                             if now >= next_cap:
                                 enr.add(face)
@@ -126,7 +139,7 @@ class EnrollWorker(QThread):
                                 key = "guidance_captured"
                             else:
                                 key = "guidance_hold_still"
-                    self.preview.emit(bgr_to_qimage(frame))
+                    self.preview.emit(bgr_to_qimage(disp))
                     self.guidance.emit(key, enr.collected, self.samples)
                     time.sleep(_FRAME_INTERVAL)
             if self._stop:
@@ -165,18 +178,21 @@ class SimilarityMonitorWorker(QThread):
             with Camera(self.camera_index) as cam:
                 while not self._stop:
                     frame = cam.read()
-                    face = self.detector.largest_face(frame)
+                    face = self.detector.largest_face(frame)  # 比对用原始帧
+                    disp = _mirror(frame)                     # 预览镜像
                     if face is None:
                         self.sample.emit(-1.0)
                     else:
                         _, sim = best_match(face.embedding, gallery)
                         color = _BOX_OK if sim >= self.threshold else _BOX_BAD
+                        w = frame.shape[1]
                         x1, y1, x2, y2 = (int(v) for v in face.bbox)
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                        cv2.putText(frame, f"{sim:.3f}", (x1, max(y1 - 8, 14)),
+                        x1, x2 = w - x2, w - x1  # 翻到镜像帧坐标
+                        cv2.rectangle(disp, (x1, y1), (x2, y2), color, 2)
+                        cv2.putText(disp, f"{sim:.3f}", (x1, max(y1 - 8, 14)),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                         self.sample.emit(float(sim))
-                    self.preview.emit(bgr_to_qimage(frame))
+                    self.preview.emit(bgr_to_qimage(disp))
                     time.sleep(_FRAME_INTERVAL)
         except Exception as e:  # noqa: BLE001
             self.failed.emit(str(e))
@@ -207,8 +223,8 @@ class AuthWorker(QThread):
             with Camera(self.camera_index) as cam:
                 while not self._stop and not session.done:
                     frame = cam.read()
-                    session.feed(frame)
-                    self.preview.emit(bgr_to_qimage(frame))
+                    session.feed(frame)              # 活体 / 识别用原始帧
+                    self.preview.emit(bgr_to_qimage(_mirror(frame)))  # 预览镜像
                     if session.instruction != last_instr:
                         last_instr = session.instruction
                         self.instruction.emit(last_instr)
@@ -235,7 +251,7 @@ class CameraTestWorker(QThread):
         cam = Camera(self.index)
         try:
             cam.open(timeout_s=3.0)
-            self.ok.emit(bgr_to_qimage(cam.read()))
+            self.ok.emit(bgr_to_qimage(_mirror(cam.read())))
         except Exception as e:  # noqa: BLE001 打不开就回失败,UI 提示换索引
             self.failed.emit(str(e))
         finally:
