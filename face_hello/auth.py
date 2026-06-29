@@ -4,6 +4,7 @@ AuthSession 为逐帧状态机,供 Qt(QTimer/线程)或 CLI 循环驱动。
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from .detector import FaceDetector
@@ -34,6 +35,11 @@ class AuthSession:
         self._gallery = store.embeddings()
         self._profiles = store.list_profiles()
         self.result: AuthResult | None = None
+        # 识别内核计时累计(诊断:把反欺骗/提特征/比对从「活体+取帧+用户动作」里拆出来,单位秒)
+        self.t_antispoof = 0.0  # 反欺骗 score()
+        self.t_detect = 0.0     # 识别帧 detector 提特征
+        self.t_match = 0.0      # best_match 比对(应为微秒级,与模板数无关)
+        self.n_faces = 0        # 识别帧检到的人脸数(提特征 ∝ 此值:每张脸都算了一遍特征)
         # 被动反欺骗(独立于主动活体;关了活体也照样守门)。模型懒加载在 _antispoof_gate。
         self._antispoof_on = self.settings.get("antispoof_enabled", True)
         self._antispoof_thr = self.settings.get("antispoof_threshold", 0.55)
@@ -86,14 +92,23 @@ class AuthSession:
         # 反欺骗门先行:翻拍/假体在比对前就拒掉。模型在则需逐帧采样到判定才放行
         # (避免单帧没检到脸就 fail-open);判假直接 _finish,本帧不进识别。
         if self._antispoof_on and not self._spoof_cleared:
-            if not self._antispoof_gate(frame_bgr):
+            _t = time.perf_counter()
+            gate = self._antispoof_gate(frame_bgr)
+            self.t_antispoof += time.perf_counter() - _t
+            if not gate:
                 return
-        face = self.detector.largest_face(frame_bgr)
-        if face is None:
+        _t = time.perf_counter()
+        faces = self.detector.detect(frame_bgr)
+        self.t_detect += time.perf_counter() - _t
+        self.n_faces = len(faces)
+        if not faces:
             self._finish(AuthResult(False, t("no_face", self._lang), biometric=True))
             return
+        face = max(faces, key=lambda f: f.area)
         names = [p.name for p in self._profiles]
+        _t = time.perf_counter()
         idx, sim, margin = best_match_with_margin(face.embedding, self._gallery, names)
+        self.t_match += time.perf_counter() - _t
         thr = self.settings["match_threshold"]
         min_margin = self.settings.get("match_margin", 0.0)
         if idx < 0 or sim < thr:
@@ -168,7 +183,6 @@ def authenticate_blocking(
     tracker:服务的长寿命共享 FaceMeshTracker;传入则复用(不在会话结束时关),None 则各会话自建。
     """
     import logging
-    import time
 
     from .camera import Camera
 
@@ -189,9 +203,18 @@ def authenticate_blocking(
                 on_instruction(session.instruction)
     finally:
         cam.release()
+    _recog_wall = time.perf_counter() - _t_cam
+    _kernel = session.t_antispoof + session.t_detect + session.t_match
     log.info(
         "[计时] 解锁:总 %.2fs(摄像头打开 %.2fs + 活体&识别 %.2fs)",
-        time.perf_counter() - _t0, _t_cam - _t0, time.perf_counter() - _t_cam,
+        time.perf_counter() - _t0, _t_cam - _t0, _recog_wall,
+    )
+    # 把识别内核从「活体+取帧+用户动作」里拆出来:比对几乎恒为 0,与模板数无关
+    log.info(
+        "[计时] 解锁明细:识别内核 %.0fms(反欺骗 %.0f + 提特征 %.0f[检到%d张脸] + 比对 %.2f),"
+        "其余(活体+取帧+用户动作)≈ %.2fs",
+        _kernel * 1000, session.t_antispoof * 1000, session.t_detect * 1000, session.n_faces,
+        session.t_match * 1000, max(0.0, _recog_wall - _kernel),
     )
     if session.result is not None:
         return session.result

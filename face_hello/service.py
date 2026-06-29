@@ -294,6 +294,37 @@ def _serve_one(detector: FaceDetector, store: FaceStore) -> None:
         win32file.CloseHandle(pipe)
 
 
+def _boost_cpu_scheduling() -> None:
+    """让后台 / session-0 服务进程拿到正常 CPU,避免识别推理被降频拖慢数倍。
+
+    实测:同一推理在前台控制台 ~700ms,在服务进程里 ~2450ms(3.5×)。后台进程会被
+    Windows 的 EcoQoS「执行速度节流」压低主频,且拿不到前台优先级提升。这里:
+      ① 退出 EcoQoS 执行速度节流(ControlMask=EXEC_SPEED, StateMask=0);
+      ② 进程优先级提到 ABOVE_NORMAL。
+    纯 CPU 调度提示,失败不致命(老系统无此 API)。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        k = ctypes.windll.kernel32
+
+        class _PPTS(ctypes.Structure):
+            _fields_ = [("Version", wintypes.ULONG), ("ControlMask", wintypes.ULONG),
+                        ("StateMask", wintypes.ULONG)]
+
+        k.SetProcessInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        _EXEC_SPEED = 0x1
+        _ProcessPowerThrottling = 4
+        st = _PPTS(1, _EXEC_SPEED, 0)  # StateMask=0 → 关闭节流
+        ok1 = k.SetProcessInformation(k.GetCurrentProcess(), _ProcessPowerThrottling,
+                                      ctypes.byref(st), ctypes.sizeof(st))
+        ok2 = k.SetPriorityClass(k.GetCurrentProcess(), 0x8000)  # ABOVE_NORMAL_PRIORITY_CLASS
+        _log.info("[CPU] 退出 EcoQoS 节流 ok=%s,优先级 ABOVE_NORMAL ok=%s", bool(ok1), bool(ok2))
+    except Exception:  # noqa: BLE001
+        _log.exception("[CPU] 调度提升失败(不致命)")
+
+
 def serve(should_continue=None) -> None:
     """常驻服务主循环。
 
@@ -302,6 +333,7 @@ def serve(should_continue=None) -> None:
     """
     if not _log.handlers:  # 直接调 serve() 时兜底配置(前台)
         setup_logging(console=True)
+    _boost_cpu_scheduling()
     if should_continue is None:
         should_continue = lambda: True  # noqa: E731
     _log.info("FaceHello 服务:加载模型中…")

@@ -25,18 +25,27 @@ def unit_vec(*coords: float) -> np.ndarray:
 
 @dataclass
 class FakeFace:
-    """detector.largest_face 的最小替身:_recognize 只读 .embedding(.bbox 备用)。"""
+    """detector 输出的最小替身:_recognize 读 .embedding 与 .area(挑最大脸),.bbox 备用。"""
 
     embedding: np.ndarray
     bbox: tuple = (0, 0, 10, 10)
 
+    @property
+    def area(self) -> float:
+        x1, y1, x2, y2 = self.bbox
+        return float(max(0, x2 - x1) * max(0, y2 - y1))
+
 
 @dataclass
 class FakeDetector:
-    """largest_face 返回预设的 face(或 None 模拟没检到脸)。"""
+    """detect 返回检到的脸列表、largest_face 返回最大脸(预设 face 或 None 模拟没检到)。"""
 
     face: FakeFace | None = None
     calls: int = field(default=0)
+
+    def detect(self, frame_bgr):
+        self.calls += 1
+        return [self.face] if self.face is not None else []
 
     def largest_face(self, frame_bgr):
         self.calls += 1
