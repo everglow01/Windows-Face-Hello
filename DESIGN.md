@@ -24,9 +24,10 @@ This is the **design & decision record**: why it's built this way, where it stan
 | Size trimming: PySide6-Essentials + buffalo_l pruning → `setup.exe` ~322 MB | ✅ done |
 | GitHub Release automation (push a tag → CI builds setup.exe) | ✅ done |
 | **5-4 hardening: pipe ACL (SYSTEM+Admins), failure fallback / lockout, better logging, dev-only `authenticate`** | ✅ done (Python side; one CP-side pipe-PID check deferred) |
-| **Code signing (Authenticode / EV cert to clear SmartScreen)** | ⏳ tbd |
+| **Code signing: pipeline in place (self-signed verification + env/`#ifdef` gating, see SIGNING.md); real EV/Azure cert tbd** | 🚧 scaffold done |
 | Further slimming: opencv-headless, drop scipy/onnx transitive deps | ⏳ to do |
 | Passive anti-spoofing (Silent-Face MiniFASNet, default-on + fail-open if model missing) | ✅ done |
+| Same-name multi-template enrollment ("Add angle" appends, unlock takes the max similarity, FIFO cap) | ✅ done |
 | pytest for security logic (lockout / margin / anti-spoof gate / `authenticate` gating), wired into CI | ✅ done |
 
 See [§7 Roadmap](#7-roadmap) for the full plan; remaining hardening is in [§9.2](#92-remaining-hardening-5-4) and [§10.5 Uninstall](#105-uninstall-completely-clean-red-line-no-broken-cp).
@@ -123,12 +124,12 @@ Passive anti-spoofing is enabled (toggle in Settings): during recognition MiniFA
 
 - [x] **Stage 1 — Python recognition prototype**: camera → detection → recognition (`camera/detector/matcher`).
 - [x] **Stage 2 — Liveness**: blink (EAR) + head turn (solvePnP) active random challenge (`liveness`).
-- [x] **Stage 3 — Enrollment / matching**: multi-frame averaged enrollment + DPAPI-encrypted gallery (`enroll/store`).
+- [x] **Stage 3 — Enrollment / matching**: multi-frame averaged enrollment + DPAPI-encrypted gallery (`enroll/store`); supports **same-name multi-template** ("Add angle" appends to cover different angles/lighting; unlock takes the max similarity over same-name templates, `max_templates_per_name` FIFO cap).
 - [x] **Stage 4 — Auth orchestration + console**: `auth` state machine + PySide6 console (`app/`).
 - [x] **Stage 5 — Credential Provider**: C++ COM lock-screen integration + LSA credential + KERB unlock. **Main path done, verified on real hardware** (see §9).
 - [x] **Distribution — setup.exe**: portable package + Inno Chinese wizard + clean uninstall + Release automation, shipped as `v0.1.2` (see §10).
 - [x] **Hardening (5-4)**: pipe ACL (SYSTEM+Admins), failure fallback / lockout, better logging, dev-only `authenticate` (Python side; one CP-side pipe-PID check deferred).
-- [ ] **Pre-release**: code signing (EV cert to clear SmartScreen).
+- [ ] **Pre-release: code signing** — pipeline wired up (`build_release` signs the CP DLL when `FACEHELLO_SIGN_PFX` is set; Inno `/DSign` signs setup.exe; self-signed verified end-to-end, see SIGNING.md); real EV/Azure cert tbd.
 - [x] **Passive anti-spoofing**: Silent-Face MiniFASNet (`2.7_80x80`) + RetinaFace crop, multi-frame sampling during recognition to detect replays; default-on, can disable, fail-open if model missing.
 - [ ] **Optional enhancements**: GPU inference, further slimming (security-logic pytest already landed + in CI).
 
@@ -178,7 +179,7 @@ Goal: a single `setup.exe` (Inno Setup, admin privileges) that on a clean Win10/
 - [x] **Models baked into the installer**: buffalo_l (det_10g + w600k_r50, ~191 MB) + face_landmarker.task (~3.7 MB) bundled, so the **first unlock doesn't depend on a network download**.
 - [x] **Installed-mode / dev-mode split**: `config.py` switches on the **`.installed` marker file** at the install root (or `FACEHELLO_HOME`). A marker file rather than just an env var, because the SCM caches the system env block until the next reboot, so a freshly-installed service can't see a newly-set variable; a marker file lands on disk with the install, so the service / GUI are immediately consistent.
 - [x] **Build the C++ DLL with `/MT` static CRT**: avoids a VC++ runtime dependency.
-- [ ] **Code signing**: not done yet. `setup.exe` / the CP DLL will trigger a SmartScreen warning but the CP still loads. Signing is the final pre-release step (see §10.5).
+- [ ] **Code signing**: pipeline in place (env / `#ifdef Sign` gated, no-cert builds unchanged; self-signed for VM verification, see SIGNING.md); real cert (Azure Trusted Signing / EV) tbd. Note: the CP DLL has no mandatory signing gate — it loads unsigned; signing only clears the SmartScreen warning + reduces AV false positives.
 
 ### 10.2 Install Layout
 
@@ -210,7 +211,7 @@ Why data goes to ProgramData: Program Files is read-only for normal users, while
 - [x] **Portable package**: `scripts/build_release.py` — grab standalone CPython 3.11 → install the `dist` dependency group → slim → copy source + models + DLL + pywin32 runtime DLLs. Output defaults to `%LOCALAPPDATA%\FaceHello-build\FaceHello`.
 - [x] **Inno compile**: `installer\FaceHello.iss` → `installer\Output\FaceHello-Setup-x.y.z.exe`. The `.iss`/`.isl` are **UTF-8 with BOM** (otherwise Chinese Windows reads them as GBK → mojibake). The Chinese wizard ships `ChineseSimplified.isl` in the repo (Inno has no built-in Chinese).
 - [x] **CD automation**: `.github/workflows/release.yml` — pushing a `v*` tag triggers: prep models → build DLL + portable package → Inno builds setup.exe → upload to the GitHub Release. The version is injected from the tag, so `installer`/`pyproject` don't need manual edits.
-- [ ] **Signing**: the final pre-release step, not done yet.
+- [ ] **Signing (scaffold done)**: `build_release` signs the CP DLL via `FACEHELLO_SIGN_PFX`, Inno `/DSign` signs setup.exe + uninstaller (see SIGNING.md); self-signed verifies the pipeline, real cert tbd.
 
 ### 10.5 Uninstall (completely clean; red line: no broken CP)
 
@@ -225,7 +226,7 @@ The `[UninstallRun]` + `[UninstallDelete]` in `installer\FaceHello.iss` are impl
 
 - [x] Clean VM (snapshot) end-to-end: install → enroll → lock-screen unlock → uninstall clean, LogonUI normal.
 - [x] Real-hardware end-to-end (local + Microsoft accounts).
-- [ ] Authenticode-sign `setup.exe` + `FaceHelloCP.dll` + the embedded `python.exe` (EV cert to clear SmartScreen).
+- [ ] Authenticode-sign `setup.exe` + `FaceHelloCP.dll`: scaffold in place (see SIGNING.md); the embedded `python.exe` is already signed by python.org and is not re-signed; real EV/Azure cert to clear SmartScreen tbd.
 - [ ] Finishing the 5-4 hardening (pipe ACL, failure fallback, logging) is recommended before wider public distribution.
 
 ### 10.7 Install-path strategy (implemented)

@@ -39,7 +39,7 @@ C++ Credential Provider(VS2022 + “使用 C++ 的桌面开发”;**用 PowerShe
 
 ## 架构
 
-两层设计(路线 A)。阶段 1~4(Python 原型)完成;阶段 5(C++ Credential Provider 锁屏集成)主体打通——CP 磁贴 → 命名管道 → LocalSystem 服务 → InsightFace 识别 → 读 LSA → 打包 KERB 真解锁,本地账户与微软账户(MSA-backed 本地登录)均已在 VM 与真机端到端验证(里程碑 d)。5-4 加固(管道 ACL 限 SYSTEM+Administrators、失败兜底/锁定、日志、`authenticate` 开发态门控)与 C 档分发(Inno 安装器、`/MT` 静态 CRT 编 DLL、GitHub Release 放模型)均已落地(v0.1.2);锁屏新增「3 次刷脸重试后退回密码」(CP 侧)。剩代码签名与可选增强(GPU/进一步瘦身)。
+两层设计(路线 A)。阶段 1~4(Python 原型)完成;阶段 5(C++ Credential Provider 锁屏集成)主体打通——CP 磁贴 → 命名管道 → LocalSystem 服务 → InsightFace 识别 → 读 LSA → 打包 KERB 真解锁,本地账户与微软账户(MSA-backed 本地登录)均已在 VM 与真机端到端验证(里程碑 d)。5-4 加固(管道 ACL 限 SYSTEM+Administrators、失败兜底/锁定、日志、`authenticate` 开发态门控)与 C 档分发(Inno 安装器、`/MT` 静态 CRT 编 DLL、GitHub Release 放模型)均已落地(v0.1.2);锁屏新增「3 次刷脸重试后退回密码」(CP 侧)。识别侧加同名多模板录入(「补录角度」追加,解锁取最高相似度,`max_templates_per_name` FIFO 封顶)。代码签名脚手架已落地(自签名管道:`build_release` 按 `FACEHELLO_SIGN_PFX` 签 DLL、Inno `/DSign` 签 setup.exe,见 `SIGNING.md`);剩真实证书(Azure/EV)与可选增强(GPU/进一步瘦身)。
 
 **`face_hello/` 核心库**(无 Qt 依赖,可被 GUI、服务、脚本共用):
 - `config.py` — 集中路径/模型/阈值。`DEFAULTS` 是阈值默认值,被 store 里持久化的 `settings` 覆盖。
