@@ -230,6 +230,7 @@ class EnrollTab(QWidget):
         self.detector = detector
         self.store = store
         self.worker: EnrollWorker | None = None
+        self._append = False  # 本次录入是「补录角度」(追加)还是「开始录入」(覆盖)
 
         self.name_edit = QLineEdit()
         # 预填当前 Windows 账户名:档案名必须等于该账户名,锁屏刷脸才能对上 LSA 密码 + KERB
@@ -237,7 +238,9 @@ class EnrollTab(QWidget):
         self.name_edit.setPlaceholderText(tr("win_account_name"))
         self.start_btn = QPushButton(tr("start_enroll"))
         self.start_btn.setObjectName("accent")
-        self.start_btn.clicked.connect(self._start)
+        self.start_btn.clicked.connect(lambda: self._begin(append=False))
+        self.append_btn = QPushButton(tr("add_angle"))  # 同名追加一条模板,覆盖更多角度/光照
+        self.append_btn.clicked.connect(lambda: self._begin(append=True))
         self.preview = _preview_label()
         self.status = QLabel(tr("enroll_hint"))
         self.status.setObjectName("hint")
@@ -247,9 +250,10 @@ class EnrollTab(QWidget):
         self.progress_bar.setValue(0)
 
         # 已录入用户管理(原在「设置与安全」页,挪到此处:录入与管理同处一页)
-        self.table = QTableWidget(0, 4)
+        self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
-            [tr("col_user"), tr("col_enroll_date"), tr("col_days_left"), tr("col_status")]
+            [tr("col_user"), tr("col_templates"), tr("col_enroll_date"),
+             tr("col_days_left"), tr("col_status")]
         )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -263,6 +267,7 @@ class EnrollTab(QWidget):
         top.addWidget(QLabel(tr("username_label")))
         top.addWidget(self.name_edit, 1)
         top.addWidget(self.start_btn)
+        top.addWidget(self.append_btn)
 
         del_row = QHBoxLayout()
         del_row.addWidget(self.del_btn)
@@ -282,14 +287,16 @@ class EnrollTab(QWidget):
 
         self.refresh()
 
-    def _start(self) -> None:
+    def _begin(self, append: bool) -> None:
         name = self.name_edit.text().strip()
         if not name:
             QMessageBox.warning(self, tr("tip"), tr("enter_username"))
             return
         s = self.store.get_settings()
         samples = s["enroll_samples"]
+        self._append = append
         self.start_btn.setEnabled(False)
+        self.append_btn.setEnabled(False)
         self.status.setText(tr("opening_camera"))
         self.progress_bar.setRange(0, samples)
         self.progress_bar.setValue(0)
@@ -310,23 +317,36 @@ class EnrollTab(QWidget):
 
     def _on_done(self, embedding) -> None:
         name = self.name_edit.text().strip()
-        self.store.add_profile(name, embedding)
+        self.store.add_profile(name, embedding, replace=not self._append)
         self.store.save()
-        self.status.setText(tr("enrolled_ok", name=name))
         self.start_btn.setEnabled(True)
+        self.append_btn.setEnabled(True)
         self.refresh()  # 录入完即时刷新本页用户表
-        QMessageBox.information(self, tr("done_title"), tr("enroll_success", name=name))
+        if self._append:
+            n = sum(1 for p in self.store.list_profiles() if p.name == name)
+            self.status.setText(tr("enroll_appended", name=name, n=n))
+        else:
+            self.status.setText(tr("enrolled_ok", name=name))
+            QMessageBox.information(self, tr("done_title"), tr("enroll_success", name=name))
 
     def _on_fail(self, msg: str) -> None:
         self.status.setText(tr("failed_fmt", msg=msg))
         self.start_btn.setEnabled(True)
+        self.append_btn.setEnabled(True)
 
     def refresh(self) -> None:
-        profiles = self.store.list_profiles()
-        self.table.setRowCount(len(profiles))
-        for r, p in enumerate(profiles):
-            status = tr("expired_mark") if p.is_expired else tr("normal_status")
-            cells = [p.name, p.enroll_date.isoformat(), str(p.days_left), status]
+        # 按名分组(保序去重):一行一个用户,显示模板数 / 最近录入 / 最快到期 / 状态
+        groups: dict[str, list] = {}
+        for p in self.store.list_profiles():
+            groups.setdefault(p.name, []).append(p)
+        self.table.setRowCount(len(groups))
+        for r, (name, ps) in enumerate(groups.items()):
+            latest = max(ps, key=lambda p: p.enroll_date)   # 最近录入的那条
+            soonest = min(ps, key=lambda p: p.days_left)     # 最快到期的那条
+            expired = any(p.is_expired for p in ps)
+            status = tr("expired_mark") if expired else tr("normal_status")
+            cells = [name, str(len(ps)), latest.enroll_date.isoformat(),
+                     str(soonest.days_left), status]
             for c, text in enumerate(cells):
                 self.table.setItem(r, c, QTableWidgetItem(text))
 
@@ -531,6 +551,9 @@ class SettingsTab(QWidget):
         self.samples_spin = QSpinBox()
         self.samples_spin.setRange(3, 30)
         self.samples_spin.setValue(s["enroll_samples"])
+        self.max_templates_spin = QSpinBox()
+        self.max_templates_spin.setRange(1, 10)
+        self.max_templates_spin.setValue(s.get("max_templates_per_name", 5))
         self.lockout_fails_spin = QSpinBox()
         self.lockout_fails_spin.setRange(0, 20)
         self.lockout_fails_spin.setValue(s.get("lockout_max_fails", 5))
@@ -541,8 +564,8 @@ class SettingsTab(QWidget):
         self.camera_spin.setRange(0, 10)
         self.camera_spin.setValue(int(s.get("camera_index", 0)))
         for sp in (self.match_spin, self.margin_spin, self.yaw_spin, self.blink_spin,
-                   self.renew_spin, self.samples_spin, self.lockout_fails_spin,
-                   self.lockout_secs_spin, self.camera_spin):
+                   self.renew_spin, self.samples_spin, self.max_templates_spin,
+                   self.lockout_fails_spin, self.lockout_secs_spin, self.camera_spin):
             sp.setFixedWidth(100)  # 窄而对齐,消除右侧大留白
         self.camera_test_btn = QPushButton(tr("camera_test_btn"))
         self.camera_test_btn.clicked.connect(self._test_camera)
@@ -605,6 +628,9 @@ class SettingsTab(QWidget):
         pair("lockout_fails_label", self.lockout_fails_spin, "lockout_secs_label", self.lockout_secs_spin)
         group("grp_enroll")
         pair("renew_label", self.renew_spin, "samples_label", self.samples_spin)
+        grid.addWidget(QLabel(tr("max_templates_label")), r, 0)
+        grid.addWidget(self.max_templates_spin, r, 1)
+        r += 1
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -632,6 +658,7 @@ class SettingsTab(QWidget):
             required_blinks=self.blink_spin.value(),
             renew_days=self.renew_spin.value(),
             enroll_samples=self.samples_spin.value(),
+            max_templates_per_name=self.max_templates_spin.value(),
             lockout_max_fails=self.lockout_fails_spin.value(),
             lockout_seconds=self.lockout_secs_spin.value(),
             camera_index=self.camera_spin.value(),
@@ -915,7 +942,9 @@ class MainWindow(QWidget):
         self.status_label.setStyleSheet(f"color:{SUCCESS};padding:2px 4px;")
 
     def _warn_expired(self) -> None:
-        expired = [p.name for p in self.store.list_profiles() if p.is_expired]
+        expired = list(dict.fromkeys(  # 去重保序:多模板下同名会重复出现
+            p.name for p in self.store.list_profiles() if p.is_expired
+        ))
         if expired:
             QMessageBox.warning(
                 self, tr("expired_title"),

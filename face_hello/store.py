@@ -65,11 +65,14 @@ class FaceStore:
         self._data.setdefault("settings", {}).update(kw)
 
     # ---- 人脸 ----
-    def add_profile(self, name: str, embedding: np.ndarray, renew_days: int | None = None) -> None:
+    def add_profile(self, name: str, embedding: np.ndarray, renew_days: int | None = None,
+                    replace: bool = True) -> None:
+        """replace=True(默认):同名覆盖(重新录入 / 定期换脸)。
+        replace=False:同名追加一条模板(补录角度),超过 max_templates_per_name 按 FIFO 丢最早。"""
         if renew_days is None:
             renew_days = self.get_settings()["renew_days"]
-        # 同名覆盖(重新录入 / 定期换脸)
-        self._data["profiles"] = [p for p in self._data["profiles"] if p["name"] != name]
+        if replace:
+            self._data["profiles"] = [p for p in self._data["profiles"] if p["name"] != name]
         self._data["profiles"].append(
             {
                 "name": name,
@@ -78,6 +81,22 @@ class FaceStore:
                 "renew_days": int(renew_days),
             }
         )
+        if not replace:
+            self._enforce_template_cap(name)
+
+    def _enforce_template_cap(self, name: str) -> None:
+        """同名模板数超上限时,按出现顺序丢最早的若干条(profiles 是时间序,先出现=最早)。"""
+        cap = self.get_settings()["max_templates_per_name"]
+        drop = sum(1 for p in self._data["profiles"] if p["name"] == name) - cap
+        if drop <= 0:
+            return
+        kept: list[dict] = []
+        for p in self._data["profiles"]:
+            if p["name"] == name and drop > 0:
+                drop -= 1  # 丢掉这条(最早的)
+                continue
+            kept.append(p)
+        self._data["profiles"] = kept
 
     def remove_profile(self, name: str) -> None:
         self._data["profiles"] = [p for p in self._data["profiles"] if p["name"] != name]
