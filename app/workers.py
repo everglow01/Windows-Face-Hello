@@ -147,11 +147,13 @@ class SimilarityMonitorWorker(QThread):
     sample = Signal(float)            # 当前帧最佳相似度;无脸发 -1.0
     failed = Signal(str)
 
-    def __init__(self, detector: FaceDetector, store: FaceStore, camera_index: int = 0):
+    def __init__(self, detector: FaceDetector, store: FaceStore, camera_index: int = 0,
+                 threshold: float = 0.0):
         super().__init__()
         self.detector = detector
         self.store = store
         self.camera_index = camera_index
+        self.threshold = threshold  # 预览框绿/黄分界,与直方图同口径(match_threshold)
         self._stop = False
 
     def stop(self) -> None:
@@ -168,7 +170,7 @@ class SimilarityMonitorWorker(QThread):
                         self.sample.emit(-1.0)
                     else:
                         _, sim = best_match(face.embedding, gallery)
-                        color = _BOX_OK if sim >= 0 else _BOX_BAD
+                        color = _BOX_OK if sim >= self.threshold else _BOX_BAD
                         x1, y1, x2, y2 = (int(v) for v in face.bbox)
                         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                         cv2.putText(frame, f"{sim:.3f}", (x1, max(y1 - 8, 14)),

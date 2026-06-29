@@ -512,6 +512,7 @@ class AuthTab(QWidget):
         self.monitor = SimilarityMonitorWorker(
             self.detector, self.store,
             camera_index=self.store.get_settings().get("camera_index", 0),
+            threshold=self.store.get_settings()["match_threshold"],
         )
         self.monitor.preview.connect(lambda img: _show_frame(self.preview, img))
         self.monitor.sample.connect(self.histogram.add_sample)

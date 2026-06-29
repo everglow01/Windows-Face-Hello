@@ -49,7 +49,7 @@ C++ Credential Provider(VS2022 + “使用 C++ 的桌面开发”;**用 PowerShe
 - `matcher.py` — 余弦相似度;embedding 已 L2 归一化,余弦即点积。
 - `liveness.py` — MediaPipe Tasks `FaceLandmarker` 取 468 点 → EAR 判眨眼 + solvePnP 估 yaw 判转头。`LivenessSession` 是随机挑战(眨眼/左转/右转)+ 双重超时的逐帧状态机。
 - `enroll.py` — `Enroller` 累积合格帧(过滤低分/太小的脸),取平均特征后重新归一化作模板。
-- `store.py` — `FaceStore`:经 `platform_backend`(Windows=DPAPI 机器范围)加密的 pickle 落盘到 `data/faces.dat`,存特征(非照片)+ 元数据 + settings。同名 profile 覆盖。
+- `store.py` — `FaceStore`:经 `platform_backend`(Windows=DPAPI 机器范围)加密的 pickle 落盘到 `data/faces.dat`,存特征(非照片)+ 元数据 + settings。同名 profile 默认覆盖(重新录入/换脸);`replace=False` 时同名追加多模板(补录角度),按 `max_templates_per_name` FIFO 封顶。
 - `auth.py` — `AuthSession` 编排状态机:`liveness → recognize → done`,逐帧 `feed()` 驱动;识别前过反欺骗门 `_antispoof_gate`(多帧采样:判假即拒、判真放行,连续 `antispoof_max_frames` 帧检测不到脸才 fail-open,堵单帧漏检)。`authenticate_blocking()` 是无 Qt 的阻塞版(开摄像头跑完整流程),供服务调用。
 - `cred_vault.py` — 阶段 5 用:把登录密码存进 LSA Secret(键 `L$FaceHello_<user>`,UTF-16LE)。密码**永不经过 IPC**,由 CP 自己在 SYSTEM 上下文读。`current_user()` 从 `platform_backend` re-export(Windows=`GetUserName()`)。
 - `service.py` — 命名管道(`\\.\pipe\FaceHello`)服务端,**单实例串行**(`nMaxInstances=1`),JSON 消息模式。同步命令 `ping`/`authenticate`(`authenticate` 绕过失败锁定,故**仅开发态可用、安装态禁用**);里程碑 d 加的异步对:`auth_start`(后台线程跑一次认证,立即返回)+ `auth_poll`(取实时活体提示与最终结果),让锁屏能边识别边刷提示。响应只回 `{ok, user, similarity}`,不回密码。
