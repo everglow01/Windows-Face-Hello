@@ -2,7 +2,9 @@
 
 # 👋 Face Hello
 
-### 让普通 RGB 摄像头也能给 Windows 做人脸解锁
+### 让普通 RGB 摄像头也能给 Windows 做人脸解锁   
+
+![logo](README_image/facehello-wordmark.svg)
 
 *面向不支持 Windows Hello 的笔记本、台式电脑前置摄像头 / USB 摄像头。*
 

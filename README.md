@@ -2,7 +2,9 @@
 
 # 👋 Face Hello
 
-### Face unlock for Windows — with any ordinary RGB webcam
+### Face unlock for Windows — with any ordinary RGB webcam   
+
+![logo](README_image/facehello-wordmark.svg)
 
 *Bringing Windows Hello-style face unlock to laptops, desktop front cameras, and USB cameras that Windows Hello doesn't support.*
 
