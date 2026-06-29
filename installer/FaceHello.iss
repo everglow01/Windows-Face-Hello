@@ -37,7 +37,8 @@ DefaultDirName={autopf}\FaceHello
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 UninstallDisplayName={#MyAppName}
-UninstallDisplayIcon={#PyWExe}
+; 自定义图标(app\assets\facehello.ico 随 app\ 打包);缺文件时 Windows 回退默认图标
+UninstallDisplayIcon={app}\app\assets\facehello.ico
 OutputDir=Output
 OutputBaseFilename=FaceHello-Setup-{#MyAppVersion}
 Compression=lzma2/max
@@ -75,9 +76,9 @@ Name: "{commonappdata}\FaceHello\data"
 Source: "{#BuildDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
-Name: "{group}\FaceHello 管理台"; Filename: "{#PyWExe}"; Parameters: "-m app.main"; WorkingDir: "{app}"; IconFilename: "{#PyWExe}"
+Name: "{group}\FaceHello 管理台"; Filename: "{#PyWExe}"; Parameters: "-m app.main"; WorkingDir: "{app}"; IconFilename: "{app}\app\assets\facehello.ico"
 Name: "{group}\卸载 FaceHello"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\FaceHello 管理台"; Filename: "{#PyWExe}"; Parameters: "-m app.main"; WorkingDir: "{app}"; IconFilename: "{#PyWExe}"; Tasks: desktopicon
+Name: "{autodesktop}\FaceHello 管理台"; Filename: "{#PyWExe}"; Parameters: "-m app.main"; WorkingDir: "{app}"; IconFilename: "{app}\app\assets\facehello.ico"; Tasks: desktopicon
 
 [Run]
 ; 顺序很重要,逐条 waituntilterminated:

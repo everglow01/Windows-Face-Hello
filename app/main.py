@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import sys
 from collections import deque
+from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QPolygon
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap, QPolygon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -957,8 +958,36 @@ class MainWindow(QWidget):
         super().closeEvent(event)
 
 
+# 自定义应用图标:放 app/assets/facehello.ico(随 app/ 一起被安装器打包)。
+# 缺文件则回退默认图标,不报错。
+_ICON_PATH = Path(__file__).resolve().parent / "assets" / "facehello.ico"
+
+
+def _app_icon() -> QIcon:
+    """加载多尺寸 .ico。QIcon 读路径会带上全部尺寸(任务栏/高分屏才清晰);
+    用 loadFromData 只会取首帧(16px)被放大糊掉。Qt 对 Unicode(中文)路径安全。
+    缺文件返回空 QIcon(回退默认图标)。"""
+    if not _ICON_PATH.exists():
+        return QIcon()
+    return QIcon(str(_ICON_PATH))
+
+
+def _set_app_user_model_id() -> None:
+    """让 Windows 任务栏按本应用分组并显示自定义图标,而非默认 python 图标。"""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("FaceHello.Console")
+    except Exception:  # noqa: BLE001 失败不致命
+        pass
+
+
 def main() -> None:
+    _set_app_user_model_id()
     app = QApplication(sys.argv)
+    app.setWindowIcon(_app_icon())  # 窗口 + 任务栏 + 所有对话框的默认图标
     app.setStyleSheet(_themed_qss())
     win = MainWindow()
     win.resize(720, 760)
