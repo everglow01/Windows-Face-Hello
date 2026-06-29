@@ -1,8 +1,6 @@
 <div align="center">
 
-# 👋 Face Hello
-
-### 让普通 RGB 摄像头也能给 Windows 做人脸解锁   
+ 
 
 ![logo](README_image/facehello-wordmark.svg)
 
