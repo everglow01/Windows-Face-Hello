@@ -19,6 +19,10 @@ models/*
 # Inno Setup 打包产物(setup.exe ~300MB,走 GitHub Release 分发,勿入库)
 installer/Output/
 
+# 代码签名:私钥/证书绝不入库(自签名 pfx、导出的 cer 都在 scripts/sign/out)
+*.pfx
+scripts/sign/out/
+
 # Visual Studio / C++ 构建产物(cp/,输出与中间目录可能嵌在子目录里)
 .vs/
 *.user

@@ -60,6 +60,42 @@ def step_build_dll() -> None:
         "/p:Configuration=Release", "/p:Platform=x64", "/nologo", "/v:minimal")
 
 
+def _find_signtool() -> str | None:
+    """定位 signtool.exe:优先环境变量 SIGNTOOL,其次 Windows SDK,最后 PATH。"""
+    if os.environ.get("SIGNTOOL"):
+        return os.environ["SIGNTOOL"]
+    pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    cands = sorted((Path(pf86) / "Windows Kits" / "10" / "bin").glob("*/x64/signtool.exe"))
+    if cands:
+        return str(cands[-1])  # 最新 SDK
+    return shutil.which("signtool")
+
+
+def step_sign_dll() -> None:
+    """可选:用 FACEHELLO_SIGN_PFX 指定的证书签 CP DLL。
+
+    未设 FACEHELLO_SIGN_PFX 则跳过 —— 无证书构建(本地默认 / CI)行为完全不变。
+    在 step_copy_payload 之前签,打进包里的 DLL 即已签名。
+    相关环境变量:FACEHELLO_SIGN_PFX(必填,pfx 路径)、FACEHELLO_SIGN_PASS(pfx 密码)、
+    FACEHELLO_SIGN_TS(时间戳服务器,默认 digicert)、SIGNTOOL(signtool.exe 路径覆盖)。
+    """
+    pfx = os.environ.get("FACEHELLO_SIGN_PFX")
+    if not pfx:
+        print("[skip] 未设 FACEHELLO_SIGN_PFX,跳过 DLL 代码签名", flush=True)
+        return
+    signtool = _find_signtool()
+    if not signtool:
+        raise SystemExit("设了 FACEHELLO_SIGN_PFX 但找不到 signtool.exe(请装 Windows SDK 或设 SIGNTOOL)")
+    dll = ROOT / "cp" / "x64" / "Release" / "FaceHelloCP.dll"
+    ts = os.environ.get("FACEHELLO_SIGN_TS", "http://timestamp.digicert.com")
+    args = [signtool, "sign", "/fd", "SHA256", "/f", pfx]
+    if os.environ.get("FACEHELLO_SIGN_PASS"):
+        args += ["/p", os.environ["FACEHELLO_SIGN_PASS"]]
+    args += ["/tr", ts, "/td", "SHA256", str(dll)]
+    run(*args)
+    run(signtool, "verify", "/pa", str(dll))
+
+
 def step_portable_python() -> None:
     """取 uv 管理的 standalone CPython(非项目 .venv!),整目录拷到 build\\FaceHello\\python\\。
 
@@ -146,6 +182,7 @@ def step_copy_payload() -> None:
 def main() -> None:
     print(f"=== build_release -> {BUILD} ===", flush=True)
     step_build_dll()
+    step_sign_dll()
     step_portable_python()
     step_install_deps()
     step_slim()

@@ -49,6 +49,14 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; 注册服务 / CP / 写 Program Files 都需要管理员
 PrivilegesRequired=admin
 
+; 代码签名(可选):加 /DSign 编译并用 /Sfacehello=... 提供签名命令,即对 setup.exe
+; 与卸载器签名。不传 /DSign 时是无签名构建(CI 默认),行为完全不变。命令见 SIGNING.md:
+;   iscc /DSign "/Sfacehello=signtool sign /fd sha256 /f <pfx> /p <pwd> /tr <ts> /td sha256 $f" ...
+#ifdef Sign
+SignTool=facehello
+SignedUninstaller=yes
+#endif
+
 [Languages]
 ; 简体中文为默认;ChineseSimplified.isl 随仓库附带(Inno 不自带中文),路径相对 .iss 所在目录
 Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
