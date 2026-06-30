@@ -261,6 +261,8 @@ class EnrollTab(QWidget):
         self.table.setMaximumHeight(160)  # 约 3 行高度封顶,超出滚动,不顶坏布局
         self.del_btn = QPushButton(tr("delete_selected"))
         self.del_btn.clicked.connect(self._delete_selected)
+        self.manage_btn = QPushButton(tr("manage_templates"))  # 删该用户下单条补录模板
+        self.manage_btn.clicked.connect(self._manage_templates)
         users_title = QLabel(tr("enrolled_users"))
         users_title.setObjectName("h2")
 
@@ -272,6 +274,7 @@ class EnrollTab(QWidget):
 
         del_row = QHBoxLayout()
         del_row.addWidget(self.del_btn)
+        del_row.addWidget(self.manage_btn)
         del_row.addStretch(1)  # 按钮不再整行宽
 
         layout = QVBoxLayout(self)
@@ -360,6 +363,83 @@ class EnrollTab(QWidget):
             self.store.remove_profile(name)
             self.store.save()
             self.refresh()
+
+    def _manage_templates(self) -> None:
+        row = self.table.currentRow()
+        if row < 0:
+            return  # 同 _delete_selected:未选中用户则不动作
+        name = self.table.item(row, 0).text()
+        TemplateManagerDialog(self.store, name, self).exec()
+        self.refresh()  # 弹窗里可能删过模板,刷新主表模板数
+
+
+class TemplateManagerDialog(QDialog):
+    """管理某用户的多条模板:列出 → 删单条。删到最后一条即移除该用户。"""
+
+    def __init__(self, store: FaceStore, name: str, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.name = name
+        self.setWindowTitle(tr("templates_of", name=name))
+        self.resize(420, 280)
+
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(
+            [tr("col_index"), tr("col_enroll_date"), tr("col_days_left"), tr("col_status")]
+        )
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+
+        del_btn = QPushButton(tr("delete_template"))
+        del_btn.setObjectName("accent")
+        del_btn.clicked.connect(self._delete)
+        close_btn = QPushButton(tr("close_btn"))
+        close_btn.clicked.connect(self.accept)
+
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(del_btn)
+        btn_row.addStretch(1)
+        btn_row.addWidget(close_btn)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+        layout.addWidget(self.table)
+        layout.addLayout(btn_row)
+
+        self._load()
+
+    def _templates(self) -> list:
+        """该用户的模板,按录入顺序(与 store 内部顺序、序号 #1.. 一致)。"""
+        return [p for p in self.store.list_profiles() if p.name == self.name]
+
+    def _load(self) -> None:
+        ps = self._templates()
+        if not ps:
+            self.accept()  # 已无模板(删光了)→ 关闭弹窗
+            return
+        self.table.setRowCount(len(ps))
+        for r, p in enumerate(ps):
+            status = tr("expired_mark") if p.is_expired else tr("normal_status")
+            cells = [f"#{r + 1}", p.enroll_date.isoformat(), str(p.days_left), status]
+            for c, text in enumerate(cells):
+                self.table.setItem(r, c, QTableWidgetItem(text))
+        self.table.selectRow(0)
+
+    def _delete(self) -> None:
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, tr("tip"), tr("select_template"))
+            return
+        n = row + 1
+        last = len(self._templates()) == 1
+        key = "delete_last_template_q" if last else "delete_template_q"
+        if QMessageBox.question(self, tr("confirm_title"), tr(key, name=self.name, n=n)) != QMessageBox.Yes:
+            return
+        self.store.remove_template(self.name, row)  # row == 第 n 条的 0-based 序号
+        self.store.save()
+        self._load()
 
 
 class SimilarityHistogram(QWidget):

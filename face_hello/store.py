@@ -101,6 +101,15 @@ class FaceStore:
     def remove_profile(self, name: str) -> None:
         self._data["profiles"] = [p for p in self._data["profiles"] if p["name"] != name]
 
+    def remove_template(self, name: str, index: int) -> None:
+        """删除该 name 下第 index 条模板(0-based,按录入顺序)。越界则 no-op。
+
+        删到该名最后一条 → 该用户自然从库中消失(等同未录入)。
+        """
+        positions = [i for i, p in enumerate(self._data["profiles"]) if p["name"] == name]
+        if 0 <= index < len(positions):
+            del self._data["profiles"][positions[index]]
+
     def list_profiles(self) -> list[Profile]:
         return [
             Profile(

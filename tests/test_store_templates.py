@@ -62,3 +62,38 @@ def test_remove_profile_drops_all_templates(tmp_path):
     s.add_profile("owen", _emb(1), replace=False)
     s.remove_profile("owen")
     assert s.is_empty()
+
+
+def test_remove_template_drops_one_by_index(tmp_path):
+    s = make_store(tmp_path)
+    for i in range(3):  # t0,t1,t2 按序
+        s.add_profile("owen", _emb(i), replace=False)
+    s.remove_template("owen", 1)  # 删中间一条 t1
+    embs = s.embeddings()
+    assert len(embs) == 2
+    # 剩下 t0,t2,顺序保持
+    assert [int(np.argmax(e)) for e in embs] == [0, 2]
+
+
+def test_remove_template_only_targets_named_user(tmp_path):
+    s = make_store(tmp_path)
+    s.add_profile("owen", _emb(0))
+    s.add_profile("alice", _emb(7), replace=False)
+    s.remove_template("owen", 0)  # 删 owen 唯一一条 → owen 消失,alice 不动
+    assert _names(s) == ["alice"]
+
+
+def test_remove_last_template_empties_user(tmp_path):
+    s = make_store(tmp_path)
+    s.add_profile("owen", _emb(0))
+    s.remove_template("owen", 0)
+    assert s.is_empty()
+
+
+def test_remove_template_out_of_range_noop(tmp_path):
+    s = make_store(tmp_path)
+    s.add_profile("owen", _emb(0))
+    s.add_profile("owen", _emb(1), replace=False)
+    s.remove_template("owen", 5)   # 越界
+    s.remove_template("bob", 0)    # 不存在的名
+    assert len(s.embeddings()) == 2
