@@ -23,12 +23,22 @@ def unit_vec(*coords: float) -> np.ndarray:
     return v / n if n else v
 
 
+def _frontal_kps() -> np.ndarray:
+    """正脸 5 点(左眼/右眼/鼻/左嘴角/右嘴角):鼻尖在双眼中点 → yaw≈0。"""
+    return np.array(
+        [[40, 50], [60, 50], [50, 56], [44, 70], [56, 70]], dtype=np.float32
+    )
+
+
 @dataclass
 class FakeFace:
-    """detector 输出的最小替身:_recognize 读 .embedding 与 .area(挑最大脸),.bbox 备用。"""
+    """detector 输出的最小替身:_recognize 读 .embedding 与 .area(挑最大脸),.bbox 备用;
+    录入质量 evaluate 另读 .det_score 与 .kps(5×2 关键点)。"""
 
     embedding: np.ndarray
     bbox: tuple = (0, 0, 10, 10)
+    det_score: float = 0.9
+    kps: np.ndarray = field(default_factory=_frontal_kps)
 
     @property
     def area(self) -> float:

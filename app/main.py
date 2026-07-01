@@ -304,7 +304,8 @@ class EnrollTab(QWidget):
         self.status.setText(tr("opening_camera"))
         self.progress_bar.setRange(0, samples)
         self.progress_bar.setValue(0)
-        self.worker = EnrollWorker(self.detector, samples, camera_index=s.get("camera_index", 0))
+        self.worker = EnrollWorker(self.detector, samples, camera_index=s.get("camera_index", 0),
+                                   append=append)
         self.worker.preview.connect(lambda img: _show_frame(self.preview, img))
         self.worker.guidance.connect(self._on_guidance)
         self.worker.finished_ok.connect(self._on_done)

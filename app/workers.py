@@ -98,12 +98,13 @@ class EnrollWorker(QThread):
     _TIMEOUT_S = 60.0  # 总时长上限:迟迟采不到足够人脸就放弃,不无限等
 
     def __init__(self, detector: FaceDetector, samples: int, capture_interval: float = 0.4,
-                 camera_index: int = 0):
+                 camera_index: int = 0, append: bool = False):
         super().__init__()
         self.detector = detector
         self.samples = samples
         self.interval = capture_interval
         self.camera_index = camera_index
+        self.append = append  # True=补录角度(要侧脸) / False=首条录入(要正脸)
         self._stop = False
 
     def stop(self) -> None:
@@ -112,6 +113,7 @@ class EnrollWorker(QThread):
     def run(self) -> None:
         try:
             enr = Enroller(self.detector, self.samples)
+            mode = "angle" if self.append else "base"  # 补录要侧脸 / 首条要正脸
             deadline = time.monotonic() + self._TIMEOUT_S
             next_cap = time.monotonic()
             with Camera(self.camera_index) as cam:
@@ -126,7 +128,7 @@ class EnrollWorker(QThread):
                     if face is None:
                         key = "guidance_no_face"
                     else:
-                        ok, reason = enr.evaluate(face, frame.shape)
+                        ok, reason = enr.evaluate(face, frame, mode)
                         if not ok:
                             key = "guidance_" + reason  # too_small / low_score
                             _draw_face_box(disp, face, _BOX_BAD, mirror_width=w)

@@ -33,6 +33,7 @@ class DetectedFace:
     bbox: np.ndarray          # [x1, y1, x2, y2]
     embedding: np.ndarray     # 512 维,已 L2 归一化(normed_embedding)
     det_score: float
+    kps: np.ndarray           # 5×2 关键点:左眼/右眼/鼻/左嘴角/右嘴角(录入质量引导用)
 
     @property
     def area(self) -> float:
@@ -94,6 +95,7 @@ class FaceDetector:
                     bbox=f.bbox.astype(float),
                     embedding=np.asarray(f.normed_embedding, dtype=np.float32),
                     det_score=float(f.det_score),
+                    kps=np.asarray(f.kps, dtype=np.float32),  # 检测本就算好,仅存一下,解锁路径不评估
                 )
             )
         return out
