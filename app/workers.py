@@ -9,6 +9,7 @@ from PySide6.QtGui import QImage
 
 from face_hello.auth import AuthResult, AuthSession
 from face_hello.camera import Camera
+from face_hello.diagnostics import DiagnosticReport, run_diagnostics
 from face_hello.detector import FaceDetector
 from face_hello.enroll import Enroller
 from face_hello.i18n import tr
@@ -258,3 +259,16 @@ class CameraTestWorker(QThread):
             self.failed.emit(str(e))
         finally:
             cam.release()
+
+
+class DiagnosticsWorker(QThread):
+    progress = Signal(str)
+    done = Signal(object)
+
+    def __init__(self, lang: str = "zh"):
+        super().__init__()
+        self.lang = lang
+
+    def run(self) -> None:
+        report: DiagnosticReport = run_diagnostics(self.lang, progress=self.progress.emit)
+        self.done.emit(report)

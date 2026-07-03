@@ -11,7 +11,7 @@ from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap, QPolygon
+from PySide6.QtGui import QBrush, QColor, QIcon, QImage, QPainter, QPixmap, QPolygon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -37,10 +37,12 @@ from PySide6.QtWidgets import (
 from app.workers import (
     AuthWorker,
     CameraTestWorker,
+    DiagnosticsWorker,
     EnrollWorker,
     SimilarityMonitorWorker,
     WarmupWorker,
 )
+from face_hello.diagnostics import DiagnosticReport, status_label
 from face_hello import config, cred_vault
 from face_hello.auth import AuthResult
 from face_hello.detector import FaceDetector
@@ -892,10 +894,13 @@ class ServiceTab(QWidget):
 
     SERVICE_NAME = "FaceHello"
 
-    def __init__(self):
+    def __init__(self, store: FaceStore):
         super().__init__()
+        self.store = store
         self.user = cred_vault.current_user()
         self.is_admin = _is_admin()
+        self.diag_worker: DiagnosticsWorker | None = None
+        self.diag_report: DiagnosticReport | None = None
 
         self.pwd_edit = QLineEdit()
         self.pwd_edit.setEchoMode(QLineEdit.Password)
@@ -922,6 +927,23 @@ class ServiceTab(QWidget):
         unregister_btn.clicked.connect(lambda: self._register_cp(unregister=True))
         self.svc_status = QLabel("—")
         self.svc_status.setObjectName("hint")
+        self.diag_run_btn = QPushButton(tr("diag_run"))
+        self.diag_run_btn.setObjectName("accent")
+        self.diag_run_btn.clicked.connect(self._run_diagnostics)
+        self.diag_copy_btn = QPushButton(tr("diag_copy"))
+        self.diag_copy_btn.setEnabled(False)
+        self.diag_copy_btn.clicked.connect(self._copy_diagnostics)
+        self.diag_summary = QLabel(tr("diag_idle"))
+        self.diag_summary.setObjectName("hint")
+        self.diag_table = QTableWidget(0, 4)
+        self.diag_table.setHorizontalHeaderLabels(
+            [tr("diag_col_item"), tr("diag_col_status"), tr("diag_col_detail"), tr("diag_col_advice")]
+        )
+        self.diag_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.diag_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.diag_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.diag_table.setWordWrap(False)
+        self.diag_table.setMaximumHeight(190)
 
         # 这些动作都需管理员,非管理员时禁用
         self._admin_widgets = [
@@ -973,7 +995,18 @@ class ServiceTab(QWidget):
         cp_row.addWidget(unregister_btn)
         cp_row.addStretch(1)
         layout.addLayout(cp_row)
-        layout.addStretch(1)
+
+        layout.addSpacing(12)
+        diag_title = QLabel(tr("diag_title"))
+        diag_title.setObjectName("h2")
+        layout.addWidget(diag_title)
+        diag_row = QHBoxLayout()
+        diag_row.addWidget(self.diag_run_btn)
+        diag_row.addWidget(self.diag_copy_btn)
+        diag_row.addStretch(1)
+        layout.addLayout(diag_row)
+        layout.addWidget(self.diag_summary)
+        layout.addWidget(self.diag_table)
 
         if not self.is_admin:
             for w in self._admin_widgets:
@@ -1037,6 +1070,53 @@ class ServiceTab(QWidget):
     def _refresh_status(self) -> None:
         self.svc_status.setText(tr("svc_status_prefix") + _service_status())
 
+    def _run_diagnostics(self) -> None:
+        self.diag_run_btn.setEnabled(False)
+        self.diag_copy_btn.setEnabled(False)
+        self.diag_table.setRowCount(0)
+        lang = self.store.get_settings().get("language", "zh")
+        self.diag_worker = DiagnosticsWorker(lang)
+        self.diag_worker.progress.connect(self._on_diag_progress)
+        self.diag_worker.done.connect(self._on_diag_done)
+        self.diag_worker.start()
+
+    def _on_diag_progress(self, step: str) -> None:
+        self.diag_summary.setText(tr("diag_running", step=step))
+
+    def _on_diag_done(self, report: DiagnosticReport) -> None:
+        self.diag_report = report
+        self.diag_worker = None
+        lang = self.store.get_settings().get("language", "zh")
+        self.diag_summary.setText(tr("diag_summary", status=status_label(report.overall_status, lang)))
+        self.diag_run_btn.setEnabled(True)
+        self.diag_copy_btn.setEnabled(True)
+        self._load_diag_table(report)
+
+    def _load_diag_table(self, report: DiagnosticReport) -> None:
+        lang = self.store.get_settings().get("language", "zh")
+        colors = {
+            "ok": SUCCESS,
+            "warn": WARN,
+            "fail": DANGER,
+            "info": "#5A5A5A",
+        }
+        self.diag_table.setRowCount(len(report.items))
+        for row, item in enumerate(report.items):
+            cells = [item.name, status_label(item.status, lang), item.detail, item.advice]
+            for col, text in enumerate(cells):
+                cell = QTableWidgetItem(text)
+                if col == 1:
+                    cell.setForeground(QBrush(QColor(colors.get(item.status, "#5A5A5A"))))
+                self.diag_table.setItem(row, col, cell)
+        self.diag_table.resizeRowsToContents()
+
+    def _copy_diagnostics(self) -> None:
+        if self.diag_report is None:
+            return
+        lang = self.store.get_settings().get("language", "zh")
+        QApplication.clipboard().setText(self.diag_report.to_text(lang))
+        QMessageBox.information(self, tr("diag_title"), tr("diag_copy_ok"))
+
 
 class MainWindow(QWidget):
     def __init__(self):
@@ -1050,7 +1130,7 @@ class MainWindow(QWidget):
         tabs = QTabWidget()
         self.enroll_tab = EnrollTab(self.detector, self.store)
         self.auth_tab = AuthTab(self.detector, self.store)
-        self.service_tab = ServiceTab()
+        self.service_tab = ServiceTab(self.store)
         self.settings_tab = SettingsTab(self.store)
         tabs.addTab(self.enroll_tab, tr("tab_enroll"))
         tabs.addTab(self.auth_tab, tr("tab_test"))
