@@ -225,6 +225,65 @@ def _show_frame(label: QLabel, img: QImage) -> None:
     )
 
 
+def _label_presets() -> list[str]:
+    return [
+        tr("label_front"),
+        tr("label_left"),
+        tr("label_right"),
+        tr("label_night"),
+        tr("label_glasses_on"),
+        tr("label_glasses_off"),
+        tr("label_side"),
+    ]
+
+
+class TemplateLabelDialog(QDialog):
+    """Small editable preset picker for a template's management-only label."""
+
+    def __init__(self, default_label: str = "", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(tr("template_label_title"))
+        self.resize(340, 120)
+
+        self.combo = QComboBox()
+        self.combo.setEditable(True)
+        self.combo.addItems(_label_presets())
+        self.combo.setCurrentText((default_label or "").strip()[:24])
+        if self.combo.lineEdit() is not None:
+            self.combo.lineEdit().setMaxLength(24)
+
+        hint = QLabel(tr("template_label_prompt"))
+        hint.setWordWrap(True)
+        save_btn = QPushButton(tr("save_label"))
+        save_btn.setObjectName("accent")
+        save_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton(tr("cancel_btn"))
+        cancel_btn.clicked.connect(self.reject)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(save_btn)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+        layout.addWidget(hint)
+        layout.addWidget(self.combo)
+        layout.addLayout(btn_row)
+
+    def label(self) -> str:
+        text = self.combo.currentText().strip()
+        return text[:24]
+
+    @staticmethod
+    def prompt(parent, default_label: str = "") -> str | None:
+        dlg = TemplateLabelDialog(default_label, parent)
+        if dlg.exec() == QDialog.Accepted:
+            return dlg.label()
+        return None
+
+
 class EnrollTab(QWidget):
     def __init__(self, detector: FaceDetector, store: FaceStore):
         super().__init__()
@@ -322,7 +381,9 @@ class EnrollTab(QWidget):
 
     def _on_done(self, embedding) -> None:
         name = self.name_edit.text().strip()
-        self.store.add_profile(name, embedding, replace=not self._append)
+        default_label = tr("label_side") if self._append else tr("label_front")
+        label = TemplateLabelDialog.prompt(self, default_label)
+        self.store.add_profile(name, embedding, replace=not self._append, label=label or "")
         self.store.save()
         self.start_btn.setEnabled(True)
         self.append_btn.setEnabled(True)
@@ -382,16 +443,18 @@ class TemplateManagerDialog(QDialog):
         self.store = store
         self.name = name
         self.setWindowTitle(tr("templates_of", name=name))
-        self.resize(420, 280)
+        self.resize(560, 280)
 
-        self.table = QTableWidget(0, 4)
+        self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
-            [tr("col_index"), tr("col_enroll_date"), tr("col_days_left"), tr("col_status")]
+            [tr("col_index"), tr("col_label"), tr("col_enroll_date"), tr("col_days_left"), tr("col_status")]
         )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
 
+        edit_btn = QPushButton(tr("edit_label"))
+        edit_btn.clicked.connect(self._edit_label)
         del_btn = QPushButton(tr("delete_template"))
         del_btn.setObjectName("accent")
         del_btn.clicked.connect(self._delete)
@@ -399,6 +462,7 @@ class TemplateManagerDialog(QDialog):
         close_btn.clicked.connect(self.accept)
 
         btn_row = QHBoxLayout()
+        btn_row.addWidget(edit_btn)
         btn_row.addWidget(del_btn)
         btn_row.addStretch(1)
         btn_row.addWidget(close_btn)
@@ -423,10 +487,26 @@ class TemplateManagerDialog(QDialog):
         self.table.setRowCount(len(ps))
         for r, p in enumerate(ps):
             status = tr("expired_mark") if p.is_expired else tr("normal_status")
-            cells = [f"#{r + 1}", p.enroll_date.isoformat(), str(p.days_left), status]
+            cells = [f"#{r + 1}", p.label or tr("label_empty"),
+                     p.enroll_date.isoformat(), str(p.days_left), status]
             for c, text in enumerate(cells):
                 self.table.setItem(r, c, QTableWidgetItem(text))
         self.table.selectRow(0)
+
+    def _edit_label(self) -> None:
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, tr("tip"), tr("select_template"))
+            return
+        ps = self._templates()
+        if row >= len(ps):
+            return
+        label = TemplateLabelDialog.prompt(self, ps[row].label)
+        if label is None:
+            return
+        self.store.set_template_label(self.name, row, label)
+        self.store.save()
+        self._load()
 
     def _delete(self) -> None:
         row = self.table.currentRow()

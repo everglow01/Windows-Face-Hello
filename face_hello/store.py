@@ -16,6 +16,12 @@ import numpy as np
 from . import config
 from .platform_backend import protect as _protect, unprotect as _unprotect
 
+_MAX_LABEL_LEN = 24
+
+
+def _clean_label(label: str) -> str:
+    return str(label or "").strip()[:_MAX_LABEL_LEN]
+
 
 @dataclass
 class Profile:
@@ -23,6 +29,7 @@ class Profile:
     embedding: np.ndarray
     enroll_date: _dt.date
     renew_days: int
+    label: str = ""
 
     @property
     def expire_date(self) -> _dt.date:
@@ -66,7 +73,7 @@ class FaceStore:
 
     # ---- 人脸 ----
     def add_profile(self, name: str, embedding: np.ndarray, renew_days: int | None = None,
-                    replace: bool = True) -> None:
+                    replace: bool = True, label: str = "") -> None:
         """replace=True(默认):同名覆盖(重新录入 / 定期换脸)。
         replace=False:同名追加一条模板(补录角度),超过 max_templates_per_name 按 FIFO 丢最早。"""
         if renew_days is None:
@@ -79,6 +86,7 @@ class FaceStore:
                 "embedding": np.asarray(embedding, dtype=np.float32),
                 "enroll_date": _dt.date.today(),
                 "renew_days": int(renew_days),
+                "label": _clean_label(label),
             }
         )
         if not replace:
@@ -110,6 +118,12 @@ class FaceStore:
         if 0 <= index < len(positions):
             del self._data["profiles"][positions[index]]
 
+    def set_template_label(self, name: str, index: int, label: str) -> None:
+        """设置该 name 下第 index 条模板的管理标签。越界则 no-op。"""
+        positions = [i for i, p in enumerate(self._data["profiles"]) if p["name"] == name]
+        if 0 <= index < len(positions):
+            self._data["profiles"][positions[index]]["label"] = _clean_label(label)
+
     def list_profiles(self) -> list[Profile]:
         return [
             Profile(
@@ -117,6 +131,7 @@ class FaceStore:
                 embedding=p["embedding"],
                 enroll_date=p["enroll_date"],
                 renew_days=p["renew_days"],
+                label=_clean_label(p.get("label", "")),
             )
             for p in self._data["profiles"]
         ]

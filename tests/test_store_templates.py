@@ -35,15 +35,66 @@ def test_append_keeps_same_name(tmp_path):
     assert len(s.embeddings()) == 2
 
 
+def test_profile_label_saved_and_read(tmp_path):
+    s = make_store(tmp_path)
+    s.add_profile("owen", _emb(0), label="正脸")
+    assert s.list_profiles()[0].label == "正脸"
+
+
+def test_legacy_profile_without_label_defaults_empty(tmp_path):
+    s = make_store(tmp_path)
+    s._data["profiles"].append(
+        {
+            "name": "owen",
+            "embedding": _emb(0),
+            "enroll_date": __import__("datetime").date.today(),
+            "renew_days": 90,
+        }
+    )
+    assert s.list_profiles()[0].label == ""
+
+
+def test_set_template_label_updates_named_index_only(tmp_path):
+    s = make_store(tmp_path)
+    s.add_profile("owen", _emb(0), label="front")
+    s.add_profile("owen", _emb(1), replace=False, label="side")
+    s.add_profile("alice", _emb(7), replace=False, label="alice")
+    s.set_template_label("owen", 1, "glasses")
+    labels = [(p.name, p.label) for p in s.list_profiles()]
+    assert labels == [("owen", "front"), ("owen", "glasses"), ("alice", "alice")]
+
+
+def test_set_template_label_out_of_range_noop(tmp_path):
+    s = make_store(tmp_path)
+    s.add_profile("owen", _emb(0), label="front")
+    s.set_template_label("owen", 5, "night")
+    s.set_template_label("bob", 0, "night")
+    assert s.list_profiles()[0].label == "front"
+
+
+def test_template_label_is_trimmed_and_capped(tmp_path):
+    s = make_store(tmp_path)
+    s.add_profile("owen", _emb(0), label="  abcdefghijklmnopqrstuvwxyz  ")
+    assert s.list_profiles()[0].label == "abcdefghijklmnopqrstuvwx"
+
+
 def test_append_fifo_cap_drops_oldest(tmp_path):
     s = make_store(tmp_path, max_templates_per_name=3)
     for i in range(4):  # 追加 t0,t1,t2,t3 → 超上限丢最早 t0
-        s.add_profile("owen", _emb(i), replace=False)
+        s.add_profile("owen", _emb(i), replace=False, label=f"t{i}")
     embs = s.embeddings()
     assert len(embs) == 3
     # 留下的是最近 3 条(t1,t2,t3),最早的 t0 被丢
     kept = {int(np.argmax(e)) for e in embs}
     assert kept == {1, 2, 3}
+    assert [p.label for p in s.list_profiles()] == ["t1", "t2", "t3"]
+
+
+def test_replace_default_clears_old_labels(tmp_path):
+    s = make_store(tmp_path)
+    s.add_profile("owen", _emb(0), label="front")
+    s.add_profile("owen", _emb(1), label="new")
+    assert [p.label for p in s.list_profiles()] == ["new"]
 
 
 def test_append_cap_per_name_independent(tmp_path):
