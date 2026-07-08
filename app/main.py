@@ -10,7 +10,7 @@ import sys
 from collections import deque
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QBrush, QColor, QIcon, QImage, QPainter, QPixmap, QPolygon
 from PySide6.QtWidgets import (
     QApplication,
@@ -46,7 +46,7 @@ from face_hello.diagnostics import DiagnosticReport, status_label
 from face_hello import config, cred_vault
 from face_hello.auth import AuthResult
 from face_hello.detector import FaceDetector
-from face_hello.i18n import save_lang_mirror, set_lang, tr
+from face_hello.i18n import save_hotkey_mirror, save_lang_mirror, set_lang, tr
 from face_hello.store import FaceStore
 
 PREVIEW_W, PREVIEW_H = 640, 480
@@ -239,6 +239,15 @@ def _label_presets() -> list[str]:
     ]
 
 
+def _hotkey_text(value: str) -> str:
+    value = str(value or "").upper()
+    if value == "SPACE":
+        return tr("hotkey_space")
+    if value == "ENTER":
+        return tr("hotkey_enter")
+    return value or tr("hotkey_none")
+
+
 class TemplateLabelDialog(QDialog):
     """Small editable preset picker for a template's management-only label."""
 
@@ -284,6 +293,66 @@ class TemplateLabelDialog(QDialog):
         if dlg.exec() == QDialog.Accepted:
             return dlg.label()
         return None
+
+
+class HotkeyDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.value = ""
+        self.setWindowTitle(tr("hotkey_capture_title"))
+        self.prompt = QLabel(tr("hotkey_capture_prompt"))
+        self.prompt.setAlignment(Qt.AlignCenter)
+        self.prompt.setMinimumWidth(280)
+
+        cancel_btn = QPushButton(tr("cancel_btn"))
+        cancel_btn.setFocusPolicy(Qt.NoFocus)
+        cancel_btn.installEventFilter(self)
+        cancel_btn.clicked.connect(self.reject)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_row.addWidget(cancel_btn)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+        layout.addWidget(self.prompt)
+        layout.addLayout(btn_row)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocus()
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() == QEvent.KeyPress:
+            return self._handle_key(event)
+        return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event) -> None:
+        if not self._handle_key(event):
+            super().keyPressEvent(event)
+
+    def _handle_key(self, event) -> bool:
+        key = int(event.key())
+        value = ""
+        if key == int(Qt.Key_Space):
+            value = "SPACE"
+        elif key in (int(Qt.Key_Return), int(Qt.Key_Enter)):
+            value = "ENTER"
+        elif int(Qt.Key_A) <= key <= int(Qt.Key_Z):
+            value = chr(ord("A") + key - int(Qt.Key_A))
+        elif int(Qt.Key_0) <= key <= int(Qt.Key_9):
+            value = chr(ord("0") + key - int(Qt.Key_0))
+
+        if value:
+            self.value = value
+            self.accept()
+            return True
+
+        if key == int(Qt.Key_Escape):
+            self.reject()
+            return True
+
+        self.prompt.setText(tr("hotkey_capture_invalid"))
+        return True
 
 
 class EnrollTab(QWidget):
@@ -728,6 +797,14 @@ class SettingsTab(QWidget):
         self.camera_spin = QSpinBox()
         self.camera_spin.setRange(0, 10)
         self.camera_spin.setValue(int(s.get("camera_index", 0)))
+        self.unlock_hotkey = str(s.get("unlock_hotkey", "") or "").upper()
+        self.hotkey_value = QLineEdit(_hotkey_text(self.unlock_hotkey))
+        self.hotkey_value.setReadOnly(True)
+        self.hotkey_value.setFixedWidth(100)
+        self.hotkey_set_btn = QPushButton(tr("hotkey_set_btn"))
+        self.hotkey_set_btn.clicked.connect(self._set_hotkey)
+        self.hotkey_clear_btn = QPushButton(tr("hotkey_clear_btn"))
+        self.hotkey_clear_btn.clicked.connect(self._clear_hotkey)
         for sp in (self.match_spin, self.margin_spin, self.yaw_spin, self.blink_spin,
                    self.renew_spin, self.samples_spin, self.max_templates_spin,
                    self.lockout_fails_spin, self.lockout_secs_spin, self.camera_spin):
@@ -785,6 +862,18 @@ class SettingsTab(QWidget):
         cam_w.setLayout(cam_row)
         grid.addWidget(cam_w, r, 1, 1, 3)
         r += 1
+        grid.addWidget(QLabel(tr("unlock_hotkey_label")), r, 0)
+        hotkey_row = QHBoxLayout()
+        hotkey_row.setContentsMargins(0, 0, 0, 0)
+        hotkey_row.setSpacing(8)
+        hotkey_row.addWidget(self.hotkey_value)
+        hotkey_row.addWidget(self.hotkey_set_btn)
+        hotkey_row.addWidget(self.hotkey_clear_btn)
+        hotkey_row.addStretch(1)
+        hotkey_w = QWidget()
+        hotkey_w.setLayout(hotkey_row)
+        grid.addWidget(hotkey_w, r, 1, 1, 3)
+        r += 1
         group("grp_recognition")
         pair("match_threshold_label", self.match_spin, "match_margin_label", self.margin_spin)
         group("grp_liveness")
@@ -827,9 +916,21 @@ class SettingsTab(QWidget):
             lockout_max_fails=self.lockout_fails_spin.value(),
             lockout_seconds=self.lockout_secs_spin.value(),
             camera_index=self.camera_spin.value(),
+            unlock_hotkey=self.unlock_hotkey,
         )
         self.store.save()
+        save_hotkey_mirror(self.unlock_hotkey)
         QMessageBox.information(self, tr("saved_title"), tr("settings_saved"))
+
+    def _set_hotkey(self) -> None:
+        dlg = HotkeyDialog(self)
+        if dlg.exec() == QDialog.Accepted:
+            self.unlock_hotkey = dlg.value
+            self.hotkey_value.setText(_hotkey_text(self.unlock_hotkey))
+
+    def _clear_hotkey(self) -> None:
+        self.unlock_hotkey = ""
+        self.hotkey_value.setText(_hotkey_text(self.unlock_hotkey))
 
     def _test_camera(self) -> None:
         """用当前(未保存的)索引抓一帧弹窗预览,确认是不是想要的那台摄像头。"""

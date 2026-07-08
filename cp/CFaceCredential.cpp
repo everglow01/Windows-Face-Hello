@@ -170,10 +170,38 @@ static bool _IsEnglishUI()
     return en;
 }
 
+static int _ReadHotkeyVk()
+{
+    HANDLE h = CreateFileW(L"C:\\ProgramData\\FaceHello\\hotkey.txt", GENERIC_READ,
+                           FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return 0;
+    char buf[32] = {};
+    DWORD read = 0;
+    ReadFile(h, buf, sizeof(buf) - 1, &read, nullptr);
+    CloseHandle(h);
+    std::string s(buf);
+    while (!s.empty() && (s.back() == '\r' || s.back() == '\n' || s.back() == ' '))
+        s.pop_back();
+    for (char& c : s)
+    {
+        if (c >= 'a' && c <= 'z')
+            c = static_cast<char>(c - 'a' + 'A');
+    }
+    if (s == "SPACE")
+        return VK_SPACE;
+    if (s == "ENTER")
+        return VK_RETURN;
+    if (s.size() == 1 && ((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= '0' && s[0] <= '9')))
+        return static_cast<unsigned char>(s[0]);
+    return 0;
+}
+
 CFaceCredential::CFaceCredential()
     : _cRef(1), _cpus(CPUS_INVALID), _pProvider(nullptr),
-      _pCredProvCredentialEvents(nullptr), _hAuthThread(nullptr),
-      _stopFlag(0), _authState(AuthState::Idle), _en(false), _failCount(0)
+      _pCredProvCredentialEvents(nullptr), _hAuthThread(nullptr), _hHotkeyThread(nullptr),
+      _stopFlag(0), _hotkeyStopFlag(0), _authState(AuthState::Idle), _en(false),
+      _failCount(0), _hotkeyVk(0)
 {
     ZeroMemory(_rgFieldStrings, sizeof(_rgFieldStrings));
     InitializeCriticalSection(&_cs);
@@ -181,6 +209,7 @@ CFaceCredential::CFaceCredential()
 
 CFaceCredential::~CFaceCredential()
 {
+    _StopHotkeyThread();
     _StopAuthThread();
     DeleteCriticalSection(&_cs);
     for (PWSTR& s : _rgFieldStrings)
@@ -200,6 +229,7 @@ HRESULT CFaceCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, CFa
     _cpus = cpus;
     _pProvider = pProvider;
     _en = _IsEnglishUI();  // 读一次语言镜像,贯穿本磁贴所有文案
+    _hotkeyVk = _ReadHotkeyVk();
     HRESULT hr = SHStrDupW(_L(L"面部解锁", L"Face Unlock"), &_rgFieldStrings[FFI_LABEL]);
     if (SUCCEEDED(hr))
     {
@@ -269,11 +299,13 @@ IFACEMETHODIMP CFaceCredential::SetSelected(BOOL* pbAutoLogon)
     {
         _SetStatus(_L(L"按 → 开始刷脸", L"Press → to start face unlock"));
     }
+    _StartHotkeyThread();
     return S_OK;
 }
 
 IFACEMETHODIMP CFaceCredential::SetDeselected()
 {
+    _StopHotkeyThread();
     _StopAuthThread();
     return S_OK;
 }
@@ -333,12 +365,81 @@ void CFaceCredential::_StopAuthThread()
     LeaveCriticalSection(&_cs);
 }
 
+void CFaceCredential::_StartHotkeyThread()
+{
+    if (_hotkeyVk == 0)
+        return;
+    if (_hHotkeyThread != nullptr && WaitForSingleObject(_hHotkeyThread, 0) == WAIT_OBJECT_0)
+    {
+        CloseHandle(_hHotkeyThread);
+        _hHotkeyThread = nullptr;
+    }
+
+    bool canStart = false;
+    EnterCriticalSection(&_cs);
+    if (_hHotkeyThread == nullptr && _authState != AuthState::Running &&
+        _authState != AuthState::Success && _failCount < kMaxFaceAttempts)
+    {
+        _hotkeyStopFlag = 0;
+        canStart = true;
+    }
+    LeaveCriticalSection(&_cs);
+    if (!canStart)
+        return;
+    AddRef();
+    _hHotkeyThread = CreateThread(nullptr, 0, _HotkeyThreadProc, this, 0, nullptr);
+    if (_hHotkeyThread == nullptr)
+    {
+        Release();
+    }
+}
+
+void CFaceCredential::_StopHotkeyThread()
+{
+    InterlockedExchange(&_hotkeyStopFlag, 1);
+    HANDLE h = _hHotkeyThread;
+    _hHotkeyThread = nullptr;
+    if (h != nullptr)
+    {
+        WaitForSingleObject(h, 1000);
+        CloseHandle(h);
+    }
+}
+
 DWORD WINAPI CFaceCredential::_AuthThreadProc(LPVOID param)
 {
     CFaceCredential* self = static_cast<CFaceCredential*>(param);
     self->_AuthLoop();
     self->Release();  // 对应 _StartAuthThread 的 AddRef
     return 0;
+}
+
+DWORD WINAPI CFaceCredential::_HotkeyThreadProc(LPVOID param)
+{
+    CFaceCredential* self = static_cast<CFaceCredential*>(param);
+    self->_HotkeyLoop();
+    self->Release();
+    return 0;
+}
+
+void CFaceCredential::_HotkeyLoop()
+{
+    GetAsyncKeyState(_hotkeyVk);
+    bool wasDown = (GetAsyncKeyState(_hotkeyVk) & 0x8000) != 0;
+    for (;;)
+    {
+        if (InterlockedCompareExchange(&_hotkeyStopFlag, 0, 0) == 1)
+            return;
+        SHORT st = GetAsyncKeyState(_hotkeyVk);
+        bool down = (st & 0x8000) != 0;
+        if ((st & 0x0001) != 0 || (down && !wasDown))
+        {
+            _StartAuthThread();
+            return;
+        }
+        wasDown = down;
+        Sleep(30);
+    }
 }
 
 void CFaceCredential::_AuthLoop()
@@ -434,6 +535,10 @@ void CFaceCredential::_OnScanFailed(const std::wstring& reason)
         msg += _L(L" 次,请改用密码登录", L" times — use your password");
     }
     _SetStatus(msg.c_str());
+    if (remaining > 0)
+    {
+        _StartHotkeyThread();
+    }
 }
 
 IFACEMETHODIMP CFaceCredential::GetFieldState(

@@ -102,6 +102,15 @@ _CATALOG: dict[str, dict[str, str]] = {
         "camera_test_btn": "测试",
         "camera_test_title": "摄像头预览",
         "camera_test_fail": "打不开摄像头 index={idx},换个索引再试。",
+        "unlock_hotkey_label": "刷脸启动热键:",
+        "hotkey_none": "未设置",
+        "hotkey_space": "空格",
+        "hotkey_enter": "回车",
+        "hotkey_set_btn": "设置",
+        "hotkey_clear_btn": "清除",
+        "hotkey_capture_title": "设置刷脸启动热键",
+        "hotkey_capture_prompt": "按下要用于启动刷脸的单个按键",
+        "hotkey_capture_invalid": "仅支持空格、回车、字母或数字",
         "match_margin_label": "多账户安全间隔(0=关):",
         "lockout_fails_label": "失败锁定次数(0=关):",
         "lockout_secs_label": "锁定冷却(秒):",
@@ -355,6 +364,15 @@ _CATALOG: dict[str, dict[str, str]] = {
         "camera_test_btn": "Test",
         "camera_test_title": "Camera preview",
         "camera_test_fail": "Can't open camera index={idx}; try another.",
+        "unlock_hotkey_label": "Face unlock hotkey:",
+        "hotkey_none": "Not set",
+        "hotkey_space": "Space",
+        "hotkey_enter": "Enter",
+        "hotkey_set_btn": "Set",
+        "hotkey_clear_btn": "Clear",
+        "hotkey_capture_title": "Set face unlock hotkey",
+        "hotkey_capture_prompt": "Press one key to start face unlock",
+        "hotkey_capture_invalid": "Only Space, Enter, letters, or digits are supported",
         "match_margin_label": "Multi-account safety margin (0 = off):",
         "lockout_fails_label": "Lockout after N fails (0 = off):",
         "lockout_secs_label": "Lockout cooldown (seconds):",
@@ -555,5 +573,16 @@ def save_lang_mirror(lang: str) -> None:
         config.LANG_FILE.write_text(
             lang if lang in _CATALOG else DEFAULT_LANG, encoding="ascii"
         )
+    except OSError:
+        pass
+
+
+def save_hotkey_mirror(hotkey: str) -> None:
+    from . import config
+
+    text = str(hotkey or "").strip().upper()
+    try:
+        config.AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+        config.HOTKEY_FILE.write_text(text, encoding="ascii")
     except OSError:
         pass

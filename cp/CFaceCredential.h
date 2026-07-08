@@ -56,8 +56,12 @@ private:
 
     void _StartAuthThread();
     void _StopAuthThread();
+    void _StartHotkeyThread();
+    void _StopHotkeyThread();
     void _AuthLoop();
+    void _HotkeyLoop();
     static DWORD WINAPI _AuthThreadProc(LPVOID param);
+    static DWORD WINAPI _HotkeyThreadProc(LPVOID param);
     void _SetStatus(PCWSTR text);  // 线程安全地更新状态字段并通知 LogonUI
     void _OnScanFailed(const std::wstring& reason);  // 一次扫描失败:计数 + 刷新状态(含剩余次数)
     PCWSTR _L(PCWSTR zh, PCWSTR en) const { return _en ? en : zh; }  // 按 lang.txt 选中/英文
@@ -71,8 +75,11 @@ private:
 
     CRITICAL_SECTION _cs;          // 保护 _authState/_authUser/状态字段/events 调用
     HANDLE _hAuthThread;
+    HANDLE _hHotkeyThread;
     volatile LONG _stopFlag;       // 1 = 请求停止扫描线程
+    volatile LONG _hotkeyStopFlag;
     AuthState _authState;
     std::wstring _authUser;        // 认证通过的账户名(供 GetSerialization)
     int _failCount;               // 已失败的刷脸次数(达 kMaxFaceAttempts 后停止重试,退回密码)
+    int _hotkeyVk;
 };

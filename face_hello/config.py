@@ -41,6 +41,7 @@ AVATAR_DIR = _PROGRAMDATA
 # 界面语言镜像:settings['language'] 的明文副本,供 C++ CP(SYSTEM)在锁屏读取
 # (CP 读不了 DPAPI 加密的人脸库)。控制台改语言时写,服务启动时按 settings 同步。
 LANG_FILE = _PROGRAMDATA / "lang.txt"
+HOTKEY_FILE = _PROGRAMDATA / "hotkey.txt"
 
 # 认证服务的命名管道(Credential Provider 通过它请求认证)
 PIPE_NAME = r"\\.\pipe\FaceHello"
@@ -96,6 +97,7 @@ DEFAULTS = {
     "max_templates_per_name": 5,  # 每个用户最多存几条模板(补录角度),超出按 FIFO 丢最早
     # 摄像头索引(0=默认/第一个)。多摄像头(内置+USB+虚拟)时改这里;控制台「测试」按钮可预览确认。
     "camera_index": 0,
+    "unlock_hotkey": "",
     # 被动反欺骗(RGB 活体):识别帧上跑一次 MiniFASNet 判屏幕翻拍/视频回放。
     # 模型缺失/加载失败则 fail-open(跳过,照常解锁)。默认开,安全优先。
     "antispoof_enabled": True,
