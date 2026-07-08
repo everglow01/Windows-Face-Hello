@@ -152,7 +152,7 @@ IFACEMETHODIMP CFaceProvider::GetCredentialCount(
     DWORD* pdwCount, DWORD* pdwDefault, BOOL* pbAutoLogonWithDefault)
 {
     *pdwCount = _pCredential ? 1 : 0;
-    *pdwDefault = 0;  // 我们的磁贴为默认项 → 显示即 SetSelected → 后台开始刷脸
+    *pdwDefault = 0;
     // 识别通过后 SignalAutoLogon 置位,LogonUI 据此自动调 GetSerialization 完成提交
     *pbAutoLogonWithDefault = _bAutoLogon ? TRUE : FALSE;
     return S_OK;

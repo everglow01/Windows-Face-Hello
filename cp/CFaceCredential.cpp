@@ -260,9 +260,15 @@ IFACEMETHODIMP CFaceCredential::UnAdvise()
 
 IFACEMETHODIMP CFaceCredential::SetSelected(BOOL* pbAutoLogon)
 {
-    // milestone d:选中磁贴即后台开始刷脸(不在此处自动提交,成功后再由线程触发)。
     *pbAutoLogon = FALSE;
-    _StartAuthThread();
+    bool firstReady;
+    EnterCriticalSection(&_cs);
+    firstReady = (_authState == AuthState::Idle && _failCount == 0);
+    LeaveCriticalSection(&_cs);
+    if (firstReady)
+    {
+        _SetStatus(_L(L"按 → 开始刷脸", L"Press → to start face unlock"));
+    }
     return S_OK;
 }
 
@@ -512,7 +518,7 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
     LeaveCriticalSection(&_cs);
     if (!ready)
     {
-        // 用户按了「→」提交按钮但还没识别成功:当作"再试一次"。
+        // 用户按了「→」提交按钮但还没识别成功:开始或重试刷脸。
         // 还有机会且当前没有扫描在跑 → 重启刷脸;否则什么都不做——
         // 状态文字已由 _OnScanFailed 设成「(按 → 重试,剩 N 次)」或用尽时的「请改用密码登录」,
         // 扫描进行中(Running)则正由 _AuthLoop 刷活体提示,都不该被覆盖。

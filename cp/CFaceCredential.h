@@ -7,9 +7,7 @@
 
 class CFaceProvider;  // 反向指针,用于认证成功后触发自动提交
 
-// 单个「刷脸」磁贴。milestone d:选中磁贴即后台线程启动认证(auth_start),轮询
-// auth_poll 把活体提示实时刷到状态文字;识别通过则触发 LogonUI 自动提交,
-// GetSerialization 用缓存的用户名读 LSA 密码 → 打包 KERB 解锁。
+// 单个「刷脸」磁贴。
 class CFaceCredential : public ICredentialProviderCredential
 {
 public:
