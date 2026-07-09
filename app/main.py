@@ -26,10 +26,11 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizeGrip,
     QSpinBox,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -49,16 +50,16 @@ from face_hello.detector import FaceDetector
 from face_hello.i18n import save_hotkey_mirror, save_lang_mirror, set_lang, tr
 from face_hello.store import FaceStore
 
-PREVIEW_W, PREVIEW_H = 640, 480
+PREVIEW_W, PREVIEW_H = 560, 420
 
 # Fluent 语义色(供内联状态样式用;QSS 里另直接写色值)
-ACCENT = "#0067C0"
-SUCCESS = "#0F7B0F"
-DANGER = "#C42B1C"
-WARN = "#9D5D00"
+ACCENT = "#B45E3C"
+SUCCESS = "#2F7D57"
+DANGER = "#B42318"
+WARN = "#9A5B16"
 
 # 大号活体提示文字的基础样式(颜色随结果在内联追加)
-_INSTR_BASE = "font-size:18px;font-weight:600;padding:8px;"
+_INSTR_BASE = "font-size:18px;font-weight:600;padding:8px;color:#2F261F;"
 
 # Win11 Fluent 浅色主题
 FLUENT_QSS = """
@@ -66,58 +67,45 @@ FLUENT_QSS = """
     font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI",
                  "Microsoft YaHei", sans-serif;
     font-size: 14px;
-    color: #1A1A1A;
+    color: #2F261F;
 }
-QWidget { background-color: #F3F3F3; }
-
-QTabWidget::pane {
-    border: 1px solid #E5E5E5;
-    border-radius: 8px;
-    background: #FFFFFF;
-}
-QTabBar::tab {
-    background: transparent;
-    color: #5A5A5A;
-    padding: 8px 18px;
-    margin: 2px;
-    border-radius: 6px;
-}
-QTabBar::tab:hover { background: #EAEAEA; }
-QTabBar::tab:selected {
-    background: #FFFFFF;
-    color: #0067C0;
-    font-weight: 600;
-}
+QWidget { background-color: #F7F2EA; }
 
 QPushButton {
-    background-color: #FFFFFF;
-    border: 1px solid #D1D1D1;
+    background-color: #FFFCF7;
+    border: 1px solid #D9CABB;
     border-radius: 6px;
     padding: 7px 16px;
 }
-QPushButton:hover { background-color: #F9F9F9; border-color: #C4C4C4; }
-QPushButton:pressed { background-color: #EFEFEF; }
-QPushButton:disabled { background-color: #F5F5F5; color: #A0A0A0; border-color: #E8E8E8; }
+QPushButton:hover { background-color: #F7EDE2; border-color: #CDB8A6; }
+QPushButton:pressed { background-color: #EEDFD0; border-color: #B99D87; }
+QPushButton:focus { border: 1px solid #B99D87; }
+QPushButton:default { background-color: #FFF7EF; border: 1px solid #C78F72; }
+QPushButton:default:pressed { background-color: #EEDFD0; border-color: #B99D87; }
+QPushButton:disabled { background-color: #F0E8DF; color: #A99C8F; border-color: #E8DED3; }
 
 QPushButton#accent {
-    background-color: #0067C0;
-    border: 1px solid #0067C0;
-    color: #FFFFFF;
+    background-color: #B45E3C;
+    border: 1px solid #B45E3C;
+    color: #FFF9F2;
     font-weight: 600;
 }
-QPushButton#accent:hover { background-color: #1976C8; border-color: #1976C8; }
-QPushButton#accent:pressed { background-color: #005BA1; border-color: #005BA1; }
-QPushButton#accent:disabled { background-color: #B9D4EC; border-color: #B9D4EC; color: #EAF2FB; }
+QPushButton#accent:hover { background-color: #C06B47; border-color: #C06B47; }
+QPushButton#accent:pressed { background-color: #9E4D30; border-color: #9E4D30; }
+QPushButton#accent:focus { border: 1px solid #7F3B24; }
+QPushButton#accent:default { background-color: #B45E3C; border: 1px solid #7F3B24; }
+QPushButton#accent:default:pressed { background-color: #9E4D30; border-color: #7F3B24; }
+QPushButton#accent:disabled { background-color: #D9B7A6; border-color: #D9B7A6; color: #FFF1E9; }
 
 QLineEdit, QSpinBox, QDoubleSpinBox {
     background: #FFFFFF;
     border: 1px solid #D1D1D1;
     border-radius: 6px;
     padding: 6px 8px;
-    selection-background-color: #0067C0;
-    selection-color: #FFFFFF;
+    selection-background-color: #B45E3C;
+    selection-color: #FFF9F2;
 }
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #0067C0; }
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #B45E3C; }
 
 /* 自定义边框后必须显式给上下按钮几何,否则点击区域塌陷、点上三角会落到输入框上 */
 QSpinBox, QDoubleSpinBox { padding-right: 22px; }
@@ -125,22 +113,22 @@ QSpinBox::up-button, QDoubleSpinBox::up-button {
     subcontrol-origin: border;
     subcontrol-position: top right;
     width: 20px;
-    border-left: 1px solid #D1D1D1;
+    border-left: 1px solid #D9CABB;
     border-top-right-radius: 6px;
-    background: #F7F7F7;
+    background: #F3E9DE;
 }
 QSpinBox::down-button, QDoubleSpinBox::down-button {
     subcontrol-origin: border;
     subcontrol-position: bottom right;
     width: 20px;
-    border-left: 1px solid #D1D1D1;
+    border-left: 1px solid #D9CABB;
     border-bottom-right-radius: 6px;
-    background: #F7F7F7;
+    background: #F3E9DE;
 }
 QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
-QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover { background: #E8E8E8; }
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover { background: #E9D8C8; }
 QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
-QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed { background: #DDDDDD; }
+QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed { background: #DFC6B3; }
 QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(__UP_ARROW__); }
 QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(__DOWN_ARROW__); }
 
@@ -151,7 +139,7 @@ QTableWidget {
     gridline-color: #F0F0F0;
 }
 QTableWidget::item { padding: 6px; }
-QTableWidget::item:selected { background: #E5F1FB; color: #1A1A1A; }
+QTableWidget::item:selected { background: #F3DCCB; color: #2F261F; }
 QHeaderView::section {
     background: #FAFAFA;
     color: #5A5A5A;
@@ -176,6 +164,169 @@ QScrollBar::handle:vertical { background: #C9C9C9; border-radius: 5px; min-heigh
 QScrollBar::handle:vertical:hover { background: #B0B0B0; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
+QWidget#sideBar {
+    background: #EFE4D8;
+    border: 1px solid #E1D0BE;
+    border-radius: 8px;
+}
+QWidget#contentPanel {
+    background: #FFFCF7;
+    border: 1px solid #E6D8C9;
+    border-radius: 8px;
+}
+QWidget#rootWindow {
+    background: transparent;
+}
+QWidget#windowShell {
+    background: #F7F2EA;
+    border: 1px solid #DDCBB8;
+    border-radius: 12px;
+}
+QPushButton {
+    background-color: #FFFCF7;
+    border: 1px solid #D9CABB;
+}
+QPushButton:hover { background-color: #F7EDE2; border-color: #CDB8A6; }
+QPushButton:pressed { background-color: #EEDFD0; border-color: #B99D87; }
+QPushButton:focus { border: 1px solid #B99D87; }
+QPushButton:default { background-color: #FFF7EF; border: 1px solid #C78F72; }
+QPushButton:default:pressed { background-color: #EEDFD0; border-color: #B99D87; }
+QPushButton:checked { background-color: #FFF7EF; border-color: #E4C5B2; }
+QPushButton:checked:pressed { background-color: #EEDFD0; border-color: #B99D87; }
+QPushButton:disabled { background-color: #F0E8DF; color: #A99C8F; border-color: #E8DED3; }
+QPushButton#accent {
+    background-color: #B45E3C;
+    border: 1px solid #B45E3C;
+    color: #FFF9F2;
+}
+QPushButton#accent:hover { background-color: #C06B47; border-color: #C06B47; }
+QPushButton#accent:pressed { background-color: #9E4D30; border-color: #9E4D30; }
+QPushButton#accent:focus { border: 1px solid #7F3B24; }
+QPushButton#accent:default { background-color: #B45E3C; border: 1px solid #7F3B24; }
+QPushButton#accent:default:pressed { background-color: #9E4D30; border-color: #7F3B24; }
+QPushButton#accent:disabled { background-color: #D9B7A6; border-color: #D9B7A6; color: #FFF1E9; }
+QPushButton#navButton {
+    background: transparent;
+    border: 1px solid transparent;
+    color: #5E5146;
+    text-align: left;
+    padding: 9px 12px;
+    font-weight: 500;
+}
+QPushButton#navButton:hover {
+    background: #F1E6DA;
+    border-color: #E2D2C3;
+}
+QPushButton#navButton:pressed {
+    background: #E8D8C8;
+    border-color: #CDB8A6;
+}
+QPushButton#navButton:checked {
+    background: #FFF7EF;
+    border-color: #E4C5B2;
+    color: #9E4D30;
+    font-weight: 600;
+}
+QPushButton#navButton:checked:pressed {
+    background: #EEDFD0;
+    border-color: #B99D87;
+}
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+    background: #FFFCF7;
+    border: 1px solid #D9CABB;
+    selection-background-color: #B45E3C;
+    selection-color: #FFF9F2;
+}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+    border: 1px solid #B45E3C;
+}
+QTableWidget {
+    background: #FFFCF7;
+    border: 1px solid #E6D8C9;
+    gridline-color: #EFE3D6;
+}
+QTableWidget::item:selected { background: #F3DCCB; color: #2F261F; }
+QHeaderView::section {
+    background: #F5EADF;
+    color: #6A5B4E;
+    border-bottom: 1px solid #E6D8C9;
+}
+QLabel#h2 { color: #2F261F; }
+QLabel#brand {
+    font-size: 22px;
+    font-weight: 700;
+    color: #2F261F;
+    background: transparent;
+}
+QLabel#hint, QLabel#sideHint { color: #716457; }
+QLabel#sideHint {
+    font-size: 12px;
+    background: transparent;
+}
+QComboBox#sideCombo {
+    background: #EFE4D8;
+    border: 1px solid #D8C5B3;
+    padding: 5px 28px 5px 8px;
+}
+QComboBox#sideCombo:hover {
+    background: #F3E8DC;
+    border-color: #CDB8A6;
+}
+QComboBox#sideCombo::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 24px;
+    border: none;
+    background: transparent;
+}
+QComboBox#sideCombo::down-arrow {
+    image: url(__COMBO_ARROW__);
+    width: 10px;
+    height: 10px;
+}
+QWidget#titleBar {
+    background: transparent;
+}
+QPushButton#windowButton, QPushButton#windowCloseButton {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 0;
+    padding: 0;
+    min-width: 46px;
+    min-height: 32px;
+    color: #6A5B4E;
+}
+QPushButton#windowButton:hover {
+    background: #EDE1D5;
+    border-color: transparent;
+}
+QPushButton#windowButton:pressed {
+    background: #E2D0BF;
+    border-color: transparent;
+}
+QPushButton#windowCloseButton:hover {
+    background: #C75B3A;
+    border-color: #C75B3A;
+    color: #FFF9F2;
+}
+QPushButton#windowCloseButton:pressed {
+    background: #9E4D30;
+    border-color: #9E4D30;
+    color: #FFF9F2;
+}
+QProgressBar {
+    background: #F1E6DA;
+    border: 1px solid #E1D0BE;
+    border-radius: 5px;
+    height: 10px;
+}
+QProgressBar::chunk {
+    background: #B45E3C;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical { background: #CDB8A6; }
+QScrollBar::handle:vertical:hover { background: #B99D87; }
 """
 
 
@@ -196,6 +347,19 @@ def _make_arrow(path: str, up: bool) -> None:
     pm.save(path, "PNG")
 
 
+def _make_combo_arrow(path: str) -> None:
+    pm = QPixmap(12, 12)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QColor("#8A6A55")
+    p.setPen(pen)
+    p.drawLine(3, 5, 6, 8)
+    p.drawLine(6, 8, 9, 5)
+    p.end()
+    pm.save(path, "PNG")
+
+
 def _themed_qss() -> str:
     """生成箭头图标到临时目录(纯 ASCII 路径),把其路径填进 QSS。"""
     import os
@@ -204,9 +368,16 @@ def _themed_qss() -> str:
     tmp = tempfile.gettempdir()
     up = os.path.join(tmp, "facehello_spin_up.png").replace("\\", "/")
     down = os.path.join(tmp, "facehello_spin_down.png").replace("\\", "/")
+    combo = os.path.join(tmp, "facehello_combo_down.png").replace("\\", "/")
     _make_arrow(up, True)
     _make_arrow(down, False)
-    return FLUENT_QSS.replace("__UP_ARROW__", up).replace("__DOWN_ARROW__", down)
+    _make_combo_arrow(combo)
+    return (
+        FLUENT_QSS
+        .replace("__UP_ARROW__", up)
+        .replace("__DOWN_ARROW__", down)
+        .replace("__COMBO_ARROW__", combo)
+    )
 
 
 def _preview_label() -> QLabel:
@@ -214,7 +385,7 @@ def _preview_label() -> QLabel:
     lbl.setFixedSize(PREVIEW_W, PREVIEW_H)
     lbl.setAlignment(Qt.AlignCenter)
     lbl.setStyleSheet(
-        "background:#2B2B2B;color:#C8C8C8;border:1px solid #E5E5E5;border-radius:8px;"
+        "background:#24201C;color:#D8CFC5;border:1px solid #E6D8C9;border-radius:8px;"
     )
     return lbl
 
@@ -407,17 +578,25 @@ class EnrollTab(QWidget):
         del_row.addWidget(self.manage_btn)
         del_row.addStretch(1)  # 按钮不再整行宽
 
-        layout = QVBoxLayout(self)
+        left = QVBoxLayout()
+        left.setSpacing(10)
+        left.addLayout(top)
+        left.addWidget(self.preview)
+        left.addWidget(self.status)
+        left.addWidget(self.progress_bar)
+
+        right = QVBoxLayout()
+        right.setSpacing(10)
+        right.addWidget(users_title)
+        right.addWidget(self.table)
+        right.addLayout(del_row)
+        right.addStretch(1)
+
+        layout = QHBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(12)
-        layout.addLayout(top)
-        layout.addWidget(self.preview, alignment=Qt.AlignCenter)
-        layout.addWidget(self.status)
-        layout.addWidget(self.progress_bar)
-        layout.addSpacing(8)
-        layout.addWidget(users_title)
-        layout.addWidget(self.table)
-        layout.addLayout(del_row)
+        layout.setSpacing(16)
+        layout.addLayout(left)
+        layout.addLayout(right, 1)
 
         self.refresh()
 
@@ -608,7 +787,7 @@ class SimilarityHistogram(QWidget):
         self._samples: deque[float] = deque(maxlen=self._WINDOW)
         self._threshold = 0.5
         self._current: float | None = None
-        self.setMinimumHeight(150)
+        self.setFixedHeight(118)
 
     def set_threshold(self, thr: float) -> None:
         self._threshold = float(thr)
@@ -630,8 +809,8 @@ class SimilarityHistogram(QWidget):
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         w, h = self.width(), self.height()
-        p.fillRect(0, 0, w, h, QColor("#FAFAFA"))
-        p.setPen(QColor("#E5E5E5"))
+        p.fillRect(0, 0, w, h, QColor("#FFFCF7"))
+        p.setPen(QColor("#E6D8C9"))
         p.drawRect(0, 0, w - 1, h - 1)
 
         pad_l, pad_r, pad_t, pad_b = 8, 8, 22, 18
@@ -650,14 +829,14 @@ class SimilarityHistogram(QWidget):
             x = pad_l + i * bar_w
             y = pad_t + (plot_h - bar_h)
             center = (i + 0.5) / self._BINS
-            color = QColor(SUCCESS) if center >= self._threshold else QColor("#B0B0B0")
+            color = QColor(SUCCESS) if center >= self._threshold else QColor("#CDB8A6")
             p.fillRect(int(x) + 1, int(y), max(1, int(bar_w) - 1), int(bar_h), color)
 
         tx = pad_l + self._threshold * plot_w
         p.setPen(QColor(DANGER))
         p.drawLine(int(tx), pad_t, int(tx), pad_t + plot_h)
 
-        p.setPen(QColor("#5A5A5A"))
+        p.setPen(QColor("#716457"))
         p.drawText(pad_l, 14, tr("hist_title"))
         cur = tr("hist_current", sim=self._current) if self._current is not None else tr("hist_no_face")
         p.drawText(pad_l, h - 5, f"{cur}    {tr('hist_threshold', thr=self._threshold)}")
@@ -684,16 +863,18 @@ class AuthTab(QWidget):
         self.histogram = SimilarityHistogram()
 
         btn_row = QHBoxLayout()
-        btn_row.addWidget(self.start_btn, 1)
+        btn_row.addWidget(self.start_btn)
         btn_row.addWidget(self.monitor_btn)
+        btn_row.addStretch(1)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
         layout.addLayout(btn_row)
         layout.addWidget(self.preview, alignment=Qt.AlignCenter)
         layout.addWidget(self.instruction)
         layout.addWidget(self.histogram)
+        layout.addStretch(1)
 
     def _start(self) -> None:
         if self.store.is_empty():
@@ -1219,49 +1400,160 @@ class ServiceTab(QWidget):
         QMessageBox.information(self, tr("diag_title"), tr("diag_copy_ok"))
 
 
+class CaptionButton(QPushButton):
+    def __init__(self, kind: str):
+        super().__init__()
+        self.kind = kind
+        self.setFixedSize(46, 32)
+        self.setFlat(True)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setObjectName("windowCloseButton" if kind == "close" else "windowButton")
+
+    def set_kind(self, kind: str) -> None:
+        self.kind = kind
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        color = QColor("#FFF9F2") if self.kind == "close" and self.underMouse() else QColor("#5E5146")
+        p.setPen(color)
+        cx = self.width() // 2
+        cy = self.height() // 2
+        if self.kind == "min":
+            p.drawLine(cx - 5, cy + 1, cx + 5, cy + 1)
+        elif self.kind == "max":
+            p.drawRect(cx - 5, cy - 5, 10, 10)
+        elif self.kind == "restore":
+            p.drawRect(cx - 3, cy - 5, 8, 8)
+            p.drawRect(cx - 6, cy - 2, 8, 8)
+        else:
+            p.drawLine(cx - 5, cy - 5, cx + 5, cy + 5)
+            p.drawLine(cx + 5, cy - 5, cx - 5, cy + 5)
+        p.end()
+
+
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
+        self.setObjectName("rootWindow")
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._drag_pos: QPoint | None = None
         self.detector = FaceDetector()  # 惰性加载,首次推理时才载入模型
         self.store = FaceStore().load()
         # 建任何控件前先按持久化设置定语言;切换语言改的是设置,重启控制台后整体生效
         set_lang(self.store.get_settings().get("language", "zh"))
         self.setWindowTitle(tr("app_title"))
 
-        tabs = QTabWidget()
         self.enroll_tab = EnrollTab(self.detector, self.store)
         self.auth_tab = AuthTab(self.detector, self.store)
         self.service_tab = ServiceTab(self.store)
         self.settings_tab = SettingsTab(self.store)
-        tabs.addTab(self.enroll_tab, tr("tab_enroll"))
-        tabs.addTab(self.auth_tab, tr("tab_test"))
-        tabs.addTab(self.service_tab, tr("tab_service"))
-        tabs.addTab(self.settings_tab, tr("tab_settings"))
+        self.stack = QStackedWidget()
+        for page in (self.enroll_tab, self.auth_tab, self.service_tab, self.settings_tab):
+            self.stack.addWidget(page)
 
-        # 全局语言选择器:常驻标签栏右上角,任何 tab 下都可见——看不懂中文的人也能一眼找到。
-        # 切换写设置 + 明文镜像,重启后整体生效(同设计:语言重启生效)。
-        lang_box = QWidget()
-        lang_row = QHBoxLayout(lang_box)
-        lang_row.setContentsMargins(0, 0, 8, 0)
-        lang_row.setSpacing(4)
         self.lang_combo = QComboBox()
         self.lang_combo.addItem("中文", "zh")
         self.lang_combo.addItem("English", "en")
         self.lang_combo.setCurrentIndex(0 if self.store.get_settings().get("language", "zh") != "en" else 1)
         self.lang_combo.setToolTip("重启后生效 / Takes effect after restart")
         self.lang_combo.currentIndexChanged.connect(self._on_lang_changed)  # 连在 setCurrentIndex 之后,避免启动误触
-        lang_row.addWidget(QLabel("🌐"))
-        lang_row.addWidget(self.lang_combo)
-        tabs.setCornerWidget(lang_box, Qt.TopRightCorner)
-
         self.status_label = QLabel(tr("model_loading"))
-        self.status_label.setStyleSheet(f"color:{WARN};padding:2px 4px;")
+        self.status_label.setStyleSheet(f"color:{WARN};background:transparent;")
+
+        self.nav_buttons: list[QPushButton] = []
+        nav_col = QVBoxLayout()
+        nav_col.setContentsMargins(0, 0, 0, 0)
+        nav_col.setSpacing(6)
+        for i, text in enumerate((tr("tab_enroll"), tr("tab_test"), tr("tab_service"), tr("tab_settings"))):
+            btn = QPushButton(text)
+            btn.setObjectName("navButton")
+            btn.setCheckable(True)
+            btn.setProperty("pageIndex", i)
+            btn.clicked.connect(self._on_nav_clicked)
+            self.nav_buttons.append(btn)
+            nav_col.addWidget(btn)
+        self.nav_buttons[0].setChecked(True)
+
+        brand = QLabel("FaceHello")
+        brand.setObjectName("brand")
+        side_hint = QLabel(tr("app_title").replace("_", ""))
+        side_hint.setObjectName("sideHint")
+        self.status_label.setObjectName("sideHint")
+        self.status_label.setWordWrap(True)
+
+        sidebar = QWidget()
+        sidebar.setObjectName("sideBar")
+        sidebar.setFixedWidth(210)
+        side_layout = QVBoxLayout(sidebar)
+        side_layout.setContentsMargins(16, 16, 16, 16)
+        side_layout.setSpacing(12)
+        side_layout.addWidget(brand)
+        side_layout.addWidget(side_hint)
+        side_layout.addSpacing(10)
+        side_layout.addLayout(nav_col)
+        side_layout.addStretch(1)
+        lang_label = QLabel("Language")
+        lang_label.setObjectName("sideHint")
+        self.lang_combo.setObjectName("sideCombo")
+        side_layout.addWidget(lang_label)
+        side_layout.addWidget(self.lang_combo)
+        side_layout.addWidget(self.status_label)
+
+        content = QWidget()
+        content.setObjectName("contentPanel")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.addWidget(self.stack)
+
+        self.title_bar = QWidget()
+        self.title_bar.setObjectName("titleBar")
+        self.title_bar.setFixedHeight(32)
+        self.title_bar.installEventFilter(self)
+        min_btn = CaptionButton("min")
+        max_btn = CaptionButton("max")
+        close_btn = CaptionButton("close")
+        self.max_btn = max_btn
+        min_btn.clicked.connect(self.showMinimized)
+        max_btn.clicked.connect(self._toggle_max_restore)
+        close_btn.clicked.connect(self.close)
+
+        title_layout = QHBoxLayout(self.title_bar)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(4)
+        title_layout.addStretch(1)
+        title_layout.addWidget(min_btn)
+        title_layout.addWidget(max_btn)
+        title_layout.addWidget(close_btn)
+
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(14)
+        body.addWidget(sidebar)
+        body.addWidget(content, 1)
+
+        grip = QSizeGrip(self)
+        grip.setFixedSize(14, 14)
+        grip_row = QHBoxLayout()
+        grip_row.setContentsMargins(0, 0, 0, 0)
+        grip_row.addStretch(1)
+        grip_row.addWidget(grip)
+
+        shell = QWidget()
+        shell.setObjectName("windowShell")
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(18, 10, 18, 10)
+        shell_layout.setSpacing(8)
+        shell_layout.addWidget(self.title_bar)
+        shell_layout.addLayout(body, 1)
+        shell_layout.addLayout(grip_row)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 10)
-        layout.setSpacing(8)
-        layout.addWidget(tabs)
-        layout.addWidget(self.status_label)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(shell)
 
         # 启动即后台预加载识别模型,把加载耗时挪出录入/解锁路径
         self._warmup = WarmupWorker(self.detector)
@@ -1269,6 +1561,42 @@ class MainWindow(QWidget):
         self._warmup.start()
 
         self._warn_expired()
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.title_bar:
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                return True
+            if event.type() == QEvent.MouseMove and self._drag_pos is not None:
+                if event.buttons() & Qt.LeftButton:
+                    if self.isMaximized():
+                        self.showNormal()
+                    self.move(event.globalPosition().toPoint() - self._drag_pos)
+                    return True
+            if event.type() == QEvent.MouseButtonRelease:
+                self._drag_pos = None
+                return True
+            if event.type() == QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton:
+                self._toggle_max_restore()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _toggle_max_restore(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+            self.max_btn.set_kind("max")
+        else:
+            self.showMaximized()
+            self.max_btn.set_kind("restore")
+
+    def _on_nav_clicked(self) -> None:
+        btn = self.sender()
+        if not isinstance(btn, QPushButton):
+            return
+        index = int(btn.property("pageIndex"))
+        self.stack.setCurrentIndex(index)
+        for nav in self.nav_buttons:
+            nav.setChecked(nav is btn)
 
     def _on_lang_changed(self) -> None:
         lang = self.lang_combo.currentData()
@@ -1283,7 +1611,7 @@ class MainWindow(QWidget):
 
     def _on_ready(self) -> None:
         self.status_label.setText(tr("model_ready"))
-        self.status_label.setStyleSheet(f"color:{SUCCESS};padding:2px 4px;")
+        self.status_label.setStyleSheet(f"color:{SUCCESS};background:transparent;")
 
     def _warn_expired(self) -> None:
         expired = list(dict.fromkeys(  # 去重保序:多模板下同名会重复出现
@@ -1332,7 +1660,8 @@ def main() -> None:
     app.setWindowIcon(_app_icon())  # 窗口 + 任务栏 + 所有对话框的默认图标
     app.setStyleSheet(_themed_qss())
     win = MainWindow()
-    win.resize(720, 760)
+    win.setMinimumSize(1040, 640)
+    win.resize(1180, 720)
     win.show()
     sys.exit(app.exec())
 
