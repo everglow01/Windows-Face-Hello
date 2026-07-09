@@ -17,7 +17,6 @@ STATUS_FAIL = "fail"
 STATUS_INFO = "info"
 
 _CP_CLSID = "{E071A7CE-5D7F-4063-9A10-AE39AEC64EE8}"
-_MAX_LOG_LINES = 30
 
 
 @dataclass
@@ -41,8 +40,6 @@ class DiagnosticReport:
         statuses = {item.status for item in self.items}
         if STATUS_FAIL in statuses:
             return STATUS_FAIL
-        if STATUS_WARN in statuses:
-            return STATUS_WARN
         return STATUS_OK
 
     def to_text(self, lang: str = "zh") -> str:
@@ -90,7 +87,6 @@ def run_diagnostics(lang: str = "zh", progress: Callable[[str], None] | None = N
     _run_check(report, lang, progress, "diag_step_cp", _check_cp)
     _run_check(report, lang, progress, "diag_step_models", _check_models)
     _run_check(report, lang, progress, "diag_step_camera", _check_camera)
-    _run_check(report, lang, progress, "diag_step_log", _check_log)
     return report
 
 
@@ -157,7 +153,7 @@ def _check_store(report: DiagnosticReport, lang: str, user: str) -> None:
         return
     if user not in names:
         _add(
-            report, lang, "diag_item_store", STATUS_WARN,
+            report, lang, "diag_item_store", STATUS_FAIL,
             t("diag_store_missing_user", lang, user=user, users=", ".join(names)),
             "diag_advice_enroll_current_user",
         )
@@ -175,7 +171,7 @@ def _check_password(report: DiagnosticReport, lang: str, user: str) -> None:
         readable = False
     _add(
         report, lang, "diag_item_password",
-        STATUS_OK if readable else STATUS_WARN,
+        STATUS_OK if readable else STATUS_FAIL,
         t("diag_password_detail", lang, readable=_yes_no(readable, lang)),
         "" if readable else "diag_advice_password_admin",
     )
@@ -213,7 +209,7 @@ def _check_service(report: DiagnosticReport, lang: str) -> None:
     status_key = {1: "svc_stopped", 2: "svc_starting", 3: "svc_stopping", 4: "svc_running",
                   7: "svc_paused"}.get(status)
     status_text = t(status_key, lang) if status_key else t("svc_code", lang, st=status)
-    item_status = STATUS_OK if running and auto and path_ok else STATUS_WARN
+    item_status = STATUS_OK if running and auto and path_ok else STATUS_FAIL
     advice = "" if item_status == STATUS_OK else "diag_advice_service"
     _add(
         report, lang, "diag_item_service", item_status,
@@ -237,7 +233,7 @@ def _check_pipe(report: DiagnosticReport, lang: str) -> None:
     except Exception as exc:
         winerror = getattr(exc, "winerror", None)
         if winerror == 5:
-            _add(report, lang, "diag_item_pipe", STATUS_WARN, t("diag_pipe_denied", lang),
+            _add(report, lang, "diag_item_pipe", STATUS_FAIL, t("diag_pipe_denied", lang),
                  "diag_advice_run_admin")
         elif winerror == 2:
             _add(report, lang, "diag_item_pipe", STATUS_FAIL, t("diag_pipe_missing", lang),
@@ -323,12 +319,10 @@ def _check_models(report: DiagnosticReport, lang: str) -> None:
         antispoof_ready = get_antispoof() is not None
     except Exception:
         antispoof_ready = False
-    status = STATUS_OK if antispoof_ready else STATUS_WARN
     _add(
-        report, lang, "diag_item_models", status,
+        report, lang, "diag_item_models", STATUS_OK,
         t("diag_models_ok", lang, seconds=f"{time.perf_counter() - t0:.1f}",
           antispoof=_yes_no(antispoof_ready, lang)),
-        "" if antispoof_ready else "diag_advice_antispoof_optional",
     )
 
 
@@ -354,24 +348,3 @@ def _check_camera(report: DiagnosticReport, lang: str) -> None:
     _add(report, lang, "diag_item_camera", STATUS_OK,
          t("diag_camera_ok", lang, idx=idx, w=w, h=h))
 
-
-def _check_log(report: DiagnosticReport, lang: str) -> None:
-    path = config.DATA_DIR / "service.log"
-    if not path.exists():
-        _add(report, lang, "diag_item_log", STATUS_WARN, t("diag_log_missing", lang, path=path))
-        return
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except Exception as exc:
-        _add(report, lang, "diag_item_log", STATUS_WARN, t("diag_log_read_fail", lang, e=exc))
-        return
-    warn_count = sum("WARNING" in line or "WARN" in line for line in lines)
-    error_count = sum("ERROR" in line or "Traceback" in line for line in lines)
-    mtime = datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds")
-    tail = "\n".join(lines[-_MAX_LOG_LINES:]) if lines else t("diag_log_empty_tail", lang)
-    status = STATUS_FAIL if error_count else STATUS_WARN if warn_count else STATUS_OK
-    _add(
-        report, lang, "diag_item_log", status,
-        t("diag_log_detail", lang, path=path, mtime=mtime, warnings=warn_count,
-          errors=error_count, tail=tail),
-    )

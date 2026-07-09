@@ -291,7 +291,7 @@ QWidget#titleBar {
 QPushButton#windowButton, QPushButton#windowCloseButton {
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 0;
+    border-radius: 8px;
     padding: 0;
     min-width: 46px;
     min-height: 32px;
@@ -578,6 +578,14 @@ class EnrollTab(QWidget):
         del_row.addWidget(self.manage_btn)
         del_row.addStretch(1)  # 按钮不再整行宽
 
+        guide_title = QLabel(tr("enroll_guide_title"))
+        guide_title.setObjectName("h2")
+        guide_title.setStyleSheet("background:transparent;")
+        guide_body = QLabel(tr("enroll_guide_body"))
+        guide_body.setObjectName("hint")
+        guide_body.setWordWrap(True)
+        guide_body.setStyleSheet("background:transparent;")
+
         left = QVBoxLayout()
         left.setSpacing(10)
         left.addLayout(top)
@@ -590,6 +598,9 @@ class EnrollTab(QWidget):
         right.addWidget(users_title)
         right.addWidget(self.table)
         right.addLayout(del_row)
+        right.addSpacing(14)
+        right.addWidget(guide_title)
+        right.addWidget(guide_body)
         right.addStretch(1)
 
         layout = QHBoxLayout(self)

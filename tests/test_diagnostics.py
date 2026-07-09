@@ -21,7 +21,7 @@ def test_diagnostic_report_text_is_stable() -> None:
 
     assert "FaceHello Diagnostics" in text
     assert "Time: 2026-07-03T10:00:00" in text
-    assert "Overall: Warning" in text
+    assert "Overall: OK" in text
     assert "- [OK] Service: Running" in text
     assert "- [Warning] Pipe: Access denied" in text
     assert "Advice: Run as admin" in text
@@ -96,27 +96,3 @@ def test_cp_registry_error_becomes_diagnostic_item(monkeypatch, tmp_path) -> Non
     assert report.items[0].status == diagnostics.STATUS_FAIL
     assert "missing key" in report.items[0].detail
 
-
-def test_log_summary_missing_empty_and_errors(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(diagnostics.config, "DATA_DIR", tmp_path)
-    report = _report()
-
-    diagnostics._check_log(report, "en")
-
-    assert report.items[-1].status == diagnostics.STATUS_WARN
-    assert "Log not found" in report.items[-1].detail
-
-    (tmp_path / "service.log").write_text("", encoding="utf-8")
-    report = _report()
-    diagnostics._check_log(report, "en")
-
-    assert report.items[-1].status == diagnostics.STATUS_OK
-    assert "Log is empty" in report.items[-1].detail
-
-    (tmp_path / "service.log").write_text("INFO ready\nWARNING slow\nERROR failed\n", encoding="utf-8")
-    report = _report()
-    diagnostics._check_log(report, "en")
-
-    assert report.items[-1].status == diagnostics.STATUS_FAIL
-    assert "WARNING: 1" in report.items[-1].detail
-    assert "ERROR: 1" in report.items[-1].detail
