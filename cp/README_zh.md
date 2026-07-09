@@ -1,6 +1,6 @@
 # FaceHello Credential Provider（C++）
 
-锁屏 / 登录界面上的「Face Unlock」磁贴。一个 COM in-proc DLL，注册成 Windows Credential Provider；选中磁贴即在后台刷脸，识别通过后**自动提交真实凭据完成登录 / 解锁**。
+锁屏 / 登录界面上的「Face Unlock」磁贴。一个 COM in-proc DLL，注册成 Windows Credential Provider；选中磁贴只显示提示，按「→」或配置热键后开始刷脸，识别通过后**自动提交真实凭据完成登录 / 解锁**。
 
 > [English](./README.md) ｜ 整体设计见 [DESIGN_zh.md](../DESIGN_zh.md)，开发指南见 [contribute_zh.md](../contribute_zh.md)
 
@@ -23,7 +23,8 @@
 
 ```
 选中「Face Unlock」磁贴
-  → SetSelected 启后台扫描线程
+  → SetSelected 显示提示
+  → 按「→」或配置热键启动后台扫描线程
   → PipeClient::AuthStart            （\\.\pipe\FaceHello，请求服务起一次认证）
   → 每 ~400ms PipeClient::AuthPoll   （取活体提示；SetFieldString 刷到磁贴状态文字）
   → 服务识别通过 → 缓存用户名 + SignalAutoLogon
@@ -39,12 +40,13 @@
 - **身份契约**：磁贴提交的账户名 == 服务返回的 `user` == LSA 键 `L$FaceHello_<user>` == 录入的 profile 名，四者必须一致解锁才成立。
 - 只在 `CPUS_LOGON` 与 `CPUS_UNLOCK_WORKSTATION` 两个场景出磁贴，其余场景 `E_NOTIMPL` 不接管。
 
-### 磁贴的两个可定制点
+### 磁贴的可定制点
 
 - **自定义头像**：把一张 PNG/JPG/BMP 放进 `C:\ProgramData\FaceHello\`，`GetBitmapValue` 用 WIC 读**第一张**图、按短边居中裁成正方形再缩放到 128×128；读不到 / 解码失败回退纯蓝占位图。该路径是纯 ASCII、SYSTEM 可读（CP 读不了 OneDrive / 中文路径）。
 - **多语言**：CP 启动时读 `C:\ProgramData\FaceHello\lang.txt`（控制台改语言时写、服务以 SYSTEM 启动时同步），内容为 `en` 时磁贴标题 / 状态等**自有文案**走英文，否则中文。活体提示（「请向左转头」等）由 Python 服务**已按语言发来**，CP 原样显示。
+- **刷脸启动热键**：CP 启动时读 `C:\ProgramData\FaceHello\hotkey.txt`（控制台设置页写入）。支持 `SPACE`、`ENTER`、单个字母或数字；为空时只有「→」会启动刷脸。
 
-> 运行前提:FaceHello 服务在跑 + 已写好该用户的 LSA 登录密码（都可在管理台「服务与凭据」页一键完成）。
+> 运行前提:FaceHello 服务在跑 + 已写好该用户的 LSA 登录密码（都可在管理台「服务、凭据与诊断」页完成）。
 
 ---
 
@@ -86,7 +88,7 @@ regsvr32 /u FaceHelloCP.dll     # 卸载
 | `common.h` | 磁贴字段枚举（图标 / 标题 / 提交 / 状态）+ 共享声明 |
 | `helpers.h` | 字段描述符深拷贝（`FieldDescriptorCoAllocCopy`） |
 | `CFaceProvider.{h,cpp}` | `ICredentialProvider`：枚举出 1 个磁贴；`SignalAutoLogon` 触发自动提交 |
-| `CFaceCredential.{h,cpp}` | `ICredentialProviderCredential`：后台扫描线程、状态刷新、头像 / 语言、`GetSerialization` 解锁 |
+| `CFaceCredential.{h,cpp}` | `ICredentialProviderCredential`：显式启动扫描、可选热键监听、状态刷新、头像 / 语言、`GetSerialization` 解锁 |
 | `PipeClient.{h,cpp}` | 命名管道客户端（`AuthStart` / `AuthPoll`），管道忙 / 重建空窗时重试 |
 | `CredVault.{h,cpp}` | 从 LSA Secret 读登录密码（`L$FaceHello_<user>`） |
 | `KerbHelpers.{h,cpp}` | 打包 `KERB_INTERACTIVE_UNLOCK_LOGON` + 取 Negotiate 认证包 |

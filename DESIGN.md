@@ -8,7 +8,7 @@ This is the **design & decision record**: why it's built this way, where it stan
 
 ## 0. Status Overview
 
-**The main path is wired up and shipped (latest `v0.1.2`):** lock-screen tile → named pipe → LocalSystem service → InsightFace recognition → read the LSA password → pack a KERB credential to really unlock. **Both local accounts and Microsoft accounts (MSA-backed local login) are verified end-to-end in a VM and on real hardware.** There's a one-click installer (Inno + Chinese wizard), a one-click clean uninstall, and automated GitHub Release distribution.
+**The main path is wired up and shipped (latest `v1.0.0`):** lock-screen tile → named pipe → LocalSystem service → InsightFace recognition → read the LSA password → pack a KERB credential to really unlock. **Both local accounts and Microsoft accounts (MSA-backed local login) are verified end-to-end in a VM and on real hardware.** There's a one-click installer (Inno + Chinese wizard), a one-click clean uninstall, and automated GitHub Release distribution.
 
 | Module | Status |
 |--------|--------|
@@ -18,6 +18,8 @@ This is the **design & decision record**: why it's built this way, where it stan
 | Live liveness prompts at the lock screen (`auth_start`/`auth_poll` async pair) | ✅ done |
 | Custom lock-screen tile avatar (WIC reads `ProgramData`, falls back to solid blue) | ✅ done |
 | Lock-screen 3-attempt face retry (press "→" to retry), then fall back to password (CP-side) | ✅ done |
+| Lock-screen auth starts only from "→" or the configured hotkey, not from tile preselection | ✅ done |
+| Refreshed wide console UI + service / CP / model / camera diagnostics | ✅ done |
 | Installed-mode / dev-mode path split (`.installed` marker + `FACEHELLO_HOME`) | ✅ done |
 | Portable package (standalone CPython + deps) + Inno installer + Chinese wizard | ✅ done |
 | One-click clean uninstall (stop/remove service, unregister CP, wipe LSA password + gallery) | ✅ done |
@@ -125,9 +127,9 @@ Passive anti-spoofing is enabled (toggle in Settings): during recognition MiniFA
 - [x] **Stage 1 — Python recognition prototype**: camera → detection → recognition (`camera/detector/matcher`).
 - [x] **Stage 2 — Liveness**: blink (EAR) + head turn (solvePnP) active random challenge (`liveness`).
 - [x] **Stage 3 — Enrollment / matching**: multi-frame averaged enrollment + DPAPI-encrypted gallery (`enroll/store`); supports **same-name multi-template** ("Add angle" appends to cover different angles/lighting; unlock takes the max similarity over same-name templates, `max_templates_per_name` FIFO cap).
-- [x] **Stage 4 — Auth orchestration + console**: `auth` state machine + PySide6 console (`app/`).
+- [x] **Stage 4 — Auth orchestration + console**: `auth` state machine + PySide6 console (`app/`), including the refreshed wide UI and readiness diagnostics.
 - [x] **Stage 5 — Credential Provider**: C++ COM lock-screen integration + LSA credential + KERB unlock. **Main path done, verified on real hardware** (see §9).
-- [x] **Distribution — setup.exe**: portable package + Inno Chinese wizard + clean uninstall + Release automation, shipped as `v0.1.2` (see §10).
+- [x] **Distribution — setup.exe**: portable package + Inno Chinese wizard + clean uninstall + Release automation, shipped in the formal `v1.0.0` line (see §10).
 - [x] **Hardening (5-4)**: pipe ACL (SYSTEM+Admins), failure fallback / lockout, better logging, dev-only `authenticate` (Python side; one CP-side pipe-PID check deferred).
 - [ ] **Pre-release: code signing** — pipeline wired up (`build_release` signs the CP DLL when `FACEHELLO_SIGN_PFX` is set; Inno `/DSign` signs setup.exe; self-signed verified end-to-end, see SIGNING.md); real EV/Azure cert tbd.
 - [x] **Passive anti-spoofing**: Silent-Face MiniFASNet (`2.7_80x80`) + RetinaFace crop, multi-frame sampling during recognition to detect replays; default-on, can disable, fail-open if model missing.
@@ -156,6 +158,7 @@ Passive anti-spoofing is enabled (toggle in Settings): during recognition MiniFA
 - [x] **Service-ization**: named pipe `\\.\pipe\FaceHello`, **single-instance serial**, JSON messages; synchronous `ping`/`authenticate` (the latter bypasses lockout, so it's **dev-only** — rejected in installed mode) + the async pair `auth_start`/`auth_poll` (the lock screen refreshes liveness prompts while recognizing). Self-tested with `scripts/auth_client.py`.
 - [x] **C++ Credential Provider** (based on Microsoft's SampleV2CredentialProvider): tile enumeration, scan-thread polling, `SignalAutoLogon` auto-submit, `GetSerialization` reads the LSA → KERB unlock.
 - [x] **Custom lock-screen tile avatar**: the CP uses WIC to read the first image (PNG/JPG/BMP) in `C:\ProgramData\FaceHello\`, scales it to 128×128, and falls back to a solid blue placeholder on failure.
+- [x] **Explicit auth start**: tile selection only shows the prompt; face auth starts from the "→" submit path or the optional single-key hotkey mirrored to `C:\ProgramData\FaceHello\hotkey.txt`.
 - [x] **Lock-screen retry (post-d)**: on a failed scan the tile keeps the "→" submit button as a retry entry — up to 3 attempts (`kMaxFaceAttempts`, any failure counts), then it stops scanning and prompts the user to use their password. The Python service is unchanged (its own lockout, 5 fails / 30s, stays the brute-force gate; 3 < 5).
 - [x] **End-to-end verification**: VM (snapshotted) + real hardware, **both local and Microsoft accounts** unlock by face successfully. A SYSTEM/session-0 process can open the camera at the lock screen (the service can run as LocalSystem). The 3-attempt retry is verified on real hardware.
 
@@ -171,7 +174,7 @@ Passive anti-spoofing is enabled (toggle in Settings): during recognition MiniFA
 
 ## 10. Distribution & Installer (setup.exe)
 
-Goal: a single `setup.exe` (Inno Setup, admin privileges) that on a clean Win10/11 machine does, in one click, "lay down files → create the writable data dir → register and auto-start the service → register the CP DLL → drop a console shortcut," and can **uninstall completely cleanly** without ever leaving a broken LogonUI behind. **Implemented and shipped as `v0.1.2`.**
+Goal: a single `setup.exe` (Inno Setup, admin privileges) that on a clean Win10/11 machine does, in one click, "lay down files → create the writable data dir → register and auto-start the service → register the CP DLL → drop a console shortcut," and can **uninstall completely cleanly** without ever leaving a broken LogonUI behind. **Implemented and included in `v1.0.0`.**
 
 ### 10.1 Key decisions (all landed)
 
@@ -194,6 +197,7 @@ C:\Program Files\FaceHello\          (read-only, program files)
 
 C:\ProgramData\FaceHello\           (writable, runtime data; shared by SYSTEM and the elevated GUI)
   ├─ data\  faces.dat  service.log
+  ├─ lang.txt  hotkey.txt           CP-readable console settings mirror
   └─ <avatar>.png                   lock-screen tile avatar (read by the CP as SYSTEM)
 ```
 

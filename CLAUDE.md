@@ -33,16 +33,16 @@ C++ Credential Provider(VS2022 + “使用 C++ 的桌面开发”;**用 PowerShe
 ```
 
 - 安全逻辑有 pytest 单测(`uv run --group test pytest -q`:锁定/margin/反欺骗门/authenticate 门控,纯逻辑、无摄像头/模型,已接进 CI)。`scripts/offline_check.py` 是断言式自检(冒烟):验证 matcher、DPAPI 加密往返、FaceMesh、InsightFace 加载。改完核心库这两个先跑。
-- 首次运行自动下载模型到 `models/`:InsightFace `buffalo_l`(~281MB)、MediaPipe `face_landmarker.task`(~3.7MB)。`data/`(加密人脸库)和 `models/` 均 gitignored。
+- 首次运行自动下载模型到 `models/`:InsightFace `buffalo_l`(~191MB,已剪枝)、MediaPipe `face_landmarker.task`(~3.7MB)。`data/`(加密人脸库)和 `models/` 均 gitignored。
 - `cred_vault` 的写/删需**管理员**终端;读需 **SYSTEM**(`psexec -s` 模拟,见 `cred_vault_cli.py` 顶部注释)。服务跑起来后排错看 `data/service.log`(服务无控制台,stdout/stderr 都落这)。
 - PowerShell 里 `sc` 是 `Set-Content` 的别名,查/控服务务必用 `sc.exe`。
 
 ## 架构
 
-两层设计(路线 A)。阶段 1~4(Python 原型)完成;阶段 5(C++ Credential Provider 锁屏集成)主体打通——CP 磁贴 → 命名管道 → LocalSystem 服务 → InsightFace 识别 → 读 LSA → 打包 KERB 真解锁,本地账户与微软账户(MSA-backed 本地登录)均已在 VM 与真机端到端验证(里程碑 d)。5-4 加固(管道 ACL 限 SYSTEM+Administrators、失败兜底/锁定、日志、`authenticate` 开发态门控)与 C 档分发(Inno 安装器、`/MT` 静态 CRT 编 DLL、GitHub Release 放模型)均已落地(v0.1.2);锁屏新增「3 次刷脸重试后退回密码」(CP 侧)。识别侧加同名多模板录入(「补录角度」追加,解锁取最高相似度,`max_templates_per_name` FIFO 封顶)。代码签名脚手架已落地(自签名管道:`build_release` 按 `FACEHELLO_SIGN_PFX` 签 DLL、Inno `/DSign` 签 setup.exe,见 `SIGNING.md`);剩真实证书(Azure/EV)与可选增强(GPU/进一步瘦身)。
+两层设计(路线 A)。阶段 1~4(Python 原型)完成;阶段 5(C++ Credential Provider 锁屏集成)主体打通——CP 磁贴 → 命名管道 → LocalSystem 服务 → InsightFace 识别 → 读 LSA → 打包 KERB 真解锁,本地账户与微软账户(MSA-backed 本地登录)均已在 VM 与真机端到端验证(里程碑 d)。5-4 加固(管道 ACL 限 SYSTEM+Administrators、失败兜底/锁定、日志、`authenticate` 开发态门控)与 C 档分发(Inno 安装器、`/MT` 静态 CRT 编 DLL、GitHub Release 放模型)均已落地;锁屏新增「3 次刷脸重试后退回密码」(CP 侧),且刷脸只由「→」或用户配置热键启动,避免锁屏封面预选磁贴时提前开摄像头。识别侧加同名多模板录入(「补录角度」追加,解锁取最高相似度,`max_templates_per_name` FIFO 封顶)。代码签名脚手架已落地(自签名管道:`build_release` 按 `FACEHELLO_SIGN_PFX` 签 DLL、Inno `/DSign` 签 setup.exe,见 `SIGNING.md`);剩真实证书(Azure/EV)与可选增强(GPU/进一步瘦身)。
 
 **`face_hello/` 核心库**(无 Qt 依赖,可被 GUI、服务、脚本共用):
-- `config.py` — 集中路径/模型/阈值。`DEFAULTS` 是阈值默认值,被 store 里持久化的 `settings` 覆盖。
+- `config.py` — 集中路径/模型/阈值。`DEFAULTS` 是阈值默认值,被 store 里持久化的 `settings` 覆盖;也定义 CP 可读的语言/热键镜像文件路径。
 - `platform_backend.py` — 阶段 6 跨平台抽象层:把 OS 耦合三件事(静态加密 `protect`/`unprotect`、摄像头后端 `open_capture`、用户名 `current_user`)收敛到一处。Windows 行为与重构前逐字节一致(DPAPI 机器范围 / DSHOW / GetUserName);非 Windows 给默认实现,静态加密留 `NotImplementedError`。store/camera/cred_vault 都委托它。
 - `camera.py` — OpenCV 采集,后端经 `platform_backend.open_capture`(Windows=`CAP_DSHOW`)。
 - `detector.py` — InsightFace `FaceAnalysis`(CPU),输出 512 维 `normed_embedding`。惰性加载 + `load()` 显式预热。
@@ -57,15 +57,15 @@ C++ Credential Provider(VS2022 + “使用 C++ 的桌面开发”;**用 PowerShe
 
 **`cp/` C++ Credential Provider**(COM in-proc DLL,锁屏「Face Unlock」磁贴;CLSID `{E071A7CE-5D7F-4063-9A10-AE39AEC64EE8}`):
 - `CFaceProvider.{h,cpp}` — `ICredentialProvider`,枚举出 1 个磁贴。`SignalAutoLogon()` 由扫描线程在识别通过后调用 → 置标志 + `CredentialsChanged` → `GetCredentialCount` 回 `pbAutoLogonWithDefault=TRUE` 让 LogonUI 自动提交。
-- `CFaceCredential.{h,cpp}` — `ICredentialProviderCredential`。`SetSelected` 启动后台扫描线程:调 `auth_start` 后每 ~400ms `auth_poll`,用 `SetFieldString` 把活体提示刷到磁贴;成功缓存用户名并触发自动登录。**失败可按磁贴「→」重试,共 `kMaxFaceAttempts`(=3)次(任何失败都计数),用尽则停刷脸、提示改用密码**(密码磁贴始终在)。`GetSerialization` 成功时消费缓存结果 → 读 LSA 密码 → 打包 `KERB_INTERACTIVE_UNLOCK_LOGON` 解锁;未成功时把「→」当重试入口(`_StartAuthThread`)。
+- `CFaceCredential.{h,cpp}` — `ICredentialProviderCredential`。`SetSelected` 只显示「按 → 开始刷脸」提示并启动可选热键监听;用户按「→」或配置热键后才调 `auth_start`,随后每 ~400ms `auth_poll`,用 `SetFieldString` 把活体提示刷到磁贴;成功缓存用户名并触发自动登录。**失败可按磁贴「→」或热键重试,共 `kMaxFaceAttempts`(=3)次(任何失败都计数),用尽则停刷脸、提示改用密码**(密码磁贴始终在)。`GetSerialization` 成功时消费缓存结果 → 读 LSA 密码 → 打包 `KERB_INTERACTIVE_UNLOCK_LOGON` 解锁;未成功时把「→」当重试入口(`_StartAuthThread`)。
 - `PipeClient.{h,cpp}` — 命名管道客户端(对应 `scripts/auth_client.py`)。`Call` 在 `ERROR_PIPE_BUSY` 与 `ERROR_FILE_NOT_FOUND`(单实例管道重建的空窗)上都重试,约 30 次/3s。
 - 绝不替换/过滤系统密码/PIN 提供程序;只在打了快照的 VM 里 `regsvr32` 注册测试。详见 `cp/README.md`。
 
-**`app/` PySide6 管理台**(标签页:录入 / 测试解锁 / 设置 / 服务与凭据):
-- `main.py` — UI;`FaceDetector` 和 `FaceStore` 在 `MainWindow` 创建一次后注入各 Tab 共享。录入页用户名预填 `cred_vault.current_user()`;「服务与凭据」页设 LSA 密码 + 一键装/起/停/删服务(均经 `winservice_main.py`),按 `IsUserAnAdmin()` 灰显;设置页有「启用活体检测」开关(`liveness_enabled`)。
+**`app/` PySide6 管理台**(页面:录入 / 测试解锁 / 服务、凭据与诊断 / 设置):
+- `main.py` — UI;`FaceDetector` 和 `FaceStore` 在 `MainWindow` 创建一次后注入各页共享。录入页用户名预填 `cred_vault.current_user()`;服务页设 LSA 密码 + 一键装/起/停/删服务(均经 `winservice_main.py`)并提供诊断;设置页有「启用活体检测」开关(`liveness_enabled`)和刷脸启动热键。
 - `workers.py` — 所有摄像头 + 推理放 `QThread`(`WarmupWorker`/`EnrollWorker`/`AuthWorker`),Signal 回主线程更新 UI,避免卡死。
 
-数据流(锁屏解锁):CP 磁贴选中 → 服务 `auth_start` 起后台线程 → `AuthSession.feed()` 逐帧先跑 `liveness`(活体关则跳过),通过后 `detector` 提特征 → `matcher.best_match` 比对 gallery → `AuthResult` → CP `auth_poll` 拿到 user → 读 LSA → KERB 解锁。
+数据流(锁屏解锁):CP 磁贴选中 → 用户按「→」或配置热键 → 服务 `auth_start` 起后台线程 → `AuthSession.feed()` 逐帧先跑 `liveness`(活体关则跳过),通过后 `detector` 提特征 → `matcher.best_match` 比对 gallery → `AuthResult` → CP `auth_poll` 拿到 user → 读 LSA → KERB 解锁。
 
 ## 本仓库特有的坑(改代码前必读)
 

@@ -53,7 +53,7 @@ uv run python -m app.main                 # 启管理台 GUI
 
 | 文件 | 职责 |
 |------|------|
-| `config.py` | 集中路径 / 模型 / 阈值。`DEFAULTS` 是阈值默认值,被 store 里持久化的 `settings` 覆盖。也是**安装态 / 开发态分流**的地方(见下) |
+| `config.py` | 集中路径 / 模型 / 阈值。`DEFAULTS` 是阈值默认值,被 store 里持久化的 `settings` 覆盖。也是**安装态 / 开发态分流**的地方(见下),并定义 CP 可读的语言 / 热键镜像路径 |
 | `platform_backend.py` | 阶段 6 跨平台抽象层:把三处 OS 耦合(静态加密 `protect`/`unprotect`、摄像头后端 `open_capture`、`current_user`)收敛到一处;Windows 行为逐字节不变(DPAPI 机器范围 / DSHOW / GetUserName)。`store`/`camera`/`cred_vault` 都委托它 |
 | `camera.py` | OpenCV 采集,Windows 用 `CAP_DSHOW` 后端,带冷启动 / 唤醒退避重试 |
 | `detector.py` | InsightFace `FaceAnalysis`(CPU),输出 512 维 `normed_embedding`。惰性加载 + `load()` 显式预热 |
@@ -68,8 +68,8 @@ uv run python -m app.main                 # 启管理台 GUI
 
 ### 其它目录
 
-- `app/` —— PySide6 管理台。`main.py` 是 UI;`workers.py` 把所有摄像头 + 推理塞进 `QThread`,Signal 回主线程更新,避免卡死。
-- `cp/` —— C++ Credential Provider(COM in-proc DLL)。`CFaceProvider`(枚举磁贴)、`CFaceCredential`(扫描线程 + 3 次重试后退回密码 + 提交凭据)、`PipeClient`(管道客户端)。详见 [cp/README.md](./cp/README.md)。
+- `app/` —— PySide6 管理台。`main.py` 是 UI、设置、诊断和录入 / 测试流程;`workers.py` 把所有摄像头 + 推理塞进 `QThread`,Signal 回主线程更新,避免卡死。
+- `cp/` —— C++ Credential Provider(COM in-proc DLL)。`CFaceProvider`(枚举磁贴)、`CFaceCredential`(由「→」或配置热键启动扫描 + 3 次重试后退回密码 + 提交凭据)、`PipeClient`(管道客户端)。详见 [cp/README.md](./cp/README.md)。
 - `scripts/` —— `offline_check.py`(自检)、`doctor.py`(实机自检:摄像头取帧 + 模型加载 + 服务管道 ping)、`liveness_tune.py`(标定活体阈值)、`auth_client.py`(模拟 CP 调服务)、`cred_vault_cli.py`(LSA 读写测试)、`build_release.py`(打便携包)。
 - `winservice_main.py` / `uninstall_cleanup.py` —— 仓库根的引导脚本(服务宿主、卸载清理)。
 - `installer/` —— Inno Setup 脚本 + 中文语言文件,打 setup.exe。
@@ -113,7 +113,7 @@ MSBuild.exe cp\FaceHelloCP.sln /p:Configuration=Release /p:Platform=x64
 ## 数据流(锁屏解锁)
 
 ```
-CP 磁贴选中 → 服务 auth_start 起后台线程 → AuthSession.feed() 逐帧
+CP 磁贴选中 → 用户按「→」或配置热键 → 服务 auth_start 起后台线程 → AuthSession.feed() 逐帧
   → 先跑 liveness(活体关则跳过)→ 通过后 detector 提 512 维特征
   → matcher.best_match 比对 gallery → AuthResult
   → CP auth_poll 拿到 user → 读 LSA 密码 → 打包 KERB_INTERACTIVE_UNLOCK_LOGON 解锁

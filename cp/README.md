@@ -1,6 +1,6 @@
 # FaceHello Credential Provider (C++)
 
-The "Face Unlock" tile on the lock / sign-in screen. A COM in-proc DLL registered as a Windows Credential Provider; selecting the tile runs face recognition in the background and, once recognized, **submits the real credential to actually sign in / unlock**.
+The "Face Unlock" tile on the lock / sign-in screen. A COM in-proc DLL registered as a Windows Credential Provider; selecting the tile shows the prompt, and pressing "→" or the configured hotkey starts face recognition. Once recognized, it **submits the real credential to actually sign in / unlock**.
 
 > [中文](./README_zh.md) ｜ Overall design: [DESIGN.md](../DESIGN.md), developer guide: [contribute.md](../contribute.md)
 
@@ -23,7 +23,8 @@ The "Face Unlock" tile on the lock / sign-in screen. A COM in-proc DLL registere
 
 ```
 Select the "Face Unlock" tile
-  → SetSelected starts the background scan thread
+  → SetSelected shows the prompt
+  → press "→" or the configured hotkey to start the background scan thread
   → PipeClient::AuthStart            (\\.\pipe\FaceHello, asks the service to run one auth)
   → PipeClient::AuthPoll every ~400ms (fetch the liveness prompt; SetFieldString pushes it to the tile's status text)
   → service recognizes the face → cache the username + SignalAutoLogon
@@ -39,12 +40,13 @@ Select the "Face Unlock" tile
 - **Identity contract**: the account name the tile submits == the `user` the service returns == the LSA key `L$FaceHello_<user>` == the enrolled profile name. All four must match for the unlock to succeed.
 - The tile is shown only in the `CPUS_LOGON` and `CPUS_UNLOCK_WORKSTATION` scenarios; for all others it returns `E_NOTIMPL` and does not take over.
 
-### Two customizable parts of the tile
+### Customizable parts of the tile
 
 - **Custom avatar**: drop a PNG/JPG/BMP into `C:\ProgramData\FaceHello\`. `GetBitmapValue` uses WIC to read the **first** image, center-crops it to a square by the shorter side, then scales it to 128×128; if nothing is found or decoding fails, it falls back to a solid-blue placeholder. That path is pure ASCII and SYSTEM-readable (the CP can't read OneDrive / non-ASCII paths).
 - **Multi-language**: at startup the CP reads `C:\ProgramData\FaceHello\lang.txt` (written by the console when you change language, and synced by the service as SYSTEM on startup). When its content is `en`, the tile's **own text** (title, status, etc.) is English, otherwise Chinese. The liveness prompts ("Turn your head left", etc.) arrive **already localized from the Python service**, and the CP displays them as-is.
+- **Face unlock hotkey**: at startup the CP reads `C:\ProgramData\FaceHello\hotkey.txt` (written by the console Settings page). Supported values are `SPACE`, `ENTER`, one letter, or one digit; empty means only "→" starts scanning.
 
-> Prerequisites: the FaceHello service is running, and the user's LSA sign-in password has been set (both can be done in one click on the console's "Service & credentials" tab).
+> Prerequisites: the FaceHello service is running, and the user's LSA sign-in password has been set (both can be done on the console's "Service, credentials & diagnostics" page).
 
 ---
 
@@ -86,7 +88,7 @@ After registering, lock with `Win+L` or sign out, and you should see the "Face U
 | `common.h` | tile field enum (image / label / submit / status) + shared declarations |
 | `helpers.h` | deep-copy of field descriptors (`FieldDescriptorCoAllocCopy`) |
 | `CFaceProvider.{h,cpp}` | `ICredentialProvider`: enumerates one tile; `SignalAutoLogon` triggers auto-submit |
-| `CFaceCredential.{h,cpp}` | `ICredentialProviderCredential`: background scan thread, status refresh, avatar / language, `GetSerialization` unlock |
+| `CFaceCredential.{h,cpp}` | `ICredentialProviderCredential`: explicit scan start, optional hotkey listener, status refresh, avatar / language, `GetSerialization` unlock |
 | `PipeClient.{h,cpp}` | named-pipe client (`AuthStart` / `AuthPoll`), retries when the pipe is busy / during the rebuild gap |
 | `CredVault.{h,cpp}` | reads the sign-in password from the LSA Secret (`L$FaceHello_<user>`) |
 | `KerbHelpers.{h,cpp}` | packs `KERB_INTERACTIVE_UNLOCK_LOGON` + retrieves the Negotiate auth package |

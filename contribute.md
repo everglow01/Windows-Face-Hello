@@ -53,7 +53,7 @@ More test coverage is welcome — open an issue or PR to discuss.
 
 | File | Responsibility |
 |------|----------------|
-| `config.py` | Central paths / models / thresholds. `DEFAULTS` are the threshold defaults, overridden by the persisted `settings` in the store. Also where **installed-mode / dev-mode is split** (see below) |
+| `config.py` | Central paths / models / thresholds. `DEFAULTS` are the threshold defaults, overridden by the persisted `settings` in the store. Also where **installed-mode / dev-mode is split** (see below), plus the CP-readable language / hotkey mirror paths |
 | `platform_backend.py` | Phase-6 cross-platform shim: funnels the three OS-coupled bits (static encrypt `protect`/`unprotect`, camera backend `open_capture`, `current_user`) into one place; Windows behavior is byte-for-byte unchanged (machine-scope DPAPI / DSHOW / GetUserName). `store`/`camera`/`cred_vault` delegate to it |
 | `camera.py` | OpenCV capture, `CAP_DSHOW` backend on Windows, with cold-boot / wake backoff retries |
 | `detector.py` | InsightFace `FaceAnalysis` (CPU), outputs a 512-d `normed_embedding`. Lazy load + explicit `load()` warmup |
@@ -68,8 +68,8 @@ More test coverage is welcome — open an issue or PR to discuss.
 
 ### Other directories
 
-- `app/` — the PySide6 console. `main.py` is the UI; `workers.py` pushes all camera + inference work into `QThread`s, with signals back to the main thread to update the UI, avoiding freezes.
-- `cp/` — the C++ Credential Provider (in-proc COM DLL). `CFaceProvider` (enumerates the tile), `CFaceCredential` (scan thread + 3-attempt retry then password fallback + submits the credential), `PipeClient` (pipe client). See [cp/README.md](./cp/README.md).
+- `app/` — the PySide6 console. `main.py` is the UI, settings, diagnostics, and enrollment/test flows; `workers.py` pushes all camera + inference work into `QThread`s, with signals back to the main thread to update the UI, avoiding freezes.
+- `cp/` — the C++ Credential Provider (in-proc COM DLL). `CFaceProvider` (enumerates the tile), `CFaceCredential` (starts scanning from "→" or the configured hotkey, 3-attempt retry then password fallback + submits the credential), `PipeClient` (pipe client). See [cp/README.md](./cp/README.md).
 - `scripts/` — `offline_check.py` (self-check), `doctor.py` (on-machine health check: camera frame + model load + service pipe ping), `liveness_tune.py` (calibrate liveness thresholds), `auth_client.py` (simulate the CP calling the service), `cred_vault_cli.py` (LSA read/write test), `build_release.py` (build the portable package).
 - `winservice_main.py` / `uninstall_cleanup.py` — bootstrap scripts at the repo root (service host, uninstall cleanup).
 - `installer/` — the Inno Setup script + Chinese language file, builds setup.exe.
@@ -113,7 +113,7 @@ Writing / deleting in `cred_vault` needs an **Administrator** terminal; reading 
 ## Data Flow (lock-screen unlock)
 
 ```
-CP tile selected → service auth_start spawns a background thread → AuthSession.feed() per frame
+CP tile selected → user presses "→" or the configured hotkey → service auth_start spawns a background thread → AuthSession.feed() per frame
   → run liveness first (skipped if liveness is off) → on pass, detector extracts the 512-d feature
   → matcher.best_match against the gallery → AuthResult
   → CP auth_poll gets the user → read the LSA password → pack KERB_INTERACTIVE_UNLOCK_LOGON to unlock
