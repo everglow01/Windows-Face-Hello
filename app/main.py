@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QSizeGrip,
+    QSizePolicy,
     QSpinBox,
     QStackedWidget,
     QTableWidget,
@@ -176,6 +176,9 @@ QWidget#contentPanel {
     border-radius: 8px;
 }
 QWidget#rootWindow {
+    background: transparent;
+}
+QWidget#resizeHandle {
     background: transparent;
 }
 QWidget#windowShell {
@@ -546,6 +549,7 @@ class EnrollTab(QWidget):
         self.preview = _preview_label()
         self.status = QLabel(tr("enroll_hint"))
         self.status.setObjectName("hint")
+        self.status.setWordWrap(True)
         self.progress_bar = QProgressBar()  # 只在采到合格帧时推进,给实时反馈
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setRange(0, self.store.get_settings()["enroll_samples"])
@@ -603,11 +607,16 @@ class EnrollTab(QWidget):
         right.addWidget(guide_body)
         right.addStretch(1)
 
-        layout = QHBoxLayout(self)
+        content = QHBoxLayout()
+        content.setSpacing(16)
+        content.addLayout(left)
+        content.addLayout(right, 1)
+
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(16)
-        layout.addLayout(left)
-        layout.addLayout(right, 1)
+        layout.addStretch(1)
+        layout.addLayout(content)
+        layout.addStretch(1)
 
         self.refresh()
 
@@ -878,13 +887,26 @@ class AuthTab(QWidget):
         btn_row.addWidget(self.monitor_btn)
         btn_row.addStretch(1)
 
+        panel = QWidget()
+        panel.setMaximumWidth(900)
+        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(10)
+        panel_layout.addLayout(btn_row)
+        panel_layout.addWidget(self.preview, alignment=Qt.AlignCenter)
+        panel_layout.addWidget(self.instruction)
+        panel_layout.addWidget(self.histogram)
+
+        center = QHBoxLayout()
+        center.addStretch(1)
+        center.addWidget(panel, 8)
+        center.addStretch(1)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(10)
-        layout.addLayout(btn_row)
-        layout.addWidget(self.preview, alignment=Qt.AlignCenter)
-        layout.addWidget(self.instruction)
-        layout.addWidget(self.histogram)
+        layout.addStretch(1)
+        layout.addLayout(center)
         layout.addStretch(1)
 
     def _start(self) -> None:
@@ -1078,13 +1100,26 @@ class SettingsTab(QWidget):
         grid.addWidget(self.max_templates_spin, r, 1)
         r += 1
 
+        panel = QWidget()
+        panel.setMaximumWidth(920)
+        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(10)
+        panel_layout.addWidget(params_title)
+        panel_layout.addLayout(grid)
+        panel_layout.addWidget(save_btn, alignment=Qt.AlignLeft)
+
+        center = QHBoxLayout()
+        center.addStretch(1)
+        center.addWidget(panel, 8)
+        center.addStretch(1)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(10)
-        layout.addWidget(params_title)
-        layout.addLayout(grid)
         layout.addStretch(1)
-        layout.addWidget(save_btn)
+        layout.addLayout(center)
+        layout.addStretch(1)
 
     @staticmethod
     def _dspin(lo, hi, step, val) -> QDoubleSpinBox:
@@ -1236,7 +1271,7 @@ class ServiceTab(QWidget):
         self.diag_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.diag_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.diag_table.setWordWrap(False)
-        self.diag_table.setMaximumHeight(190)
+        self.diag_table.setMinimumHeight(190)
 
         # 这些动作都需管理员,非管理员时禁用
         self._admin_widgets = [
@@ -1299,7 +1334,7 @@ class ServiceTab(QWidget):
         diag_row.addStretch(1)
         layout.addLayout(diag_row)
         layout.addWidget(self.diag_summary)
-        layout.addWidget(self.diag_table)
+        layout.addWidget(self.diag_table, 1)
 
         if not self.is_admin:
             for w in self._admin_widgets:
@@ -1409,6 +1444,22 @@ class ServiceTab(QWidget):
         lang = self.store.get_settings().get("language", "zh")
         QApplication.clipboard().setText(self.diag_report.to_text(lang))
         QMessageBox.information(self, tr("diag_title"), tr("diag_copy_ok"))
+
+
+class ResizeHandle(QWidget):
+    def __init__(self, parent, edges, cursor):
+        super().__init__(parent)
+        self.edges = edges
+        self.setObjectName("resizeHandle")
+        self.setCursor(cursor)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            handle = self.window().windowHandle()
+            if handle is not None and handle.startSystemResize(self.edges):
+                event.accept()
+                return
+        super().mousePressEvent(event)
 
 
 class CaptionButton(QPushButton):
@@ -1546,13 +1597,6 @@ class MainWindow(QWidget):
         body.addWidget(sidebar)
         body.addWidget(content, 1)
 
-        grip = QSizeGrip(self)
-        grip.setFixedSize(14, 14)
-        grip_row = QHBoxLayout()
-        grip_row.setContentsMargins(0, 0, 0, 0)
-        grip_row.addStretch(1)
-        grip_row.addWidget(grip)
-
         shell = QWidget()
         shell.setObjectName("windowShell")
         shell_layout = QVBoxLayout(shell)
@@ -1560,11 +1604,22 @@ class MainWindow(QWidget):
         shell_layout.setSpacing(8)
         shell_layout.addWidget(self.title_bar)
         shell_layout.addLayout(body, 1)
-        shell_layout.addLayout(grip_row)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(shell)
+
+        self._resize_handles = [
+            ResizeHandle(self, Qt.Edge.TopEdge | Qt.Edge.LeftEdge, Qt.CursorShape.SizeFDiagCursor),
+            ResizeHandle(self, Qt.Edge.TopEdge, Qt.CursorShape.SizeVerCursor),
+            ResizeHandle(self, Qt.Edge.TopEdge | Qt.Edge.RightEdge, Qt.CursorShape.SizeBDiagCursor),
+            ResizeHandle(self, Qt.Edge.RightEdge, Qt.CursorShape.SizeHorCursor),
+            ResizeHandle(self, Qt.Edge.BottomEdge | Qt.Edge.RightEdge, Qt.CursorShape.SizeFDiagCursor),
+            ResizeHandle(self, Qt.Edge.BottomEdge, Qt.CursorShape.SizeVerCursor),
+            ResizeHandle(self, Qt.Edge.BottomEdge | Qt.Edge.LeftEdge, Qt.CursorShape.SizeBDiagCursor),
+            ResizeHandle(self, Qt.Edge.LeftEdge, Qt.CursorShape.SizeHorCursor),
+        ]
+        self._layout_resize_handles()
 
         # 启动即后台预加载识别模型,把加载耗时挪出录入/解锁路径
         self._warmup = WarmupWorker(self.detector)
@@ -1591,6 +1646,38 @@ class MainWindow(QWidget):
                 self._toggle_max_restore()
                 return True
         return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._layout_resize_handles()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            self._layout_resize_handles()
+
+    def _layout_resize_handles(self) -> None:
+        if not hasattr(self, "_resize_handles"):
+            return
+        w, h = self.width(), self.height()
+        border = 8
+        corner = 16
+        geometries = [
+            (0, 0, corner, corner),
+            (corner, 0, max(0, w - corner * 2), border),
+            (w - corner, 0, corner, corner),
+            (w - border, corner, border, max(0, h - corner * 2)),
+            (w - corner, h - corner, corner, corner),
+            (corner, h - border, max(0, w - corner * 2), border),
+            (0, h - corner, corner, corner),
+            (0, corner, border, max(0, h - corner * 2)),
+        ]
+        visible = not self.isMaximized()
+        for handle, geometry in zip(self._resize_handles, geometries):
+            handle.setGeometry(*geometry)
+            handle.setVisible(visible)
+            if visible:
+                handle.raise_()
 
     def _toggle_max_restore(self) -> None:
         if self.isMaximized():
