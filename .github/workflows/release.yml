@@ -72,6 +72,11 @@ jobs:
         # 脚本幂等:已是 fp16 则跳过(缓存复跑安全)。
         run: uv run --with onnxconverter-common python scripts/quantize_model.py
 
+      - name: Verify quantized models
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: uv run python scripts/offline_check.py
+
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2          # 让 build_release 内部能调到 msbuild 编 DLL
 

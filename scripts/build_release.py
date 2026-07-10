@@ -179,6 +179,14 @@ def step_copy_payload() -> None:
             shutil.copy(d, PYDIR / d.name)
 
 
+def step_smoke() -> None:
+    env = os.environ.copy()
+    env.pop("FACEHELLO_HOME", None)
+    env["PYTHONPATH"] = str(BUILD)
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    run(PYDIR / "python.exe", ROOT / "scripts" / "release_smoke.py", BUILD, env=env)
+
+
 def main() -> None:
     print(f"=== build_release -> {BUILD} ===", flush=True)
     step_build_dll()
@@ -187,6 +195,7 @@ def main() -> None:
     step_install_deps()
     step_slim()
     step_copy_payload()
+    step_smoke()
     print(f"\n[OK] 便携包就绪:{BUILD}", flush=True)
     print(r"验证启动:  build\FaceHello\python\pythonw.exe -m app.main", flush=True)
 

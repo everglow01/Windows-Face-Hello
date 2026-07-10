@@ -49,7 +49,14 @@ def main() -> int:
         print(f"[备份] fp32 原件 → {BACKUP.name}")
     print(f"[转换] {MODEL.name} FP32 {before:.0f}MB → FP16 …")
     model16 = float16.convert_float_to_float16(model, keep_io_types=True)
-    onnx.save(model16, str(MODEL))
+    onnx.checker.check_model(model16)
+    tmp = MODEL.with_suffix(".fp16.tmp")
+    try:
+        onnx.save(model16, str(tmp))
+        os.replace(tmp, MODEL)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
     after = MODEL.stat().st_size / 1e6
     print(f"[完成] {MODEL.name} {before:.0f}MB → {after:.0f}MB")
     return 0
