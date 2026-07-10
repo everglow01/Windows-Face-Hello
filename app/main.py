@@ -10,7 +10,7 @@ import sys
 from collections import deque
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt
+from PySide6.QtCore import QEvent, QPoint, QSize, QTimer, Qt
 from PySide6.QtGui import QBrush, QColor, QIcon, QImage, QPainter, QPixmap, QPolygon
 from PySide6.QtWidgets import (
     QApplication,
@@ -1216,6 +1216,17 @@ def _is_admin() -> bool:
         return False
 
 
+def _relaunch_elevated() -> bool:
+    import ctypes
+
+    shell_execute = ctypes.windll.shell32.ShellExecuteW
+    shell_execute.restype = ctypes.c_void_p
+    result = shell_execute(
+        None, "runas", sys.executable, "-m app.main", str(config.INSTALL_ROOT), 1
+    )
+    return int(result or 0) > 32
+
+
 def _run_service(*args: str) -> tuple[int, str]:
     """调 `python winservice_main.py <args>`(install/start/stop/remove)。需管理员。"""
     import subprocess
@@ -1429,6 +1440,7 @@ class ServiceTab(QWidget):
         self.diag_worker = DiagnosticsWorker(lang)
         self.diag_worker.progress.connect(self._on_diag_progress)
         self.diag_worker.done.connect(self._on_diag_done)
+        self.diag_worker.finished.connect(self._on_diag_finished)
         self.diag_worker.start()
 
     def _on_diag_progress(self, step: str) -> None:
@@ -1436,12 +1448,14 @@ class ServiceTab(QWidget):
 
     def _on_diag_done(self, report: DiagnosticReport) -> None:
         self.diag_report = report
-        self.diag_worker = None
         lang = self.store.get_settings().get("language", "zh")
         self.diag_summary.setText(tr("diag_summary", status=status_label(report.overall_status, lang)))
-        self.diag_run_btn.setEnabled(True)
-        self.diag_copy_btn.setEnabled(True)
         self._load_diag_table(report)
+
+    def _on_diag_finished(self) -> None:
+        self.diag_worker = None
+        self.diag_run_btn.setEnabled(True)
+        self.diag_copy_btn.setEnabled(self.diag_report is not None)
 
     def _load_diag_table(self, report: DiagnosticReport) -> None:
         lang = self.store.get_settings().get("language", "zh")
@@ -1526,6 +1540,8 @@ class MainWindow(QWidget):
         self.setWindowFlag(Qt.FramelessWindowHint, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self._drag_pos: QPoint | None = None
+        self._closing = False
+        self._close_ready = False
         self.detector = FaceDetector()  # 惰性加载,首次推理时才载入模型
         self.store = FaceStore().load()
         # 建任何控件前先按持久化设置定语言;切换语言改的是设置,重启控制台后整体生效
@@ -1745,8 +1761,40 @@ class MainWindow(QWidget):
             )
 
     def closeEvent(self, event) -> None:
-        self.auth_tab.stop_monitor()  # 关窗时停掉实时比对,释放摄像头
-        super().closeEvent(event)
+        if self._close_ready:
+            super().closeEvent(event)
+            return
+        workers = self._active_workers()
+        if not workers:
+            super().closeEvent(event)
+            return
+        if not self._closing:
+            self._closing = True
+            self.setEnabled(False)
+            for worker in workers:
+                stop = getattr(worker, "stop", None)
+                if stop is not None:
+                    stop()
+            QTimer.singleShot(100, self._finish_close)
+        event.ignore()
+
+    def _active_workers(self) -> list:
+        workers = [
+            self.enroll_tab.worker,
+            self.auth_tab.worker,
+            self.auth_tab.monitor,
+            self.settings_tab._cam_test,
+            self.service_tab.diag_worker,
+            self._warmup,
+        ]
+        return [worker for worker in workers if worker is not None and worker.isRunning()]
+
+    def _finish_close(self) -> None:
+        if self._active_workers():
+            QTimer.singleShot(100, self._finish_close)
+            return
+        self._close_ready = True
+        self.close()
 
 
 # 自定义应用图标:放 app/assets/facehello.ico(随 app/ 一起被安装器打包)。
@@ -1780,6 +1828,10 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setWindowIcon(_app_icon())  # 窗口 + 任务栏 + 所有对话框的默认图标
     app.setStyleSheet(_themed_qss())
+    if config.IS_INSTALLED and not _is_admin():
+        if not _relaunch_elevated():
+            QMessageBox.warning(None, tr("failed_title"), tr("admin_console_required"))
+        return
     win = MainWindow()
     win.setMinimumSize(1040, 640)
     win.resize(1180, 720)

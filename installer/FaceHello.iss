@@ -68,8 +68,8 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 
 [Dirs]
 ; 数据 + 锁屏头像目录(SYSTEM 服务与提权 GUI 共享;CP 硬编码读 ProgramData\FaceHello)
-Name: "{commonappdata}\FaceHello"
-Name: "{commonappdata}\FaceHello\data"
+Name: "{commonappdata}\FaceHello"; Permissions: admins-full system-full
+Name: "{commonappdata}\FaceHello\data"; Permissions: admins-full system-full
 
 [Files]
 ; 便携包整目录原样拷入安装根(含 python\、models\、face_hello\、app\、DLL、引导脚本)
@@ -85,13 +85,15 @@ Name: "{autodesktop}\FaceHello 管理台"; Filename: "{#PyWExe}"; Parameters: "-
 ; 1) 先落 .installed 标记 —— config.py 见到它即走安装态(数据落 ProgramData)。必须在
 ;    启动服务之前写好,否则服务以开发态启动、数据落 Program Files 与 GUI 不一致。
 Filename: "{cmd}"; Parameters: "/c type nul > ""{app}\.installed"""; Flags: runhidden waituntilterminated; StatusMsg: "写入安装标记..."
-; 2) 注册并设开机自启服务(便携 python 即服务 ImagePath,登录 / 锁屏 / 睡眠唤醒常驻)
+; 2) 运行数据只允许 SYSTEM 与管理员读写;同时修复升级前已继承 Users:Write 的目录与文件
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\FaceHello"" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F /T /C"; Flags: runhidden waituntilterminated; StatusMsg: "保护 FaceHello 数据目录..."
+; 3) 注册并设开机自启服务(便携 python 即服务 ImagePath,登录 / 锁屏 / 睡眠唤醒常驻)
 Filename: "{#PyExe}"; Parameters: "winservice_main.py install --startup auto"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "注册 FaceHello 服务..."
-; 3) 立即启动服务(.installed 已在 → 安装态 → 数据落 ProgramData,无需重启)
+; 4) 立即启动服务(.installed 已在 → 安装态 → 数据落 ProgramData,无需重启)
 Filename: "{#PyExe}"; Parameters: "winservice_main.py start"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "启动 FaceHello 服务..."
-; 4) 注册锁屏 Credential Provider DLL
+; 5) 注册锁屏 Credential Provider DLL
 Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\FaceHelloCP.dll"""; Flags: runhidden waituntilterminated; StatusMsg: "注册锁屏凭据提供程序..."
-; 5) 收尾页可选:立即打开管理台(以原始用户身份,非 SYSTEM/管理员服务上下文)
+; 6) 收尾页可选:立即打开管理台(管理台会按需请求 UAC 提权)
 Filename: "{#PyWExe}"; Parameters: "-m app.main"; WorkingDir: "{app}"; Description: "立即打开 FaceHello 管理台"; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallRun]
