@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import json
-import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from . import config, cred_vault
+from . import config, cred_vault, probes
 from .i18n import t
 from .store import FaceStore
 
@@ -179,58 +177,32 @@ def _check_password(report: DiagnosticReport, lang: str, user: str) -> None:
 
 def _check_service(report: DiagnosticReport, lang: str) -> None:
     try:
-        import win32con
-        import win32service
-        import win32serviceutil
-
-        status = win32serviceutil.QueryServiceStatus("FaceHello")[1]
-        scm = None
-        svc = None
-        try:
-            scm = win32service.OpenSCManager(None, None, win32con.GENERIC_READ)
-            svc = win32service.OpenService(scm, "FaceHello", win32service.SERVICE_QUERY_CONFIG)
-            cfg = win32service.QueryServiceConfig(svc)
-        finally:
-            if svc is not None:
-                win32service.CloseServiceHandle(svc)
-            if scm is not None:
-                win32service.CloseServiceHandle(scm)
-        start_type = cfg[1]
-        account = cfg[7]
-        image_path = cfg[3]
+        info = probes.query_service()
     except Exception as exc:
         _add(report, lang, "diag_item_service", STATUS_FAIL,
              t("diag_service_missing", lang, e=exc), "diag_advice_install_service")
         return
 
-    running = status == 4
-    auto = start_type == 2
-    path_ok = str(config.ROOT) in image_path or str(config.INSTALL_ROOT) in image_path
-    status_key = {1: "svc_stopped", 2: "svc_starting", 3: "svc_stopping", 4: "svc_running",
-                  7: "svc_paused"}.get(status)
-    status_text = t(status_key, lang) if status_key else t("svc_code", lang, st=status)
+    running = info.status == 4
+    auto = info.start_type == 2
+    path_ok = str(config.ROOT) in info.image_path or str(config.INSTALL_ROOT) in info.image_path
+    status_key = probes.service_state_key(info.status)
+    status_text = t(status_key, lang) if status_key else t("svc_code", lang, st=info.status)
     item_status = STATUS_OK if running and auto and path_ok else STATUS_FAIL
     advice = "" if item_status == STATUS_OK else "diag_advice_service"
     _add(
         report, lang, "diag_item_service", item_status,
         t("diag_service_detail", lang, status=status_text,
           start=t("diag_start_auto" if auto else "diag_start_other", lang),
-          account=account, path=image_path),
+          account=info.account, path=info.image_path),
         advice,
     )
 
 
 def _check_pipe(report: DiagnosticReport, lang: str) -> None:
     try:
-        import win32file
-        import win32pipe
-
-        handle = win32file.CreateFile(
-            config.PIPE_NAME,
-            win32file.GENERIC_READ | win32file.GENERIC_WRITE,
-            0, None, win32file.OPEN_EXISTING, 0, None,
-        )
-    except Exception as exc:
+        resp = probes.call_pipe({"cmd": "ping"})
+    except probes.PipeConnectError as exc:
         winerror = getattr(exc, "winerror", None)
         if winerror == 5:
             _add(report, lang, "diag_item_pipe", STATUS_FAIL, t("diag_pipe_denied", lang),
@@ -240,17 +212,11 @@ def _check_pipe(report: DiagnosticReport, lang: str) -> None:
                  "diag_advice_start_service")
         else:
             _add(report, lang, "diag_item_pipe", STATUS_FAIL, t("diag_pipe_connect_fail", lang, e=exc),
-                 "diag_advice_start_service")
+                  "diag_advice_start_service")
         return
-    try:
-        win32pipe.SetNamedPipeHandleState(handle, win32pipe.PIPE_READMODE_MESSAGE, None, None)
-        win32file.WriteFile(handle, json.dumps({"cmd": "ping"}).encode("utf-8"))
-        resp = json.loads(win32file.ReadFile(handle, 65536)[1].decode("utf-8"))
     except Exception as exc:
         _add(report, lang, "diag_item_pipe", STATUS_FAIL, t("diag_pipe_ping_fail", lang, e=exc))
         return
-    finally:
-        win32file.CloseHandle(handle)
 
     if resp.get("ok"):
         users = resp.get("users", [])
@@ -285,61 +251,35 @@ def _check_cp(report: DiagnosticReport, lang: str) -> None:
 
 
 def _check_models(report: DiagnosticReport, lang: str) -> None:
-    items = [
-        (t("diag_model_det", lang), config.MODELS_DIR / "buffalo_l" / "det_10g.onnx"),
-        (t("diag_model_rec", lang), config.MODELS_DIR / "buffalo_l" / "w600k_r50.onnx"),
-        (t("diag_model_liveness", lang), config.FACE_LANDMARKER),
-    ]
+    names = {
+        "detector": t("diag_model_det", lang),
+        "recognition": t("diag_model_rec", lang),
+        "liveness": t("diag_model_liveness", lang),
+    }
+    items = [(names[key], path) for key, path in probes.required_model_paths()]
     missing = [name for name, path in items if not path.exists()]
     if missing:
         _add(report, lang, "diag_item_models", STATUS_FAIL,
              t("diag_models_missing", lang, names=", ".join(missing)), "diag_advice_offline_check")
         return
 
-    t0 = time.perf_counter()
     try:
-        import threading
-
-        import numpy as np
-
-        from .detector import FaceDetector
-        from .liveness import FaceMeshTracker
-
-        FaceDetector().load()
-        tracker = FaceMeshTracker()
-        tracker.process(np.zeros((480, 640, 3), dtype=np.uint8))
-        threading.Thread(target=tracker.close, daemon=True).start()
+        elapsed, antispoof_ready = probes.load_models()
     except Exception as exc:
         _add(report, lang, "diag_item_models", STATUS_FAIL, t("diag_models_load_fail", lang, e=exc))
         return
 
-    try:
-        from .antispoof import get_antispoof
-
-        antispoof_ready = get_antispoof() is not None
-    except Exception:
-        antispoof_ready = False
     _add(
         report, lang, "diag_item_models", STATUS_OK,
-        t("diag_models_ok", lang, seconds=f"{time.perf_counter() - t0:.1f}",
+        t("diag_models_ok", lang, seconds=f"{elapsed:.1f}",
           antispoof=_yes_no(antispoof_ready, lang)),
     )
 
 
 def _check_camera(report: DiagnosticReport, lang: str) -> None:
+    idx = probes.configured_camera_index()
     try:
-        idx = int(FaceStore().load().get_settings().get("camera_index", 0))
-    except Exception:
-        idx = 0
-    try:
-        from .camera import Camera
-
-        cam = Camera(idx)
-        try:
-            cam.open(timeout_s=8.0)
-            frame = cam.read()
-        finally:
-            cam.release()
+        frame = probes.capture_camera_frame(idx)
     except Exception as exc:
         _add(report, lang, "diag_item_camera", STATUS_FAIL,
              t("diag_camera_fail", lang, idx=idx, e=exc), "diag_advice_camera_index")
@@ -347,4 +287,3 @@ def _check_camera(report: DiagnosticReport, lang: str) -> None:
     h, w = frame.shape[:2]
     _add(report, lang, "diag_item_camera", STATUS_OK,
          t("diag_camera_ok", lang, idx=idx, w=w, h=h))
-

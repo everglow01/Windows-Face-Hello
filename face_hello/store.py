@@ -21,7 +21,6 @@ import numpy as np
 from . import config
 from .platform_backend import protect as _protect, unprotect as _unprotect
 
-_MAX_LABEL_LEN = 24
 _FORMAT_MAGIC = b"FACEHELLO2\n"
 _MAX_STORE_BYTES = 16 * 1024 * 1024
 _MAX_PROFILES = 1000
@@ -39,7 +38,7 @@ _LEGACY_GLOBALS = {
 
 
 def _clean_label(label: str) -> str:
-    return str(label or "").strip()[:_MAX_LABEL_LEN]
+    return str(label or "").strip()[:config.TEMPLATE_LABEL_MAX_LENGTH]
 
 
 class _LegacyUnpickler(pickle.Unpickler):

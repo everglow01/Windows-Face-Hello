@@ -566,6 +566,16 @@ def tr(key: str, **kw) -> str:
     return t(key, _LANG, **kw)
 
 
+def _save_mirror(path, text: str) -> None:
+    from . import config
+
+    try:
+        config.AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="ascii")
+    except OSError:
+        pass
+
+
 def save_lang_mirror(lang: str) -> None:
     """把语言写成明文镜像 lang.txt,供 C++ Credential Provider(SYSTEM)在锁屏读取。
 
@@ -574,21 +584,11 @@ def save_lang_mirror(lang: str) -> None:
     """
     from . import config
 
-    try:
-        config.AVATAR_DIR.mkdir(parents=True, exist_ok=True)
-        config.LANG_FILE.write_text(
-            lang if lang in _CATALOG else DEFAULT_LANG, encoding="ascii"
-        )
-    except OSError:
-        pass
+    _save_mirror(config.LANG_FILE, lang if lang in _CATALOG else DEFAULT_LANG)
 
 
 def save_hotkey_mirror(hotkey: str) -> None:
     from . import config
 
     text = str(hotkey or "").strip().upper()
-    try:
-        config.AVATAR_DIR.mkdir(parents=True, exist_ok=True)
-        config.HOTKEY_FILE.write_text(text, encoding="ascii")
-    except OSError:
-        pass
+    _save_mirror(config.HOTKEY_FILE, text)

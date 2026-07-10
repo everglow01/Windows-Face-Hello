@@ -26,7 +26,7 @@ from .service import serve, setup_logging
 
 
 class FaceHelloService(win32serviceutil.ServiceFramework):
-    _svc_name_ = "FaceHello"
+    _svc_name_ = config.SERVICE_NAME
     _svc_display_name_ = "FaceHello Face Unlock"
     _svc_description_ = (
         "RGB camera face-unlock auth service (named pipe for the credential provider)."

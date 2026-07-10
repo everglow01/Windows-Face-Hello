@@ -45,10 +45,14 @@ HOTKEY_FILE = _PROGRAMDATA / "hotkey.txt"
 
 # 认证服务的命名管道(Credential Provider 通过它请求认证)
 PIPE_NAME = r"\\.\pipe\FaceHello"
+SERVICE_NAME = "FaceHello"
 
 # 识别模型
 INSIGHTFACE_MODEL = "buffalo_l"
 DET_SIZE = (320, 320)  # 贴脸的摄像头 320 足够,比 640 快得多
+INSIGHTFACE_DETECTION_MODEL = MODELS_DIR / INSIGHTFACE_MODEL / "det_10g.onnx"
+INSIGHTFACE_RECOGNITION_MODEL = MODELS_DIR / INSIGHTFACE_MODEL / "w600k_r50.onnx"
+TEMPLATE_LABEL_MAX_LENGTH = 24
 
 # 活体用的 MediaPipe FaceLandmarker 模型(Tasks API,首次自动下载)
 FACE_LANDMARKER = MODELS_DIR / "face_landmarker.task"

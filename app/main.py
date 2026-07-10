@@ -1,16 +1,10 @@
-"""Face_hello 管理台入口。
-
-运行:  uv run python -m app.main
-三个标签页:录入人脸 / 测试解锁 / 设置与安全。
-注意:这是管理/验证用的桌面程序,真正在锁屏解锁需后续的 Credential Provider(阶段 5)。
-"""
+"""FaceHello 管理台入口。"""
 from __future__ import annotations
 
 import sys
-from collections import deque
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QSize, QTimer, Qt
+from PySide6.QtCore import QEvent, QPoint, QTimer, Qt
 from PySide6.QtGui import QBrush, QColor, QIcon, QImage, QPainter, QPixmap, QPolygon
 from PySide6.QtWidgets import (
     QApplication,
@@ -43,19 +37,25 @@ from app.workers import (
     SimilarityMonitorWorker,
     WarmupWorker,
 )
+from app.dialogs import HotkeyDialog, TemplateLabelDialog, hotkey_text as _hotkey_text
+from app.widgets import (
+    DANGER,
+    PREVIEW_H,
+    PREVIEW_W,
+    SUCCESS,
+    CaptionButton,
+    ResizeHandle,
+    SimilarityHistogram,
+    preview_label as _preview_label,
+    show_frame as _show_frame,
+)
 from face_hello.diagnostics import DiagnosticReport, status_label
-from face_hello import config, cred_vault
+from face_hello import config, cred_vault, probes
 from face_hello.auth import AuthResult
 from face_hello.detector import FaceDetector
 from face_hello.i18n import save_hotkey_mirror, save_lang_mirror, set_lang, tr
 from face_hello.store import FaceStore
 
-PREVIEW_W, PREVIEW_H = 560, 420
-
-# Fluent 语义色(供内联状态样式用;QSS 里另直接写色值)
-ACCENT = "#B45E3C"
-SUCCESS = "#2F7D57"
-DANGER = "#B42318"
 WARN = "#9A5B16"
 
 # 大号活体提示文字的基础样式(颜色随结果在内联追加)
@@ -186,29 +186,8 @@ QWidget#windowShell {
     border: 1px solid #DDCBB8;
     border-radius: 12px;
 }
-QPushButton {
-    background-color: #FFFCF7;
-    border: 1px solid #D9CABB;
-}
-QPushButton:hover { background-color: #F7EDE2; border-color: #CDB8A6; }
-QPushButton:pressed { background-color: #EEDFD0; border-color: #B99D87; }
-QPushButton:focus { border: 1px solid #B99D87; }
-QPushButton:default { background-color: #FFF7EF; border: 1px solid #C78F72; }
-QPushButton:default:pressed { background-color: #EEDFD0; border-color: #B99D87; }
 QPushButton:checked { background-color: #FFF7EF; border-color: #E4C5B2; }
 QPushButton:checked:pressed { background-color: #EEDFD0; border-color: #B99D87; }
-QPushButton:disabled { background-color: #F0E8DF; color: #A99C8F; border-color: #E8DED3; }
-QPushButton#accent {
-    background-color: #B45E3C;
-    border: 1px solid #B45E3C;
-    color: #FFF9F2;
-}
-QPushButton#accent:hover { background-color: #C06B47; border-color: #C06B47; }
-QPushButton#accent:pressed { background-color: #9E4D30; border-color: #9E4D30; }
-QPushButton#accent:focus { border: 1px solid #7F3B24; }
-QPushButton#accent:default { background-color: #B45E3C; border: 1px solid #7F3B24; }
-QPushButton#accent:default:pressed { background-color: #9E4D30; border-color: #7F3B24; }
-QPushButton#accent:disabled { background-color: #D9B7A6; border-color: #D9B7A6; color: #FFF1E9; }
 QPushButton#navButton {
     background: transparent;
     border: 1px solid transparent;
@@ -381,175 +360,6 @@ def _themed_qss() -> str:
         .replace("__DOWN_ARROW__", down)
         .replace("__COMBO_ARROW__", combo)
     )
-
-
-class PreviewLabel(QLabel):
-    def __init__(self):
-        super().__init__(tr("camera_preview"))
-        self.setMinimumSize(400, 300)
-        self.setMaximumSize(760, 570)
-        policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        policy.setHeightForWidth(True)
-        self.setSizePolicy(policy)
-        self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet(
-            "background:#24201C;color:#D8CFC5;border:1px solid #E6D8C9;border-radius:8px;"
-        )
-
-    def sizeHint(self) -> QSize:
-        return QSize(PREVIEW_W, PREVIEW_H)
-
-    def minimumSizeHint(self) -> QSize:
-        return QSize(400, 300)
-
-    def heightForWidth(self, width: int) -> int:
-        return width * 3 // 4
-
-    def resizeEvent(self, event) -> None:
-        height = max(300, min(570, event.size().width() * 3 // 4))
-        if self.maximumHeight() != height:
-            self.setMaximumHeight(height)
-        super().resizeEvent(event)
-
-
-def _preview_label() -> QLabel:
-    return PreviewLabel()
-
-
-def _show_frame(label: QLabel, img: QImage) -> None:
-    label.setPixmap(
-        QPixmap.fromImage(img).scaled(
-            label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
-        )
-    )
-
-
-def _label_presets() -> list[str]:
-    return [
-        tr("label_front"),
-        tr("label_left"),
-        tr("label_right"),
-        tr("label_night"),
-        tr("label_glasses_on"),
-        tr("label_glasses_off"),
-        tr("label_side"),
-    ]
-
-
-def _hotkey_text(value: str) -> str:
-    value = str(value or "").upper()
-    if value == "SPACE":
-        return tr("hotkey_space")
-    if value == "ENTER":
-        return tr("hotkey_enter")
-    return value or tr("hotkey_none")
-
-
-class TemplateLabelDialog(QDialog):
-    """Small editable preset picker for a template's management-only label."""
-
-    def __init__(self, default_label: str = "", parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(tr("template_label_title"))
-        self.resize(340, 120)
-
-        self.combo = QComboBox()
-        self.combo.setEditable(True)
-        self.combo.addItems(_label_presets())
-        self.combo.setCurrentText((default_label or "").strip()[:24])
-        if self.combo.lineEdit() is not None:
-            self.combo.lineEdit().setMaxLength(24)
-
-        hint = QLabel(tr("template_label_prompt"))
-        hint.setWordWrap(True)
-        save_btn = QPushButton(tr("save_label"))
-        save_btn.setObjectName("accent")
-        save_btn.clicked.connect(self.accept)
-        cancel_btn = QPushButton(tr("cancel_btn"))
-        cancel_btn.clicked.connect(self.reject)
-
-        btn_row = QHBoxLayout()
-        btn_row.addStretch(1)
-        btn_row.addWidget(cancel_btn)
-        btn_row.addWidget(save_btn)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
-        layout.addWidget(hint)
-        layout.addWidget(self.combo)
-        layout.addLayout(btn_row)
-
-    def label(self) -> str:
-        text = self.combo.currentText().strip()
-        return text[:24]
-
-    @staticmethod
-    def prompt(parent, default_label: str = "") -> str | None:
-        dlg = TemplateLabelDialog(default_label, parent)
-        if dlg.exec() == QDialog.Accepted:
-            return dlg.label()
-        return None
-
-
-class HotkeyDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.value = ""
-        self.setWindowTitle(tr("hotkey_capture_title"))
-        self.prompt = QLabel(tr("hotkey_capture_prompt"))
-        self.prompt.setAlignment(Qt.AlignCenter)
-        self.prompt.setMinimumWidth(280)
-
-        cancel_btn = QPushButton(tr("cancel_btn"))
-        cancel_btn.setFocusPolicy(Qt.NoFocus)
-        cancel_btn.installEventFilter(self)
-        cancel_btn.clicked.connect(self.reject)
-
-        btn_row = QHBoxLayout()
-        btn_row.addStretch(1)
-        btn_row.addWidget(cancel_btn)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(12)
-        layout.addWidget(self.prompt)
-        layout.addLayout(btn_row)
-        self.setFocusPolicy(Qt.StrongFocus)
-        self.setFocus()
-
-    def eventFilter(self, obj, event) -> bool:
-        if event.type() == QEvent.KeyPress:
-            return self._handle_key(event)
-        return super().eventFilter(obj, event)
-
-    def keyPressEvent(self, event) -> None:
-        if not self._handle_key(event):
-            super().keyPressEvent(event)
-
-    def _handle_key(self, event) -> bool:
-        key = int(event.key())
-        value = ""
-        if key == int(Qt.Key_Space):
-            value = "SPACE"
-        elif key in (int(Qt.Key_Return), int(Qt.Key_Enter)):
-            value = "ENTER"
-        elif int(Qt.Key_A) <= key <= int(Qt.Key_Z):
-            value = chr(ord("A") + key - int(Qt.Key_A))
-        elif int(Qt.Key_0) <= key <= int(Qt.Key_9):
-            value = chr(ord("0") + key - int(Qt.Key_0))
-
-        if value:
-            self.value = value
-            self.accept()
-            return True
-
-        if key == int(Qt.Key_Escape):
-            self.reject()
-            return True
-
-        self.prompt.setText(tr("hotkey_capture_invalid"))
-        return True
 
 
 class EnrollTab(QWidget):
@@ -814,76 +624,6 @@ class TemplateManagerDialog(QDialog):
         self.store.remove_template(self.name, row)  # row == 第 n 条的 0-based 序号
         self.store.save()
         self._load()
-
-
-class SimilarityHistogram(QWidget):
-    """自绘滚动相似度分布直方图(无新依赖,沿用 _make_arrow 的 QPainter 风格)。
-
-    喂入逐帧相似度,按 [0,1] 分桶画柱(≥阈值绿、<阈值灰),叠阈值竖线 + 当前值。
-    """
-
-    _BINS = 20        # [0,1] 分 20 桶,每桶 0.05
-    _WINDOW = 150     # 最近 ~150 帧(≈5s@30fps)
-
-    def __init__(self):
-        super().__init__()
-        self._samples: deque[float] = deque(maxlen=self._WINDOW)
-        self._threshold = 0.5
-        self._current: float | None = None
-        self.setFixedHeight(118)
-
-    def set_threshold(self, thr: float) -> None:
-        self._threshold = float(thr)
-        self.update()
-
-    def clear(self) -> None:
-        self._samples.clear()
-        self._current = None
-        self.update()
-
-    def add_sample(self, sim: float) -> None:
-        if sim < 0:                 # 无脸:只更新当前态,不计入分布
-            self._current = None
-        else:
-            self._current = sim
-            self._samples.append(sim)
-        self.update()
-
-    def paintEvent(self, _event) -> None:
-        p = QPainter(self)
-        w, h = self.width(), self.height()
-        p.fillRect(0, 0, w, h, QColor("#FFFCF7"))
-        p.setPen(QColor("#E6D8C9"))
-        p.drawRect(0, 0, w - 1, h - 1)
-
-        pad_l, pad_r, pad_t, pad_b = 8, 8, 22, 18
-        plot_w, plot_h = w - pad_l - pad_r, h - pad_t - pad_b
-
-        counts = [0] * self._BINS
-        for s in self._samples:
-            counts[min(self._BINS - 1, max(0, int(s * self._BINS)))] += 1
-        peak = max(counts) if counts else 0
-
-        bar_w = plot_w / self._BINS
-        for i, c in enumerate(counts):
-            if c == 0 or peak == 0:
-                continue
-            bar_h = (c / peak) * plot_h
-            x = pad_l + i * bar_w
-            y = pad_t + (plot_h - bar_h)
-            center = (i + 0.5) / self._BINS
-            color = QColor(SUCCESS) if center >= self._threshold else QColor("#CDB8A6")
-            p.fillRect(int(x) + 1, int(y), max(1, int(bar_w) - 1), int(bar_h), color)
-
-        tx = pad_l + self._threshold * plot_w
-        p.setPen(QColor(DANGER))
-        p.drawLine(int(tx), pad_t, int(tx), pad_t + plot_h)
-
-        p.setPen(QColor("#716457"))
-        p.drawText(pad_l, 14, tr("hist_title"))
-        cur = tr("hist_current", sim=self._current) if self._current is not None else tr("hist_no_face")
-        p.drawText(pad_l, h - 5, f"{cur}    {tr('hist_threshold', thr=self._threshold)}")
-        p.end()
 
 
 class AuthTab(QWidget):
@@ -1236,16 +976,10 @@ def _run_service(*args: str) -> tuple[int, str]:
     return p.returncode, (p.stdout + p.stderr).strip()
 
 
-# 服务状态码 → 文案 key(在 tr 之前于模块加载期求值会绑死语言,故只存 key,调用时再 tr)
-_SVC_STATE_KEYS = {1: "svc_stopped", 2: "svc_starting", 3: "svc_stopping", 4: "svc_running", 7: "svc_paused"}
-
-
 def _service_status() -> str:
     try:
-        import win32serviceutil
-
-        st = win32serviceutil.QueryServiceStatus(ServiceTab.SERVICE_NAME)[1]
-        key = _SVC_STATE_KEYS.get(st)
+        st = probes.query_service().status
+        key = probes.service_state_key(st)
         return tr(key) if key else tr("svc_code", st=st)
     except Exception:  # noqa: BLE001 多半是未安装
         return tr("svc_not_installed")
@@ -1253,8 +987,6 @@ def _service_status() -> str:
 
 class ServiceTab(QWidget):
     """服务与凭据:设 LSA 解锁密码 + 安装/启停 LocalSystem 自启服务。需管理员。"""
-
-    SERVICE_NAME = "FaceHello"
 
     def __init__(self, store: FaceStore):
         super().__init__()
@@ -1481,56 +1213,6 @@ class ServiceTab(QWidget):
         lang = self.store.get_settings().get("language", "zh")
         QApplication.clipboard().setText(self.diag_report.to_text(lang))
         QMessageBox.information(self, tr("diag_title"), tr("diag_copy_ok"))
-
-
-class ResizeHandle(QWidget):
-    def __init__(self, parent, edges, cursor):
-        super().__init__(parent)
-        self.edges = edges
-        self.setObjectName("resizeHandle")
-        self.setCursor(cursor)
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton:
-            handle = self.window().windowHandle()
-            if handle is not None and handle.startSystemResize(self.edges):
-                event.accept()
-                return
-        super().mousePressEvent(event)
-
-
-class CaptionButton(QPushButton):
-    def __init__(self, kind: str):
-        super().__init__()
-        self.kind = kind
-        self.setFixedSize(46, 32)
-        self.setFlat(True)
-        self.setFocusPolicy(Qt.NoFocus)
-        self.setObjectName("windowCloseButton" if kind == "close" else "windowButton")
-
-    def set_kind(self, kind: str) -> None:
-        self.kind = kind
-        self.update()
-
-    def paintEvent(self, event) -> None:
-        super().paintEvent(event)
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, True)
-        color = QColor("#FFF9F2") if self.kind == "close" and self.underMouse() else QColor("#5E5146")
-        p.setPen(color)
-        cx = self.width() // 2
-        cy = self.height() // 2
-        if self.kind == "min":
-            p.drawLine(cx - 5, cy + 1, cx + 5, cy + 1)
-        elif self.kind == "max":
-            p.drawRect(cx - 5, cy - 5, 10, 10)
-        elif self.kind == "restore":
-            p.drawRect(cx - 3, cy - 5, 8, 8)
-            p.drawRect(cx - 6, cy - 2, 8, 8)
-        else:
-            p.drawLine(cx - 5, cy - 5, cx + 5, cy + 5)
-            p.drawLine(cx + 5, cy - 5, cx - 5, cy + 5)
-        p.end()
 
 
 class MainWindow(QWidget):
