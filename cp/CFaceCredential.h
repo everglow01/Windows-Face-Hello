@@ -5,7 +5,7 @@
 #include <string>
 #include "common.h"
 
-class CFaceProvider;  // 反向指针,用于认证成功后触发自动提交
+class AutoLogonBridge;
 
 // 单个「刷脸」磁贴。
 class CFaceCredential : public ICredentialProviderCredential
@@ -43,7 +43,7 @@ public:
         PWSTR* ppwszOptionalStatusText,
         CREDENTIAL_PROVIDER_STATUS_ICON* pcpsiOptionalStatusIcon);
 
-    HRESULT Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, CFaceProvider* pProvider);
+    HRESULT Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, AutoLogonBridge* autoLogon);
     CFaceCredential();
 
 private:
@@ -69,7 +69,7 @@ private:
     LONG _cRef;
     bool _en;  // 界面语言:读 C:\ProgramData\FaceHello\lang.txt,内容 "en" 为真,否则中文
     CREDENTIAL_PROVIDER_USAGE_SCENARIO _cpus;
-    CFaceProvider* _pProvider;
+    AutoLogonBridge* _autoLogon;
     ICredentialProviderCredentialEvents* _pCredProvCredentialEvents;
     PWSTR _rgFieldStrings[FFI_NUM_FIELDS]; // 各文本字段当前内容(CoTaskMem)
 

@@ -198,13 +198,14 @@ static int _ReadHotkeyVk()
 }
 
 CFaceCredential::CFaceCredential()
-    : _cRef(1), _cpus(CPUS_INVALID), _pProvider(nullptr),
+    : _cRef(1), _cpus(CPUS_INVALID), _autoLogon(nullptr),
       _pCredProvCredentialEvents(nullptr), _hAuthThread(nullptr), _hHotkeyThread(nullptr),
       _stopFlag(0), _hotkeyStopFlag(0), _authState(AuthState::Idle), _en(false),
       _failCount(0), _hotkeyVk(0)
 {
     ZeroMemory(_rgFieldStrings, sizeof(_rgFieldStrings));
     InitializeCriticalSection(&_cs);
+    DllAddRef();
 }
 
 CFaceCredential::~CFaceCredential()
@@ -222,12 +223,22 @@ CFaceCredential::~CFaceCredential()
         _pCredProvCredentialEvents->Release();
         _pCredProvCredentialEvents = nullptr;
     }
+    if (_autoLogon)
+    {
+        _autoLogon->Release();
+        _autoLogon = nullptr;
+    }
+    DllRelease();
 }
 
-HRESULT CFaceCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, CFaceProvider* pProvider)
+HRESULT CFaceCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, AutoLogonBridge* autoLogon)
 {
     _cpus = cpus;
-    _pProvider = pProvider;
+    _autoLogon = autoLogon;
+    if (_autoLogon)
+    {
+        _autoLogon->AddRef();
+    }
     _en = _IsEnglishUI();  // 读一次语言镜像,贯穿本磁贴所有文案
     _hotkeyVk = _ReadHotkeyVk();
     HRESULT hr = SHStrDupW(_L(L"面部解锁", L"Face Unlock"), &_rgFieldStrings[FFI_LABEL]);
@@ -266,24 +277,30 @@ IFACEMETHODIMP CFaceCredential::QueryInterface(REFIID riid, void** ppv)
 
 IFACEMETHODIMP CFaceCredential::Advise(ICredentialProviderCredentialEvents* pcpce)
 {
-    if (_pCredProvCredentialEvents)
+    if (pcpce)
     {
-        _pCredProvCredentialEvents->Release();
+        pcpce->AddRef();
     }
+    EnterCriticalSection(&_cs);
+    ICredentialProviderCredentialEvents* old = _pCredProvCredentialEvents;
     _pCredProvCredentialEvents = pcpce;
-    if (_pCredProvCredentialEvents)
+    LeaveCriticalSection(&_cs);
+    if (old)
     {
-        _pCredProvCredentialEvents->AddRef();
+        old->Release();
     }
     return S_OK;
 }
 
 IFACEMETHODIMP CFaceCredential::UnAdvise()
 {
-    if (_pCredProvCredentialEvents)
+    EnterCriticalSection(&_cs);
+    ICredentialProviderCredentialEvents* old = _pCredProvCredentialEvents;
+    _pCredProvCredentialEvents = nullptr;
+    LeaveCriticalSection(&_cs);
+    if (old)
     {
-        _pCredProvCredentialEvents->Release();
-        _pCredProvCredentialEvents = nullptr;
+        old->Release();
     }
     return S_OK;
 }
@@ -354,7 +371,10 @@ void CFaceCredential::_StopAuthThread()
     _hAuthThread = nullptr;
     if (h != nullptr)
     {
-        WaitForSingleObject(h, 5000);  // poll 很快返回,通常 <1s
+        if (GetThreadId(h) != GetCurrentThreadId())
+        {
+            WaitForSingleObject(h, 5000);  // poll 很快返回,通常 <1s
+        }
         CloseHandle(h);
     }
     EnterCriticalSection(&_cs);
@@ -401,7 +421,10 @@ void CFaceCredential::_StopHotkeyThread()
     _hHotkeyThread = nullptr;
     if (h != nullptr)
     {
-        WaitForSingleObject(h, 1000);
+        if (GetThreadId(h) != GetCurrentThreadId())
+        {
+            WaitForSingleObject(h, 1000);
+        }
         CloseHandle(h);
     }
 }
@@ -480,9 +503,9 @@ void CFaceCredential::_AuthLoop()
             _authState = AuthState::Success;
             LeaveCriticalSection(&_cs);
             _SetStatus(_L(L"识别通过,正在登录…", L"Recognized, signing in…"));
-            if (_pProvider != nullptr)
+            if (_autoLogon != nullptr)
             {
-                _pProvider->SignalAutoLogon();  // 触发 LogonUI 调 GetSerialization
+                _autoLogon->Signal();  // 触发 LogonUI 调 GetSerialization
             }
         }
         else
@@ -495,6 +518,8 @@ void CFaceCredential::_AuthLoop()
 
 void CFaceCredential::_SetStatus(PCWSTR text)
 {
+    ICredentialProviderCredentialEvents* events = nullptr;
+    std::wstring status(text ? text : L"");
     EnterCriticalSection(&_cs);
     CoTaskMemFree(_rgFieldStrings[FFI_STATUS]);
     _rgFieldStrings[FFI_STATUS] = nullptr;
@@ -502,9 +527,15 @@ void CFaceCredential::_SetStatus(PCWSTR text)
     if (_pCredProvCredentialEvents != nullptr && _rgFieldStrings[FFI_STATUS] != nullptr &&
         InterlockedCompareExchange(&_stopFlag, 0, 0) == 0)
     {
-        _pCredProvCredentialEvents->SetFieldString(this, FFI_STATUS, _rgFieldStrings[FFI_STATUS]);
+        events = _pCredProvCredentialEvents;
+        events->AddRef();
     }
     LeaveCriticalSection(&_cs);
+    if (events)
+    {
+        events->SetFieldString(this, FFI_STATUS, status.c_str());
+        events->Release();
+    }
 }
 
 // 一次刷脸扫描失败:计数 +1、置 Failed,据剩余次数刷新状态文字。
@@ -641,7 +672,7 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
     EnterCriticalSection(&_cs);
     _authState = AuthState::Idle;
     LeaveCriticalSection(&_cs);
-    if (_pProvider != nullptr) { _pProvider->ClearAutoLogon(); }
+    if (_autoLogon != nullptr) { _autoLogon->Clear(); }
 
     // 2. 从 LSA Secret 取该用户登录密码(CP 在锁屏是 SYSTEM,可读)。
     std::wstring password;

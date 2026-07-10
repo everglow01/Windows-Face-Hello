@@ -48,6 +48,7 @@ class FaceDetector:
         self.model_name = model_name
         self._app = None  # 惰性,避免导入即加载
         self._lock = threading.Lock()  # 防止预加载与首次推理并发重复加载
+        self._inference_lock = threading.Lock()
 
     def load(self) -> None:
         """显式加载并真正跑一次推理预热(供启动时后台调用)。
@@ -63,7 +64,8 @@ class FaceDetector:
         t1 = time.perf_counter()
         log.info("[计时] detector 读模型+建会话 %.2fs", t1 - t0)
         try:
-            app.get(_sample_face_image())  # 带人脸的样例图,预热检测+识别两条链路
+            with self._inference_lock:
+                app.get(_sample_face_image())  # 带人脸的样例图,预热检测+识别两条链路
         except Exception:  # noqa: BLE001 预热失败不致命
             pass
         log.info("[计时] detector 样例推理预热 %.2fs", time.perf_counter() - t1)
@@ -87,7 +89,8 @@ class FaceDetector:
 
     def detect(self, frame_bgr) -> list[DetectedFace]:
         app = self._ensure_loaded()
-        faces = app.get(frame_bgr)
+        with self._inference_lock:
+            faces = app.get(frame_bgr)
         out: list[DetectedFace] = []
         for f in faces:
             out.append(

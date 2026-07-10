@@ -4,6 +4,30 @@
 #include <credentialprovider.h>
 #include "CFaceCredential.h"
 
+class AutoLogonBridge
+{
+public:
+    AutoLogonBridge();
+    ULONG AddRef();
+    ULONG Release();
+    void Advise(ICredentialProviderEvents* events, UINT_PTR context);
+    void UnAdvise();
+    void Signal();
+    void Clear();
+    bool IsRequested();
+    void Deactivate();
+
+private:
+    ~AutoLogonBridge();
+
+    LONG _cRef;
+    mutable SRWLOCK _lock;
+    ICredentialProviderEvents* _events;
+    UINT_PTR _context;
+    volatile LONG _active;
+    volatile LONG _requested;
+};
+
 // FaceHello 的 Credential Provider:在登录/解锁场景下枚举出 1 个「刷脸」磁贴。
 class CFaceProvider : public ICredentialProvider
 {
@@ -27,11 +51,6 @@ public:
 
     CFaceProvider();
 
-    // 由凭据的扫描线程在识别通过后调用:置自动登录标志并通知 LogonUI 重新查询
-    // (随后 LogonUI 会调 GetSerialization 完成提交)。ClearAutoLogon 在消费后复位。
-    void SignalAutoLogon();
-    void ClearAutoLogon();
-
 private:
     ~CFaceProvider();
     void _CreateEnumeratedCredential(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus);
@@ -39,9 +58,7 @@ private:
 
     LONG _cRef;
     CFaceCredential* _pCredential;
-    ICredentialProviderEvents* _pcpe;
-    UINT_PTR _upAdviseContext;
-    bool _bAutoLogon;  // 识别通过后置 true,GetCredentialCount 据此让 LogonUI 自动提交
+    AutoLogonBridge* _autoLogon;
 };
 
 // 由 dll.cpp 的类工厂调用。

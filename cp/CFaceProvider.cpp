@@ -23,34 +23,119 @@ const FIELD_STATE_PAIR g_fieldStatePairs[FFI_NUM_FIELDS] =
     { CPFS_DISPLAY_IN_SELECTED_TILE, CPFIS_NONE }, // status text
 };
 
+AutoLogonBridge::AutoLogonBridge()
+    : _cRef(1), _events(nullptr), _context(0), _active(1), _requested(0)
+{
+    InitializeSRWLock(&_lock);
+}
+
+AutoLogonBridge::~AutoLogonBridge()
+{
+    UnAdvise();
+}
+
+ULONG AutoLogonBridge::AddRef()
+{
+    return InterlockedIncrement(&_cRef);
+}
+
+ULONG AutoLogonBridge::Release()
+{
+    LONG value = InterlockedDecrement(&_cRef);
+    if (value == 0)
+    {
+        delete this;
+    }
+    return value;
+}
+
+void AutoLogonBridge::Advise(ICredentialProviderEvents* events, UINT_PTR context)
+{
+    if (events)
+    {
+        events->AddRef();
+    }
+    AcquireSRWLockExclusive(&_lock);
+    ICredentialProviderEvents* old = _events;
+    _events = events;
+    _context = context;
+    ReleaseSRWLockExclusive(&_lock);
+    if (old)
+    {
+        old->Release();
+    }
+}
+
+void AutoLogonBridge::UnAdvise()
+{
+    AcquireSRWLockExclusive(&_lock);
+    ICredentialProviderEvents* old = _events;
+    _events = nullptr;
+    _context = 0;
+    ReleaseSRWLockExclusive(&_lock);
+    if (old)
+    {
+        old->Release();
+    }
+}
+
+void AutoLogonBridge::Signal()
+{
+    ICredentialProviderEvents* events = nullptr;
+    UINT_PTR context = 0;
+    AcquireSRWLockShared(&_lock);
+    if (InterlockedCompareExchange(&_active, 0, 0) != 0)
+    {
+        InterlockedExchange(&_requested, 1);
+        if (_events)
+        {
+            events = _events;
+            events->AddRef();
+            context = _context;
+        }
+    }
+    ReleaseSRWLockShared(&_lock);
+    if (events)
+    {
+        events->CredentialsChanged(context);
+        events->Release();
+    }
+}
+
+void AutoLogonBridge::Clear()
+{
+    InterlockedExchange(&_requested, 0);
+}
+
+bool AutoLogonBridge::IsRequested()
+{
+    return InterlockedCompareExchange(&_requested, 0, 0) != 0;
+}
+
+void AutoLogonBridge::Deactivate()
+{
+    InterlockedExchange(&_active, 0);
+    Clear();
+    UnAdvise();
+}
+
 CFaceProvider::CFaceProvider()
-    : _cRef(1), _pCredential(nullptr), _pcpe(nullptr),
-      _upAdviseContext(0), _bAutoLogon(false)
+    : _cRef(1), _pCredential(nullptr), _autoLogon(new (std::nothrow) AutoLogonBridge())
 {
     DllAddRef();
 }
 
-void CFaceProvider::SignalAutoLogon()
-{
-    _bAutoLogon = true;
-    if (_pcpe)
-    {
-        _pcpe->CredentialsChanged(_upAdviseContext);
-    }
-}
-
-void CFaceProvider::ClearAutoLogon()
-{
-    _bAutoLogon = false;
-}
-
 CFaceProvider::~CFaceProvider()
 {
-    _ReleaseEnumeratedCredentials();
-    if (_pcpe)
+    if (_autoLogon)
     {
-        _pcpe->Release();
-        _pcpe = nullptr;
+        _autoLogon->Deactivate();
+    }
+    _ReleaseEnumeratedCredentials();
+    if (_autoLogon)
+    {
+        _autoLogon->Release();
+        _autoLogon = nullptr;
     }
     DllRelease();
 }
@@ -108,27 +193,19 @@ IFACEMETHODIMP CFaceProvider::SetSerialization(
 
 IFACEMETHODIMP CFaceProvider::Advise(ICredentialProviderEvents* pcpe, UINT_PTR upAdviseContext)
 {
-    if (_pcpe)
+    if (_autoLogon)
     {
-        _pcpe->Release();
+        _autoLogon->Advise(pcpe, upAdviseContext);
     }
-    _pcpe = pcpe;
-    if (_pcpe)
-    {
-        _pcpe->AddRef();
-    }
-    _upAdviseContext = upAdviseContext;
     return S_OK;
 }
 
 IFACEMETHODIMP CFaceProvider::UnAdvise()
 {
-    if (_pcpe)
+    if (_autoLogon)
     {
-        _pcpe->Release();
-        _pcpe = nullptr;
+        _autoLogon->UnAdvise();
     }
-    _upAdviseContext = 0;
     return S_OK;
 }
 
@@ -154,7 +231,7 @@ IFACEMETHODIMP CFaceProvider::GetCredentialCount(
     *pdwCount = _pCredential ? 1 : 0;
     *pdwDefault = 0;
     // 识别通过后 SignalAutoLogon 置位,LogonUI 据此自动调 GetSerialization 完成提交
-    *pbAutoLogonWithDefault = _bAutoLogon ? TRUE : FALSE;
+    *pbAutoLogonWithDefault = _autoLogon && _autoLogon->IsRequested() ? TRUE : FALSE;
     return S_OK;
 }
 
@@ -174,7 +251,7 @@ void CFaceProvider::_CreateEnumeratedCredential(CREDENTIAL_PROVIDER_USAGE_SCENAR
     _pCredential = new (std::nothrow) CFaceCredential();
     if (_pCredential)
     {
-        if (FAILED(_pCredential->Initialize(cpus, this)))
+        if (!_autoLogon || FAILED(_pCredential->Initialize(cpus, _autoLogon)))
         {
             _ReleaseEnumeratedCredentials();
         }
