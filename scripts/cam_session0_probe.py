@@ -26,10 +26,8 @@
 import ctypes
 import datetime
 import os
-import sys
 
 import cv2
-import numpy as np
 
 OUT = r"C:\FaceHelloProbe"
 

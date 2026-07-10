@@ -21,7 +21,7 @@
 #define MyAppName "FaceHello"
 ; 版本号可被编译命令 /DMyAppVersion=... 覆盖(release.yml 用 git tag 注入)
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.0"
+  #define MyAppVersion "1.0.0"
 #endif
 #define MyAppPublisher "FaceHello"
 #define PyExe "{app}\python\python.exe"

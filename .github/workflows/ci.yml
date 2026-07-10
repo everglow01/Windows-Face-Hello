@@ -43,6 +43,9 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      - name: Lint Python
+        run: uvx --from ruff==0.15.21 ruff check app face_hello scripts tests winservice_main.py uninstall_cleanup.py
+
       - name: Byte-compile (syntax check)
         run: uv run python -m compileall face_hello app scripts winservice_main.py
 

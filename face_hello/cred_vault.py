@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import win32security
 
-from .platform_backend import current_user  # 身份名收敛到 platform_backend(Windows=GetUserName SAM 名)
+from .platform_backend import current_user  # noqa: F401
 
 _KEY_PREFIX = "L$FaceHello_"
 

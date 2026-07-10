@@ -149,7 +149,7 @@ class EnrollWorker(QThread):
                 self.failed.emit(tr("cancelled"))
                 return
             self.finished_ok.emit(enr.result())
-        except Exception as e:  # noqa: BLE001 原型阶段直接上抛文案
+        except Exception as e:  # noqa: BLE001
             self.failed.emit(str(e))
 
 

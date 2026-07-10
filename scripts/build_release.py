@@ -9,7 +9,7 @@ mediapipe/insightface/onnxruntime 的原生数据文件全部保留,避开冻结
 跑法(开发机,装了 uv + VS2022 桌面 C++):
     uv run python scripts/build_release.py
 可用环境变量 MSBUILD 覆盖 msbuild.exe 路径;PYVER 覆盖打包的 Python 版本(默认 3.11)。
-之后再 iscc installer\\FaceHello.iss 打成 setup.exe(待 10.5 脚本就绪)。
+之后再用 installer\\FaceHello.iss 打成 setup.exe。
 """
 from __future__ import annotations
 

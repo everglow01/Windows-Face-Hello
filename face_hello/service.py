@@ -7,8 +7,8 @@
         （仅开发态:绕过失败锁定,正式部署(安装态)禁用;锁屏走 auth_start/auth_poll）
 
 设计:密码不经过本服务——服务只回 {ok, user},由 CP 自己读 LSA Secret 提交。
-当前为控制台常驻进程(开发/自测用);正式部署再封成 Windows 服务(阶段 5-4)。
-ACL 暂用默认(创建者 + 管理员 + SYSTEM 可访问),限 SYSTEM 的加固留到阶段 5-4。
+本模块既可在开发态前台运行,也由 LocalSystem Windows 服务宿主调用。
+管道 ACL 仅允许 SYSTEM 与 Administrators。
 
 运行:  uv run python -m face_hello.service
 """
@@ -111,7 +111,7 @@ def _pipe_security():
 class _AuthRunner:
     """后台跑一次认证,主循环用 auth_poll 取实时活体提示和最终结果。
 
-    供 milestone d 的异步 CP:CP 选中磁贴 → auth_start(立即返回)→ 反复 auth_poll
+    CP 选中磁贴 → auth_start(立即返回)→ 反复 auth_poll
     刷新锁屏提示文字,直到 done。摄像头由这个后台线程独占,主管道循环照常应答。
     """
 
@@ -255,7 +255,7 @@ def _handle(req: dict, detector: FaceDetector, store: FaceStore) -> dict:
             return {"ok": True, "user": result.name, "similarity": round(result.similarity, 4)}
         _log.info("认证拒绝: %s", result.reason)
         return {"ok": False, "reason": result.reason}
-    if cmd == "auth_start":  # milestone d:异步认证,立即返回,随后用 auth_poll 取进度
+    if cmd == "auth_start":
         _runner.start(detector, store)
         return {"ok": True, "done": False}
     if cmd == "auth_poll":

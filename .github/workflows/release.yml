@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号(如 0.1.0);留空则取 tag,再留空用 0.0.0-dev'
+        description: '版本号(如 1.0.0);留空则取 tag,再留空用 0.0.0-dev'
         required: false
 
 permissions:

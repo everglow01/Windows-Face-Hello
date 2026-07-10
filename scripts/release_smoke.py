@@ -10,8 +10,8 @@ def main() -> int:
 
     import numpy as np
 
-    import app.main
-    import face_hello.win_service
+    import app.main  # noqa: F401
+    import face_hello.win_service  # noqa: F401
     from face_hello import config
     from face_hello.detector import FaceDetector
     from face_hello.liveness import FaceMeshTracker

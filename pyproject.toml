@@ -1,6 +1,6 @@
 [project]
 name = "face-hello"
-version = "0.1.0"
+version = "1.0.0"
 description = "普通 RGB 摄像头人脸解锁 Windows 原型"
 requires-python = ">=3.10,<3.12"
 dependencies = [
@@ -41,3 +41,11 @@ package = false
 # (与 CI 里给 offline_check 设 PYTHONPATH=仓库根 同理)。
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+exclude = [".agents", ".venv", "data", "models"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
