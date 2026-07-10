@@ -4,7 +4,7 @@
 #include <strsafe.h>
 #include <credentialprovider.h>
 
-// 刷脸磁贴上的字段(里程碑 a):图标 + 标题 + 提交按钮 + 状态文字。
+// 刷脸磁贴上的字段:图标 + 标题 + 提交按钮 + 状态文字。
 enum FACE_FIELD_ID
 {
     FFI_TILEIMAGE  = 0,

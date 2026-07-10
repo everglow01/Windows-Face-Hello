@@ -12,7 +12,7 @@
 #include "KerbHelpers.h"
 #include "guid.h"
 
-// 生成一张纯色磁贴位图(避免引入二进制资源,里程碑 a 够用)。
+// 生成一张纯色磁贴位图,供自定义头像不可用时回退。
 static HBITMAP _CreateSolidBitmap(int w, int h, COLORREF color)
 {
     BITMAPINFO bmi = {};
@@ -627,7 +627,6 @@ IFACEMETHODIMP CFaceCredential::GetSubmitButtonValue(DWORD dwFieldID, DWORD* pdw
     return E_INVALIDARG;
 }
 
-// 里程碑 c-1:点提交 → 调认证服务 → 读 LSA 密码 → 打包 KERB 提交解锁。
 static void _ReportFail(PCWSTR msg, PWSTR* ppwszStatus, CREDENTIAL_PROVIDER_STATUS_ICON* pIcon)
 {
     SHStrDupW(msg, ppwszStatus);
@@ -645,7 +644,7 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
     *ppwszOptionalStatusText = nullptr;
     *pcpsiOptionalStatusIcon = CPSI_NONE;
 
-    // 1. milestone d:识别由后台扫描线程完成,这里只看缓存结果。
+    // 识别由后台扫描线程完成,这里只看缓存结果。
     //    未识别成功就返回 NOT_FINISHED(LogonUI 仅在自动提交时调到这里)。
     std::wstring user;
     EnterCriticalSection(&_cs);
@@ -674,7 +673,7 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
     LeaveCriticalSection(&_cs);
     if (_autoLogon != nullptr) { _autoLogon->Clear(); }
 
-    // 2. 从 LSA Secret 取该用户登录密码(CP 在锁屏是 SYSTEM,可读)。
+    // 从 LSA Secret 取该用户登录密码(CP 在锁屏是 SYSTEM,可读)。
     std::wstring password;
     if (!CredVault::RetrievePassword(user, password))
     {
@@ -684,7 +683,7 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
         return S_OK;
     }
 
-    // 3. 拆 domain\user;本地账户用计算机名作域。
+    // 拆 domain\user;本地账户用计算机名作域。
     std::wstring domain, account;
     const size_t bs = user.find(L'\\');
     if (bs != std::wstring::npos)
@@ -701,7 +700,7 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
         account = user;
     }
 
-    // 4. 打包 KERB_INTERACTIVE_UNLOCK_LOGON 交给 LSA 完成解锁。
+    // 打包 KERB_INTERACTIVE_UNLOCK_LOGON 交给 LSA 完成解锁。
     KERB_INTERACTIVE_UNLOCK_LOGON kiul;
     HRESULT hr = KerbInteractiveUnlockLogonInit(
         domain.c_str(), account.c_str(), password.c_str(), _cpus, &kiul);

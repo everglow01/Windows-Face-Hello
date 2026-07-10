@@ -11,7 +11,7 @@ namespace PipeClient
     // 失败(服务未启动/忙/无响应)返回 false,outResponse 为原因文案。
     bool Call(const std::wstring& jsonRequest, std::wstring& outResponse);
 
-    // 便捷封装:ping。里程碑 b 暂不解析 JSON,outSummary 直接给出响应原文。
+    // ping 成功/失败都通过 outSummary 返回服务原文。
     bool Ping(std::wstring& outSummary);
 
     // 便捷封装:authenticate。返回 false 表示传输失败(服务没起等),outReason 给原因;
@@ -19,7 +19,7 @@ namespace PipeClient
     // 失败时 outReason 为拒绝原因。
     bool Authenticate(bool& outOk, std::wstring& outUser, std::wstring& outReason);
 
-    // milestone d 异步认证:启动一次后台认证(立即返回)。传输失败返回 false。
+    // 启动一次后台认证(立即返回)。传输失败返回 false。
     bool AuthStart(std::wstring& outReason);
 
     // 轮询认证进度。传输失败返回 false。否则:outDone=是否结束;

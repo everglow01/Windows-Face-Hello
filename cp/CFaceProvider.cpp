@@ -5,14 +5,17 @@
 #include "helpers.h"
 
 // 字段定义,Provider 与 Credential 共用(声明在 common.h)。
-// 注:pszLabel 类型为 LPWSTR,这里用字符串字面量初始化会触发常量性告警,
-// 工程已关闭 /permissive- (ConformanceMode=false) 允许之。
+static wchar_t g_imageLabel[] = L"Image";
+static wchar_t g_faceLabel[] = L"Face Unlock";
+static wchar_t g_submitLabel[] = L"\x5237\x8138\x89e3\x9501";
+static wchar_t g_statusLabel[] = L"Status";
+
 const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR g_fieldDescriptors[FFI_NUM_FIELDS] =
 {
-    { FFI_TILEIMAGE, CPFT_TILE_IMAGE,    L"Image" },
-    { FFI_LABEL,     CPFT_LARGE_TEXT,    L"Face Unlock" },
-    { FFI_SUBMIT,    CPFT_SUBMIT_BUTTON, L"\x5237\x8138\x89e3\x9501" }, // “刷脸解锁”
-    { FFI_STATUS,    CPFT_SMALL_TEXT,    L"Status" },
+    { FFI_TILEIMAGE, CPFT_TILE_IMAGE,    g_imageLabel },
+    { FFI_LABEL,     CPFT_LARGE_TEXT,    g_faceLabel },
+    { FFI_SUBMIT,    CPFT_SUBMIT_BUTTON, g_submitLabel },
+    { FFI_STATUS,    CPFT_SMALL_TEXT,    g_statusLabel },
 };
 
 const FIELD_STATE_PAIR g_fieldStatePairs[FFI_NUM_FIELDS] =
@@ -184,7 +187,7 @@ IFACEMETHODIMP CFaceProvider::SetUsageScenario(
     }
 }
 
-// 里程碑 a 不处理外部反序列化(将来也用不到——我们自己出磁贴)。
+// 本 Provider 只枚举自己的磁贴,不处理外部反序列化。
 IFACEMETHODIMP CFaceProvider::SetSerialization(
     const CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* /*pcpcs*/)
 {

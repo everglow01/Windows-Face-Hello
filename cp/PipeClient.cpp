@@ -96,7 +96,7 @@ bool PipeClient::Ping(std::wstring& outSummary)
 {
     std::wstring resp;
     const bool ok = Call(L"{\"cmd\": \"ping\"}", resp);
-    outSummary = resp; // 里程碑 b:成功/失败都把原文显示出来
+    outSummary = resp;
     return ok;
 }
 
