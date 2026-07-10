@@ -10,7 +10,7 @@ import sys
 from collections import deque
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, Qt
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt
 from PySide6.QtGui import QBrush, QColor, QIcon, QImage, QPainter, QPixmap, QPolygon
 from PySide6.QtWidgets import (
     QApplication,
@@ -383,14 +383,37 @@ def _themed_qss() -> str:
     )
 
 
+class PreviewLabel(QLabel):
+    def __init__(self):
+        super().__init__(tr("camera_preview"))
+        self.setMinimumSize(400, 300)
+        self.setMaximumSize(760, 570)
+        policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet(
+            "background:#24201C;color:#D8CFC5;border:1px solid #E6D8C9;border-radius:8px;"
+        )
+
+    def sizeHint(self) -> QSize:
+        return QSize(PREVIEW_W, PREVIEW_H)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(400, 300)
+
+    def heightForWidth(self, width: int) -> int:
+        return width * 3 // 4
+
+    def resizeEvent(self, event) -> None:
+        height = max(300, min(570, event.size().width() * 3 // 4))
+        if self.maximumHeight() != height:
+            self.setMaximumHeight(height)
+        super().resizeEvent(event)
+
+
 def _preview_label() -> QLabel:
-    lbl = QLabel(tr("camera_preview"))
-    lbl.setFixedSize(PREVIEW_W, PREVIEW_H)
-    lbl.setAlignment(Qt.AlignCenter)
-    lbl.setStyleSheet(
-        "background:#24201C;color:#D8CFC5;border:1px solid #E6D8C9;border-radius:8px;"
-    )
-    return lbl
+    return PreviewLabel()
 
 
 def _show_frame(label: QLabel, img: QImage) -> None:
