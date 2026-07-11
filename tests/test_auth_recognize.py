@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import datetime as dt
+
 import numpy as np
 
 from conftest import FakeDetector, FakeFace, make_store, unit_vec
@@ -65,6 +67,25 @@ def test_match_success(tmp_path):
     assert s.result.success is True
     assert s.result.name == "alice"
     assert s.result.biometric is True
+
+
+def test_renewal_due_template_still_authenticates(tmp_path):
+    probe = unit_vec(1, 0)
+    store = make_store(
+        tmp_path,
+        liveness_enabled=False,
+        antispoof_enabled=False,
+        renew_days=5,
+    )
+    store.add_profile("alice", probe)
+    store._data["profiles"][0]["enroll_date"] = dt.date.today() - dt.timedelta(days=10)
+    assert store.list_profiles()[0].renewal_due is True
+
+    session = AuthSession(FakeDetector(face=FakeFace(embedding=probe)), store)
+    session.feed(FRAME)
+
+    assert session.result.success is True
+    assert session.result.name == "alice"
 
 
 def test_below_threshold_mismatch(tmp_path):

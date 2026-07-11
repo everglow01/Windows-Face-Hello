@@ -158,20 +158,20 @@ class Profile:
     name: str
     embedding: np.ndarray
     enroll_date: _dt.date
-    renew_days: int
+    renewal_interval_days: int
     label: str = ""
 
     @property
-    def expire_date(self) -> _dt.date:
-        return self.enroll_date + _dt.timedelta(days=self.renew_days)
+    def recommended_renewal_date(self) -> _dt.date:
+        return self.enroll_date + _dt.timedelta(days=self.renewal_interval_days)
 
     @property
-    def is_expired(self) -> bool:
-        return _dt.date.today() > self.expire_date
+    def renewal_due(self) -> bool:
+        return _dt.date.today() > self.recommended_renewal_date
 
     @property
-    def days_left(self) -> int:
-        return (self.expire_date - _dt.date.today()).days
+    def days_until_renewal(self) -> int:
+        return (self.recommended_renewal_date - _dt.date.today()).days
 
 
 class FaceStore:
@@ -276,7 +276,7 @@ class FaceStore:
                 name=p["name"],
                 embedding=p["embedding"],
                 enroll_date=p["enroll_date"],
-                renew_days=p["renew_days"],
+                renewal_interval_days=p["renew_days"],
                 label=_clean_label(p.get("label", "")),
             )
             for p in self._data["profiles"]

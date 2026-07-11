@@ -362,6 +362,13 @@ def _themed_qss() -> str:
     )
 
 
+def _renewal_days_text(profile) -> str:
+    days = profile.days_until_renewal
+    if days < 0:
+        return tr("renewal_overdue_days", days=-days)
+    return tr("renewal_remaining_days", days=days)
+
+
 class EnrollTab(QWidget):
     def __init__(self, detector: FaceDetector, store: FaceStore):
         super().__init__()
@@ -392,7 +399,7 @@ class EnrollTab(QWidget):
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
             [tr("col_user"), tr("col_templates"), tr("col_enroll_date"),
-             tr("col_days_left"), tr("col_status")]
+             tr("col_days_until_renewal"), tr("col_status")]
         )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -511,11 +518,11 @@ class EnrollTab(QWidget):
         self.table.setRowCount(len(groups))
         for r, (name, ps) in enumerate(groups.items()):
             latest = max(ps, key=lambda p: p.enroll_date)   # 最近录入的那条
-            soonest = min(ps, key=lambda p: p.days_left)     # 最快到期的那条
-            expired = any(p.is_expired for p in ps)
-            status = tr("expired_mark") if expired else tr("normal_status")
+            next_due = min(ps, key=lambda p: p.days_until_renewal)
+            renewal_due = any(p.renewal_due for p in ps)
+            status = tr("renewal_due_mark") if renewal_due else tr("renewal_current")
             cells = [name, str(len(ps)), latest.enroll_date.isoformat(),
-                     str(soonest.days_left), status]
+                     _renewal_days_text(next_due), status]
             for c, text in enumerate(cells):
                 self.table.setItem(r, c, QTableWidgetItem(text))
 
@@ -550,7 +557,8 @@ class TemplateManagerDialog(QDialog):
 
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
-            [tr("col_index"), tr("col_label"), tr("col_enroll_date"), tr("col_days_left"), tr("col_status")]
+            [tr("col_index"), tr("col_label"), tr("col_enroll_date"),
+             tr("col_days_until_renewal"), tr("col_status")]
         )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -589,9 +597,9 @@ class TemplateManagerDialog(QDialog):
             return
         self.table.setRowCount(len(ps))
         for r, p in enumerate(ps):
-            status = tr("expired_mark") if p.is_expired else tr("normal_status")
+            status = tr("renewal_due_mark") if p.renewal_due else tr("renewal_current")
             cells = [f"#{r + 1}", p.label or tr("label_empty"),
-                     p.enroll_date.isoformat(), str(p.days_left), status]
+                     p.enroll_date.isoformat(), _renewal_days_text(p), status]
             for c, text in enumerate(cells):
                 self.table.setItem(r, c, QTableWidgetItem(text))
         self.table.selectRow(0)
@@ -756,9 +764,9 @@ class SettingsTab(QWidget):
         self.blink_spin = QSpinBox()
         self.blink_spin.setRange(1, 5)
         self.blink_spin.setValue(s["required_blinks"])
-        self.renew_spin = QSpinBox()
-        self.renew_spin.setRange(1, 3650)
-        self.renew_spin.setValue(s["renew_days"])
+        self.renewal_spin = QSpinBox()
+        self.renewal_spin.setRange(1, 3650)
+        self.renewal_spin.setValue(s["renew_days"])
         self.samples_spin = QSpinBox()
         self.samples_spin.setRange(3, 30)
         self.samples_spin.setValue(s["enroll_samples"])
@@ -783,7 +791,7 @@ class SettingsTab(QWidget):
         self.hotkey_clear_btn = QPushButton(tr("hotkey_clear_btn"))
         self.hotkey_clear_btn.clicked.connect(self._clear_hotkey)
         for sp in (self.match_spin, self.margin_spin, self.yaw_spin, self.blink_spin,
-                   self.renew_spin, self.samples_spin, self.max_templates_spin,
+                   self.renewal_spin, self.samples_spin, self.max_templates_spin,
                    self.lockout_fails_spin, self.lockout_secs_spin, self.camera_spin):
             sp.setFixedWidth(100)  # 窄而对齐,消除右侧大留白
         self.camera_test_btn = QPushButton(tr("camera_test_btn"))
@@ -858,7 +866,7 @@ class SettingsTab(QWidget):
         group("grp_lockout")
         pair("lockout_fails_label", self.lockout_fails_spin, "lockout_secs_label", self.lockout_secs_spin)
         group("grp_enroll")
-        pair("renew_label", self.renew_spin, "samples_label", self.samples_spin)
+        pair("renewal_interval_label", self.renewal_spin, "samples_label", self.samples_spin)
         grid.addWidget(QLabel(tr("max_templates_label")), r, 0)
         grid.addWidget(self.max_templates_spin, r, 1)
         r += 1
@@ -900,7 +908,7 @@ class SettingsTab(QWidget):
             match_margin=self.margin_spin.value(),
             yaw_threshold_deg=self.yaw_spin.value(),
             required_blinks=self.blink_spin.value(),
-            renew_days=self.renew_spin.value(),
+            renew_days=self.renewal_spin.value(),
             enroll_samples=self.samples_spin.value(),
             max_templates_per_name=self.max_templates_spin.value(),
             lockout_max_fails=self.lockout_fails_spin.value(),
@@ -1347,7 +1355,7 @@ class MainWindow(QWidget):
         self._warmup.ready.connect(self._on_ready)
         self._warmup.start()
 
-        self._warn_expired()
+        self._warn_renewal_due()
 
     def eventFilter(self, obj, event) -> bool:
         if obj is self.title_bar:
@@ -1432,14 +1440,14 @@ class MainWindow(QWidget):
         self.status_label.setText(tr("model_ready"))
         self.status_label.setStyleSheet(f"color:{SUCCESS};background:transparent;")
 
-    def _warn_expired(self) -> None:
-        expired = list(dict.fromkeys(  # 去重保序:多模板下同名会重复出现
-            p.name for p in self.store.list_profiles() if p.is_expired
+    def _warn_renewal_due(self) -> None:
+        due = list(dict.fromkeys(
+            p.name for p in self.store.list_profiles() if p.renewal_due
         ))
-        if expired:
+        if due:
             QMessageBox.warning(
-                self, tr("expired_title"),
-                tr("expired_body") + tr("list_sep").join(expired),
+                self, tr("renewal_due_title"),
+                tr("renewal_due_body") + tr("list_sep").join(due),
             )
 
     def closeEvent(self, event) -> None:
