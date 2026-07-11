@@ -45,7 +45,9 @@ def test_ping_still_works_when_installed(tmp_path, monkeypatch):
     monkeypatch.setattr("face_hello.service.config.IS_INSTALLED", True)
     store = make_store(tmp_path)
     store.add_profile("alice", unit_vec(1, 0))
+    store.add_profile("alice", unit_vec(0, 1), replace=False)
+    store.add_profile("bob", unit_vec(0, 0, 1), replace=False)
     resp = _handle({"cmd": "ping"}, FakeDetector(), store)
     assert resp["ok"] is True
     assert resp["ready"] is True
-    assert "alice" in resp["users"]
+    assert resp["users"] == ["alice", "bob"]

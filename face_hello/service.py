@@ -238,7 +238,8 @@ def _warm_antispoof() -> None:
 def _handle(req: dict, detector: FaceDetector, store: FaceStore) -> dict:
     cmd = req.get("cmd")
     if cmd == "ping":
-        return {"ok": True, "ready": True, "users": [p.name for p in store.list_profiles()]}
+        users = list(dict.fromkeys(p.name for p in store.list_profiles()))
+        return {"ok": True, "ready": True, "users": users}
     if cmd == "authenticate":  # 同步认证:开发/自测路径,绕过失败锁定计数,故仅开发态可用
         if config.IS_INSTALLED:  # 生产态只暴露 ping + auth_start/auth_poll(后者强制锁定),收掉这个无限认证口
             _log.warning("生产态拒绝 authenticate 命令(绕过锁定的开发口已禁用)")
