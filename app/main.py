@@ -1,4 +1,7 @@
-"""FaceHello 管理台入口。"""
+"""FaceHello 管理台入口。
+
+锁屏解锁由已部署的 C++ Credential Provider 与 LocalSystem 认证服务完成。
+"""
 from __future__ import annotations
 
 import sys

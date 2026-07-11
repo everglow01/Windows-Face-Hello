@@ -1,4 +1,4 @@
-"""认证服务:命名管道服务端,供 Credential Provider 请求刷脸认证。
+"""FaceHello 认证服务:通过受限命名管道为 C++ Credential Provider 提供刷脸认证。
 
 请求/响应都是单条 JSON(消息模式管道):
   请求  {"cmd": "ping"}            -> {"ok": true, "ready": true, "users": [...]}
@@ -6,7 +6,7 @@
                                    或 {"ok": false, "reason": "..."}
         （仅开发态:绕过失败锁定,正式部署(安装态)禁用;锁屏走 auth_start/auth_poll）
 
-设计:密码不经过本服务——服务只回 {ok, user},由 CP 自己读 LSA Secret 提交。
+密码不经过本服务——服务只回 {ok, user},由 CP 自己读 LSA Secret 提交。
 本模块既可在开发态前台运行,也由 LocalSystem Windows 服务宿主调用。
 管道 ACL 仅允许 SYSTEM 与 Administrators。
 
