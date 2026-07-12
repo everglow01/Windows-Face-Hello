@@ -7,15 +7,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 环境与命令(uv 管理,Python 3.11,虚拟环境 `.venv`,**非 base**)
 
 ```powershell
-uv sync                                      # 创建 .venv 并装依赖
+uv sync                                      # 创建 .venv 并装运行时依赖
+uv sync --group test                         # 额外安装 pytest 测试依赖
+uvx --from ruff==0.15.21 ruff check app face_hello scripts tests winservice_main.py uninstall_cleanup.py  # 与 CI 相同的 lint
+uv run python -m compileall face_hello app scripts winservice_main.py  # 语法/字节编译检查
 uv run python scripts/offline_check.py       # 离线自检(不需摄像头/显示器)——改完核心库先跑这个
 uv run python scripts/doctor.py              # 实机自检(摄像头取帧+模型加载+服务管道 ping);管道项需管理员终端
-uv run --group test pytest -q                # 跑安全逻辑单测(锁定/margin/反欺骗门;纯逻辑,无摄像头/模型)
+uv run --group test pytest -q                # 跑全部单测
+uv run --group test pytest tests/test_auth_recognize.py::test_match_success -q  # 跑单个测试
 uv run python -m app.main                     # 启动 PySide6 管理台 GUI
 uv run python -m scripts.liveness_tune        # 标定活体阈值(实时显示 EAR/yaw,退出给建议值)
 uv run python -m face_hello.service           # 启动命名管道认证服务(常驻)
 uv run python -m scripts.auth_client ping|authenticate   # 测试客户端,模拟 Credential Provider 调服务
 uv run python -m scripts.cred_vault_cli set|get|clear [用户名] [--show]   # LSA Secret 读写测试
+uv run python scripts/build_release.py        # 构建 CP + 独立 Python 便携包并跑 release smoke
 ```
 
 Windows 服务(LocalSystem,开机自启;**需管理员**;`<venv>` = `.venv\Scripts\python.exe`):
@@ -32,7 +37,7 @@ C++ Credential Provider(VS2022 + “使用 C++ 的桌面开发”;**用 PowerShe
 # 产物 cp\x64\Release\FaceHelloCP.dll;改 Python 不必重编 DLL,二者只靠命名管道协议耦合。
 ```
 
-- 安全逻辑有 pytest 单测(`uv run --group test pytest -q`:锁定/margin/反欺骗门/authenticate 门控,纯逻辑、无摄像头/模型,已接进 CI)。`scripts/offline_check.py` 是断言式自检(冒烟):验证 matcher、DPAPI 加密往返、FaceMesh、InsightFace 加载。改完核心库这两个先跑。
+- pytest 现覆盖匹配/锁定、认证与反欺骗门、录入、多模板持久化、诊断/i18n、摄像头互斥和 tracker 复用等纯逻辑路径；改核心库后跑 `uv run --group test pytest -q`。`scripts/offline_check.py` 是断言式冒烟自检：验证 matcher、DPAPI 加密往返、FaceMesh、InsightFace 加载；两者均应通过。
 - 首次运行自动下载模型到 `models/`:InsightFace `buffalo_l`(~191MB,已剪枝)、MediaPipe `face_landmarker.task`(~3.7MB)。`data/`(加密人脸库)和 `models/` 均 gitignored。
 - `cred_vault` 的写/删需**管理员**终端;读需 **SYSTEM**(`psexec -s` 模拟,见 `cred_vault_cli.py` 顶部注释)。服务跑起来后排错看 `data/service.log`(服务无控制台,stdout/stderr 都落这)。
 - PowerShell 里 `sc` 是 `Set-Content` 的别名,查/控服务务必用 `sc.exe`。
@@ -42,7 +47,7 @@ C++ Credential Provider(VS2022 + “使用 C++ 的桌面开发”;**用 PowerShe
 两层设计(路线 A)。阶段 1~4(Python 原型)完成;阶段 5(C++ Credential Provider 锁屏集成)主体打通——CP 磁贴 → 命名管道 → LocalSystem 服务 → InsightFace 识别 → 读 LSA → 打包 KERB 真解锁,本地账户与微软账户(MSA-backed 本地登录)均已在 VM 与真机端到端验证(里程碑 d)。5-4 加固(管道 ACL 限 SYSTEM+Administrators、失败兜底/锁定、日志、`authenticate` 开发态门控)与 C 档分发(Inno 安装器、`/MT` 静态 CRT 编 DLL、GitHub Release 放模型)均已落地;锁屏新增「3 次刷脸重试后退回密码」(CP 侧),且刷脸只由「→」或用户配置热键启动,避免锁屏封面预选磁贴时提前开摄像头。识别侧加同名多模板录入(「补录角度」追加,解锁取最高相似度,`max_templates_per_name` FIFO 封顶)。代码签名脚手架已落地(自签名管道:`build_release` 按 `FACEHELLO_SIGN_PFX` 签 DLL、Inno `/DSign` 签 setup.exe,见 `SIGNING.md`);剩真实证书(Azure/EV)与可选增强(GPU/进一步瘦身)。
 
 **`face_hello/` 核心库**(无 Qt 依赖,可被 GUI、服务、脚本共用):
-- `config.py` — 集中路径/模型/阈值。`DEFAULTS` 是阈值默认值,被 store 里持久化的 `settings` 覆盖;也定义 CP 可读的语言/热键镜像文件路径。
+- `config.py` — 集中路径/模型/阈值。`.installed` 标记或 `FACEHELLO_HOME` 决定安装态：安装态可写数据固定在 `C:\ProgramData\FaceHello\data`，开发态使用仓库内 `data/`；SCM 会缓存环境变量，所以安装器用标记文件保证刚安装的服务无需重启即可识别安装态。`DEFAULTS` 是阈值默认值，被 store 里持久化的 `settings` 覆盖；不要在业务代码硬编码阈值。也定义 CP 可读的语言/热键镜像文件路径。
 - `platform_backend.py` — 阶段 6 跨平台抽象层:把 OS 耦合三件事(静态加密 `protect`/`unprotect`、摄像头后端 `open_capture`、用户名 `current_user`)收敛到一处。Windows 行为与重构前逐字节一致(DPAPI 机器范围 / DSHOW / GetUserName);非 Windows 给默认实现,静态加密留 `NotImplementedError`。store/camera/cred_vault 都委托它。
 - `camera.py` — OpenCV 采集,后端经 `platform_backend.open_capture`(Windows=`CAP_DSHOW`)。
 - `detector.py` — InsightFace `FaceAnalysis`(CPU),输出 512 维 `normed_embedding`。惰性加载 + `load()` 显式预热。
