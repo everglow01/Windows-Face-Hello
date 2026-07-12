@@ -25,10 +25,12 @@ _MARKER = ROOT / ".installed"
 IS_INSTALLED = bool(_HOME) or _MARKER.exists()
 
 if IS_INSTALLED:  # 安装态
+    from .version import display_version
+
     INSTALL_ROOT = Path(_HOME) if _HOME else ROOT
     DATA_DIR = _PROGRAMDATA / "data"
     MODELS_DIR = INSTALL_ROOT / "models"
-    CP_DLL = INSTALL_ROOT / "FaceHelloCP.dll"  # 安装布局:DLL 在安装根(DESIGN 10.2)
+    CP_DLL = INSTALL_ROOT / f"FaceHelloCP-{display_version()}.dll"
 else:             # 开发态
     INSTALL_ROOT = ROOT
     DATA_DIR = ROOT / "data"

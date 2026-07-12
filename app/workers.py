@@ -15,12 +15,59 @@ from face_hello.enroll import Enroller
 from face_hello.i18n import tr
 from face_hello.matcher import best_match
 from face_hello.store import FaceStore
+from face_hello.updater import (
+    DownloadProgress,
+    UpdateCandidate,
+    UpdateError,
+    check_latest,
+    download_installer,
+)
+from face_hello.version import get_current_version
 
 _FRAME_INTERVAL = 0.03  # 限制循环频率,约 30fps 上限
 
 # 引导预览框颜色(BGR):合格=绿、偏小/偏暗=黄
 _BOX_OK = (0, 200, 0)
 _BOX_BAD = (0, 180, 255)
+
+
+class UpdateCheckWorker(QThread):
+    checked = Signal(object)
+    failed = Signal(str, str)
+
+    def run(self) -> None:
+        try:
+            self.checked.emit(check_latest(get_current_version()))
+        except UpdateError as exc:
+            self.failed.emit(exc.code.value, exc.detail)
+
+
+class UpdateDownloadWorker(QThread):
+    progress = Signal(int, int)
+    downloaded = Signal(str)
+    failed = Signal(str, str)
+
+    def __init__(self, candidate: UpdateCandidate):
+        super().__init__()
+        self.candidate = candidate
+        self._stop = False
+
+    def stop(self) -> None:
+        self._stop = True
+
+    def _progress(self, value: DownloadProgress) -> None:
+        self.progress.emit(value.downloaded, value.total)
+
+    def run(self) -> None:
+        try:
+            result = download_installer(
+                self.candidate,
+                progress=self._progress,
+                should_cancel=lambda: self._stop,
+            )
+            self.downloaded.emit(str(result.path))
+        except UpdateError as exc:
+            self.failed.emit(exc.code.value, exc.detail)
 
 
 def bgr_to_qimage(frame) -> QImage:

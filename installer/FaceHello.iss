@@ -26,6 +26,7 @@
 #define MyAppPublisher "FaceHello"
 #define PyExe "{app}\python\python.exe"
 #define PyWExe "{app}\python\pythonw.exe"
+#define CpDllName "FaceHelloCP-" + MyAppVersion + ".dll"
 
 [Setup]
 ; AppId 唯一标识本程序(升级 / 卸载靠它),一经发布不要改
@@ -49,6 +50,9 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ; 注册服务 / CP / 写 Program Files 都需要管理员
 PrivilegesRequired=admin
+CloseApplications=yes
+RestartApplications=no
+RestartIfNeededByRun=no
 
 ; 代码签名(可选):加 /DSign 编译并用 /Sfacehello=... 提供签名命令,即对 setup.exe
 ; 与卸载器签名。不传 /DSign 时是无签名构建(CI 默认),行为完全不变。命令见 SIGNING.md:
@@ -72,7 +76,7 @@ Name: "{commonappdata}\FaceHello"; Permissions: admins-full system-full
 Name: "{commonappdata}\FaceHello\data"; Permissions: admins-full system-full
 
 [Files]
-; 便携包整目录原样拷入安装根(含 python\、models\、face_hello\、app\、DLL、引导脚本)
+; 便携包整目录原样拷入安装根(含 python\、models\、face_hello\、app\、版本化 CP DLL)
 Source: "{#BuildDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
@@ -87,12 +91,12 @@ Name: "{autodesktop}\FaceHello 管理台"; Filename: "{#PyWExe}"; Parameters: "-
 Filename: "{cmd}"; Parameters: "/c type nul > ""{app}\.installed"""; Flags: runhidden waituntilterminated; StatusMsg: "写入安装标记..."
 ; 2) 运行数据只允许 SYSTEM 与管理员读写;同时修复升级前已继承 Users:Write 的目录与文件
 Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\FaceHello"" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F /T /C"; Flags: runhidden waituntilterminated; StatusMsg: "保护 FaceHello 数据目录..."
-; 3) 注册并设开机自启服务(便携 python 即服务 ImagePath,登录 / 锁屏 / 睡眠唤醒常驻)
-Filename: "{#PyExe}"; Parameters: "winservice_main.py install --startup auto"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "注册 FaceHello 服务..."
-; 4) 立即启动服务(.installed 已在 → 安装态 → 数据落 ProgramData,无需重启)
-Filename: "{#PyExe}"; Parameters: "winservice_main.py start"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "启动 FaceHello 服务..."
-; 5) 注册锁屏 Credential Provider DLL
-Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\FaceHelloCP.dll"""; Flags: runhidden waituntilterminated; StatusMsg: "注册锁屏凭据提供程序..."
+; 3) 注册或更新开机自启服务；升级前已在 PrepareToInstall 停止
+Filename: "{#PyExe}"; Parameters: "winservice_main.py {code:ServiceInstallCommand} --startup auto"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "配置 FaceHello 服务..."
+; 4) 首次安装或升级前服务原本在运行时启动；手动停用状态保持不变
+Filename: "{#PyExe}"; Parameters: "winservice_main.py start"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "启动 FaceHello 服务..."; Check: ShouldStartService
+; 5) 注册版本化锁屏 Credential Provider DLL；旧 DLL 若仍被 LogonUI 映射则保留
+Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\{#CpDllName}"""; Flags: runhidden waituntilterminated; StatusMsg: "注册锁屏凭据提供程序..."
 ; 6) 收尾页可选:立即打开管理台(管理台会按需请求 UAC 提权)
 Filename: "{#PyWExe}"; Parameters: "-m app.main"; WorkingDir: "{app}"; Description: "立即打开 FaceHello 管理台"; Flags: postinstall nowait skipifsilent runasoriginaluser
 
@@ -101,7 +105,7 @@ Filename: "{#PyWExe}"; Parameters: "-m app.main"; WorkingDir: "{app}"; Descripti
 ; 每条独立 RunOnceId;失败不阻断卸载。
 Filename: "{#PyExe}"; Parameters: "winservice_main.py stop"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "StopSvc"
 Filename: "{#PyExe}"; Parameters: "winservice_main.py remove"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveSvc"
-Filename: "{sys}\regsvr32.exe"; Parameters: "/s /u ""{app}\FaceHelloCP.dll"""; Flags: runhidden waituntilterminated; RunOnceId: "UnregCP"
+Filename: "{sys}\regsvr32.exe"; Parameters: "/s /u ""{app}\{#CpDllName}"""; Flags: runhidden waituntilterminated; RunOnceId: "UnregCP"
 ; 完全干净:清 LSA 登录密码 + 删人脸库(此刻 .installed 还在,清理脚本走安装态路径)
 Filename: "{#PyExe}"; Parameters: "uninstall_cleanup.py"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "WipeSecrets"
 
@@ -110,3 +114,67 @@ Filename: "{#PyExe}"; Parameters: "uninstall_cleanup.py"; WorkingDir: "{app}"; F
 ; Inno 默认不删 → 显式清掉,做到完全干净卸载。
 Type: filesandordirs; Name: "{commonappdata}\FaceHello"
 Type: filesandordirs; Name: "{app}"
+
+[Code]
+var
+  ServiceExisted: Boolean;
+  ServiceWasRunning: Boolean;
+
+function ServiceExists(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := Exec(ExpandConstant('{sys}\sc.exe'), 'query FaceHello', '', SW_HIDE,
+    ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+function ServiceRunning(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  { sc query 的状态码数字 4 不受系统语言影响 }
+  Result := Exec(ExpandConstant('{cmd}'), '/c ""' + ExpandConstant('{sys}\sc.exe') +
+    '" query FaceHello | findstr /R /C:"STATE *: *4" >nul"', '', SW_HIDE,
+    ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+function StopServiceAndWait(): Boolean;
+var
+  ResultCode: Integer;
+  I: Integer;
+begin
+  Result := True;
+  if not ServiceExists() then
+    exit;
+  Exec(ExpandConstant('{sys}\sc.exe'), 'stop FaceHello', '', SW_HIDE,
+    ewWaitUntilTerminated, ResultCode);
+  for I := 1 to 120 do begin
+    if not ServiceRunning() then
+      exit;
+    Sleep(1000);
+  end;
+  Result := False;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  ServiceExisted := ServiceExists();
+  ServiceWasRunning := ServiceExisted and ServiceRunning();
+  if ServiceExisted and not StopServiceAndWait() then
+    Result := '无法停止 FaceHello 服务。安装尚未修改文件，请稍后重试。'
+  else
+    Result := '';
+end;
+
+function ServiceInstallCommand(Param: String): String;
+begin
+  if ServiceExisted then
+    Result := 'update'
+  else
+    Result := 'install';
+end;
+
+function ShouldStartService(): Boolean;
+begin
+  Result := (not ServiceExisted) or ServiceWasRunning;
+end;
