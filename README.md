@@ -86,7 +86,7 @@ For detailed developer docs and a contribution guide, see [contribute.md](./cont
 
 ## 🖥️ Using the Console
 
-Launch the installed app with admin privileges to enter the console desktop app:
+Launch the installed app with admin privileges to enter the console desktop app. The frameless window can be resized from any edge or corner, and camera previews keep their aspect ratio as the window changes:
 
 ![GUI](README_image/GUI.png)
 
@@ -95,7 +95,7 @@ Launch the installed app with admin privileges to enter the console desktop app:
    > Not sure of your account name? Press Win+L to see the name shown on the lock screen — it's usually the same.
    > 💡 **Tip: enroll more than one template per user.** After the first "Start enrolling", change the **angle, lighting, makeup / hairstyle, glasses on/off**, etc., and click **"Add angle"** to append another template (one username can hold several; unlock automatically takes the most similar one). Enrolling **2+ templates** noticeably improves the unlock success rate across scenarios and reduces occasional misses. The per-user cap is adjustable on the Settings tab.
 2. **Test unlock** — follow the random liveness prompt (blink N times / turn left / turn right), then recognition runs and shows the similarity and result.
-3. **Settings** — pick the camera (with a **Test** button that previews the selected one, handy on multi-camera machines); tune the match threshold, turn angle, blink count, and face validity period; toggle **liveness** and **passive anti-spoofing**.
+3. **Settings** — pick the camera (with a **Test** button that previews the selected one, handy on multi-camera machines); tune the match threshold, turn angle, blink count, and recommended re-enrollment interval; toggle **liveness** and **passive anti-spoofing**. Reaching that date only shows a reminder—the template still works for authentication.
 4. **Service & credentials** — set the sign-in password used for lock-screen unlock (written to an LSA Secret) and install / start / stop the auth service in one click. **Requires Administrator**, otherwise the relevant buttons are disabled.
 
 *Some stutter on the first enrollment and test is normal.*
@@ -164,7 +164,7 @@ You can drop your own avatar image into the default path `C:\ProgramData\FaceHel
 
 ## 🔐 Security & Privacy
 
-- The gallery stores **feature vectors, not photos**, encrypted on disk with Windows DPAPI in the local `data/`, uploaded to no cloud server, keeping your face data private and secure.
+- The gallery stores **feature vectors, not photos**, encrypted on disk with Windows DPAPI in the local `data/` and never uploaded. Its versioned format is validated when loaded and written via atomic replacement to reduce corruption if a save is interrupted.
 - The sign-in password is kept in an **LSA Secret**, read by the Credential Provider itself in the SYSTEM context — it **never travels over IPC**.
 - **Passive anti-spoofing** (Silent-Face MiniFASNet) samples several frames during recognition to reject screen / photo / video replays — on by default, with a toggle in Settings. It meaningfully raises the bar, but being single-RGB it is **not** foolproof.
 - Even with active liveness + passive anti-spoofing, monocular RGB still can't match IR / depth. **Don't use this on a machine others might physically access.** Any data leak or loss is the result of the user's own operation and of not understanding this project's risks, and you bear the consequences yourself.
