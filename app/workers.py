@@ -7,6 +7,7 @@ import cv2
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
+from face_hello.authenticode import verify_authenticode
 from face_hello.auth import AuthResult, AuthSession
 from face_hello.camera import Camera
 from face_hello.diagnostics import DiagnosticReport, run_diagnostics
@@ -19,10 +20,11 @@ from face_hello.updater import (
     DownloadProgress,
     UpdateCandidate,
     UpdateError,
+    UpdateErrorCode,
     check_latest,
     download_installer,
 )
-from face_hello.version import get_current_version
+from face_hello.version import get_build_info, get_current_version
 
 _FRAME_INTERVAL = 0.03  # 限制循环频率,约 30fps 上限
 
@@ -65,9 +67,17 @@ class UpdateDownloadWorker(QThread):
                 progress=self._progress,
                 should_cancel=lambda: self._stop,
             )
+            build_info = get_build_info()
+            if build_info.signer_sha256:
+                signature = verify_authenticode(result.path, build_info.signer_sha256)
+                if not signature.trusted:
+                    result.path.unlink(missing_ok=True)
+                    raise UpdateError(UpdateErrorCode.VERIFY, "installer signature mismatch")
             self.downloaded.emit(str(result.path))
         except UpdateError as exc:
             self.failed.emit(exc.code.value, exc.detail)
+        except Exception as exc:  # noqa: BLE001 平台签名 API / PowerShell 错误需反馈 UI
+            self.failed.emit(UpdateErrorCode.VERIFY.value, str(exc))
 
 
 def bgr_to_qimage(frame) -> QImage:

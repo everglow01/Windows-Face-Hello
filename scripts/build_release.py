@@ -37,7 +37,7 @@ _VERSION_RE = re.compile(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z")
 
 
 def _release_version() -> str:
-    version = os.environ.get("FACEHELLO_VERSION", "")
+    version = os.environ.get("FACEHELLO_VERSION", "1.0.0")
     if _VERSION_RE.fullmatch(version) is None:
         raise SystemExit("FACEHELLO_VERSION 必须是规范的 MAJOR.MINOR.PATCH")
     return version
@@ -52,7 +52,16 @@ def _build_info(version: str) -> dict[str, str]:
     built_at = os.environ.get("FACEHELLO_BUILT_AT") or datetime.now(timezone.utc).isoformat(
         timespec="seconds"
     ).replace("+00:00", "Z")
-    return {"version": version, "tag": f"v{version}", "commit": commit, "built_at": built_at}
+    signers = [value.lower() for value in os.environ.get("FACEHELLO_SIGNER_SHA256", "").split(",") if value]
+    if any(re.fullmatch(r"[0-9a-f]{64}", signer) is None for signer in signers):
+        raise SystemExit("FACEHELLO_SIGNER_SHA256 必须是逗号分隔的 64 位十六进制 SHA-256")
+    return {
+        "version": version,
+        "tag": f"v{version}",
+        "commit": commit,
+        "built_at": built_at,
+        "signer_sha256": signers,
+    }
 
 
 def run(*args: str, **kw) -> subprocess.CompletedProcess:
@@ -191,6 +200,8 @@ def step_copy_payload(version: str) -> None:
     # 根级引导脚本:服务宿主 + 卸载清理(都靠仓库根在 sys.path 才 import 得到 face_hello)
     for name in ("winservice_main.py", "uninstall_cleanup.py"):
         shutil.copy(ROOT / name, BUILD / name)
+    for name in ("install_maintenance.py",):
+        shutil.copy(ROOT / "scripts" / name, BUILD / name)
 
     models = ROOT / "models"
     if not models.exists():

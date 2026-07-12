@@ -107,8 +107,16 @@ jobs:
           }
           $pfx = Join-Path $env:RUNNER_TEMP "facehello-signing.pfx"
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGN_PFX_BASE64))
+          $cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2($pfx, $env:SIGN_PFX_PASSWORD)
+          $sha = [Security.Cryptography.SHA256]::Create()
+          try {
+            $signerSha256 = ([BitConverter]::ToString($sha.ComputeHash($cert.RawData))).Replace('-', '').ToLowerInvariant()
+          } finally {
+            $sha.Dispose()
+          }
           "FACEHELLO_SIGN_PFX=$pfx" >> $env:GITHUB_ENV
           "FACEHELLO_SIGN_PASS=$env:SIGN_PFX_PASSWORD" >> $env:GITHUB_ENV
+          "FACEHELLO_SIGNER_SHA256=$signerSha256" >> $env:GITHUB_ENV
 
       - name: Build portable package (DLL + python + deps + models + payload)
         env:
@@ -178,3 +186,25 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
           draft: true
+
+      - name: Re-download and verify draft assets
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $verify = Join-Path $env:RUNNER_TEMP "facehello-release-verify"
+          New-Item -ItemType Directory -Path $verify -Force | Out-Null
+          gh release download "${{ github.ref_name }}" --dir $verify --pattern "FaceHello-Setup-${{ steps.ver.outputs.version }}.exe" --pattern "FaceHello-Setup-${{ steps.ver.outputs.version }}.exe.sha256" --pattern "facehello-update.json"
+          $installer = Join-Path $verify "FaceHello-Setup-${{ steps.ver.outputs.version }}.exe"
+          $manifest = Get-Content (Join-Path $verify "facehello-update.json") -Raw | ConvertFrom-Json
+          $checksumLine = (Get-Content (Join-Path $verify "FaceHello-Setup-${{ steps.ver.outputs.version }}.exe.sha256") -Raw).Trim()
+          $actualHash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $actualSize = (Get-Item $installer).Length
+          if ($manifest.version -ne "${{ steps.ver.outputs.version }}") { throw "draft manifest version mismatch" }
+          if ($manifest.installer.name -ne (Split-Path $installer -Leaf)) { throw "draft installer name mismatch" }
+          if ([int64]$manifest.installer.size -ne $actualSize) { throw "draft installer size mismatch" }
+          if ($manifest.installer.sha256 -ne $actualHash) { throw "draft manifest hash mismatch" }
+          if (-not $checksumLine.StartsWith("$actualHash  ")) { throw "draft checksum mismatch" }
+          signtool verify /pa /v $installer
+          if ($LASTEXITCODE -ne 0) { throw "downloaded installer signature verification failed" }

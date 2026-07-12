@@ -26,7 +26,6 @@
 #define MyAppPublisher "FaceHello"
 #define PyExe "{app}\python\python.exe"
 #define PyWExe "{app}\python\pythonw.exe"
-#define CpDllName "FaceHelloCP-" + MyAppVersion + ".dll"
 
 [Setup]
 ; AppId 唯一标识本程序(升级 / 卸载靠它),一经发布不要改
@@ -85,19 +84,8 @@ Name: "{group}\卸载 FaceHello"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\FaceHello 管理台"; Filename: "{#PyWExe}"; Parameters: "-m app.main"; WorkingDir: "{app}"; IconFilename: "{app}\app\assets\facehello.ico"; Tasks: desktopicon
 
 [Run]
-; 顺序很重要,逐条 waituntilterminated:
-; 1) 先落 .installed 标记 —— config.py 见到它即走安装态(数据落 ProgramData)。必须在
-;    启动服务之前写好,否则服务以开发态启动、数据落 Program Files 与 GUI 不一致。
-Filename: "{cmd}"; Parameters: "/c type nul > ""{app}\.installed"""; Flags: runhidden waituntilterminated; StatusMsg: "写入安装标记..."
-; 2) 运行数据只允许 SYSTEM 与管理员读写;同时修复升级前已继承 Users:Write 的目录与文件
-Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\FaceHello"" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F /T /C"; Flags: runhidden waituntilterminated; StatusMsg: "保护 FaceHello 数据目录..."
-; 3) 注册或更新开机自启服务；升级前已在 PrepareToInstall 停止
-Filename: "{#PyExe}"; Parameters: "winservice_main.py {code:ServiceInstallCommand} --startup auto"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "配置 FaceHello 服务..."
-; 4) 首次安装或升级前服务原本在运行时启动；手动停用状态保持不变
-Filename: "{#PyExe}"; Parameters: "winservice_main.py start"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "启动 FaceHello 服务..."; Check: ShouldStartService
-; 5) 注册版本化锁屏 Credential Provider DLL；旧 DLL 若仍被 LogonUI 映射则保留
-Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\{#CpDllName}"""; Flags: runhidden waituntilterminated; StatusMsg: "注册锁屏凭据提供程序..."
-; 6) 收尾页可选:立即打开管理台(管理台会按需请求 UAC 提权)
+; configure 统一检查 ACL、服务、版本化 CP 与命名管道 readiness；非零退出码由 [Code] 阻止完成安装。
+; 收尾页可选:立即打开管理台(管理台会按需请求 UAC 提权)
 Filename: "{#PyWExe}"; Parameters: "-m app.main"; WorkingDir: "{app}"; Description: "立即打开 FaceHello 管理台"; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallRun]
@@ -105,7 +93,7 @@ Filename: "{#PyWExe}"; Parameters: "-m app.main"; WorkingDir: "{app}"; Descripti
 ; 每条独立 RunOnceId;失败不阻断卸载。
 Filename: "{#PyExe}"; Parameters: "winservice_main.py stop"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "StopSvc"
 Filename: "{#PyExe}"; Parameters: "winservice_main.py remove"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveSvc"
-Filename: "{sys}\regsvr32.exe"; Parameters: "/s /u ""{app}\{#CpDllName}"""; Flags: runhidden waituntilterminated; RunOnceId: "UnregCP"
+Filename: "{#PyExe}"; Parameters: "install_maintenance.py unregister-cp"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "UnregCP"
 ; 完全干净:清 LSA 登录密码 + 删人脸库(此刻 .installed 还在,清理脚本走安装态路径)
 Filename: "{#PyExe}"; Parameters: "uninstall_cleanup.py"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "WipeSecrets"
 
@@ -116,9 +104,112 @@ Type: filesandordirs; Name: "{commonappdata}\FaceHello"
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+function OpenProcess(dwDesiredAccess: Cardinal; bInheritHandle: Boolean;
+  dwProcessId: Cardinal): THandle;
+  external 'OpenProcess@kernel32.dll stdcall';
+function WaitForSingleObject(hHandle: THandle; dwMilliseconds: Cardinal): Cardinal;
+  external 'WaitForSingleObject@kernel32.dll stdcall';
+function CloseHandle(hObject: THandle): Boolean;
+  external 'CloseHandle@kernel32.dll stdcall';
+function OpenSCManager(lpMachineName: String; lpDatabaseName: String;
+  dwDesiredAccess: Cardinal): THandle;
+  external 'OpenSCManagerW@advapi32.dll stdcall';
+function OpenService(hSCManager: THandle; lpServiceName: String;
+  dwDesiredAccess: Cardinal): THandle;
+  external 'OpenServiceW@advapi32.dll stdcall';
+
+type
+  TServiceStatus = record
+    dwServiceType: Cardinal;
+    dwCurrentState: Cardinal;
+    dwControlsAccepted: Cardinal;
+    dwWin32ExitCode: Cardinal;
+    dwServiceSpecificExitCode: Cardinal;
+    dwCheckPoint: Cardinal;
+    dwWaitHint: Cardinal;
+  end;
+
+function QueryServiceStatus(hService: THandle; var lpServiceStatus: TServiceStatus): Boolean;
+  external 'QueryServiceStatus@advapi32.dll stdcall';
+
 var
   ServiceExisted: Boolean;
   ServiceWasRunning: Boolean;
+  ParentPID: Cardinal;
+  BackupDir: String;
+
+function BackupExistingInstall(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := True;
+  if not DirExists(ExpandConstant('{app}')) then
+    exit;
+  BackupDir := ExpandConstant('{commonappdata}\FaceHello\update-backup');
+  DelTree(BackupDir, True, True, True);
+  ForceDirectories(BackupDir);
+  Result := Exec(ExpandConstant('{cmd}'), '/c robocopy "' + ExpandConstant('{app}') +
+    '" "' + BackupDir + '" /MIR /R:1 /W:1 /NFL /NDL /NJH /NJS /NP', '', SW_HIDE,
+    ewWaitUntilTerminated, ResultCode) and (ResultCode <= 7);
+end;
+
+function RestoreExistingInstall(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := False;
+  if (BackupDir = '') or (not DirExists(BackupDir)) then
+    exit;
+  Result := Exec(ExpandConstant('{cmd}'), '/c robocopy "' + BackupDir + '" "' +
+    ExpandConstant('{app}') + '" /MIR /R:1 /W:1 /NFL /NDL /NJH /NJS /NP', '', SW_HIDE,
+    ewWaitUntilTerminated, ResultCode) and (ResultCode <= 7);
+end;
+
+function InitializeSetup(): Boolean;
+var
+  I: Integer;
+  Param: String;
+begin
+  ParentPID := 0;
+  for I := 1 to ParamCount do begin
+    Param := ParamStr(I);
+    if Pos('/FaceHelloParentPID=', Param) = 1 then
+      ParentPID := StrToIntDef(Copy(Param, Length('/FaceHelloParentPID=') + 1, MaxInt), 0);
+  end;
+  Result := True;
+end;
+
+function ProcessExists(PID: Cardinal): Boolean;
+var
+  Handle: THandle;
+begin
+  if PID = 0 then begin
+    Result := False;
+    exit;
+  end;
+  Handle := OpenProcess($00100000, False, PID); { SYNCHRONIZE }
+  if Handle = 0 then
+    Result := False
+  else begin
+    Result := WaitForSingleObject(Handle, 0) = $00000102; { WAIT_TIMEOUT }
+    CloseHandle(Handle);
+  end;
+end;
+
+function WaitForParent(): Boolean;
+var
+  I: Integer;
+begin
+  Result := True;
+  if ParentPID = 0 then
+    exit;
+  for I := 1 to 240 do begin
+    if not ProcessExists(ParentPID) then
+      exit;
+    Sleep(500);
+  end;
+  Result := False;
+end;
 
 function ServiceExists(): Boolean;
 var
@@ -128,14 +219,33 @@ begin
     ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
 end;
 
-function ServiceRunning(): Boolean;
+function ServiceState(): Cardinal;
 var
-  ResultCode: Integer;
+  Manager: THandle;
+  Service: THandle;
+  Status: TServiceStatus;
 begin
-  { sc query 的状态码数字 4 不受系统语言影响 }
-  Result := Exec(ExpandConstant('{cmd}'), '/c ""' + ExpandConstant('{sys}\sc.exe') +
-    '" query FaceHello | findstr /R /C:"STATE *: *4" >nul"', '', SW_HIDE,
-    ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+  Result := 0;
+  Manager := OpenSCManager('', '', $0001); { SC_MANAGER_CONNECT }
+  if Manager = 0 then
+    exit;
+  Service := OpenService(Manager, 'FaceHello', $0004); { SERVICE_QUERY_STATUS }
+  if Service <> 0 then begin
+    if QueryServiceStatus(Service, Status) then
+      Result := Status.dwCurrentState;
+    CloseHandle(Service);
+  end;
+  CloseHandle(Manager);
+end;
+
+function ServiceRunning(): Boolean;
+begin
+  Result := ServiceState() = 4; { SERVICE_RUNNING }
+end;
+
+function ServiceStopped(): Boolean;
+begin
+  Result := ServiceState() = 1; { SERVICE_STOPPED }
 end;
 
 function StopServiceAndWait(): Boolean;
@@ -149,7 +259,7 @@ begin
   Exec(ExpandConstant('{sys}\sc.exe'), 'stop FaceHello', '', SW_HIDE,
     ewWaitUntilTerminated, ResultCode);
   for I := 1 to 120 do begin
-    if not ServiceRunning() then
+    if ServiceStopped() or (not ServiceExists()) then
       exit;
     Sleep(1000);
   end;
@@ -157,11 +267,23 @@ begin
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
 begin
+  if not WaitForParent() then begin
+    Result := 'FaceHello 管理台仍在运行。请关闭后重试。';
+    exit;
+  end;
   ServiceExisted := ServiceExists();
   ServiceWasRunning := ServiceExisted and ServiceRunning();
   if ServiceExisted and not StopServiceAndWait() then
     Result := '无法停止 FaceHello 服务。安装尚未修改文件，请稍后重试。'
+  else if ServiceExisted and not BackupExistingInstall() then begin
+    if ServiceWasRunning then
+      Exec(ExpandConstant('{sys}\sc.exe'), 'start FaceHello', '', SW_HIDE,
+        ewWaitUntilTerminated, ResultCode);
+    Result := '无法备份当前 FaceHello，安装尚未修改文件。请检查磁盘空间后重试。';
+  end
   else
     Result := '';
 end;
@@ -177,4 +299,45 @@ end;
 function ShouldStartService(): Boolean;
 begin
   Result := (not ServiceExisted) or ServiceWasRunning;
+end;
+
+function RunPostInstall(): Boolean;
+var
+  ResultCode: Integer;
+  StartValue: String;
+begin
+  if ShouldStartService() then
+    StartValue := 'yes'
+  else
+    StartValue := 'no';
+  Result := Exec(ExpandConstant('{#PyExe}'),
+    'install_maintenance.py configure --service-command ' + ServiceInstallCommand('') +
+    ' --start ' + StartValue, ExpandConstant('{app}'), SW_HIDE,
+    ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  RestoreStart: String;
+begin
+  if (CurStep = ssPostInstall) and (not RunPostInstall()) then begin
+    if ServiceExisted then begin
+      Exec(ExpandConstant('{sys}\sc.exe'), 'stop FaceHello', '', SW_HIDE,
+        ewWaitUntilTerminated, ResultCode);
+      if RestoreExistingInstall() then begin
+        if ServiceWasRunning then
+          RestoreStart := 'yes'
+        else
+          RestoreStart := 'no';
+        Exec(ExpandConstant('{#PyExe}'),
+          'install_maintenance.py configure --service-command update --start ' +
+          RestoreStart, ExpandConstant('{app}'), SW_HIDE,
+          ewWaitUntilTerminated, ResultCode);
+      end;
+    end;
+    RaiseException('FaceHello 服务或锁屏组件配置失败。已尝试恢复上一版本；人脸数据和系统密码/PIN 未被删除，请查看安装日志。');
+  end;
+  if (CurStep = ssDone) and (BackupDir <> '') then
+    DelTree(BackupDir, True, True, True);
 end;

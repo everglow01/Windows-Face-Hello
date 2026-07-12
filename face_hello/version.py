@@ -27,6 +27,7 @@ class BuildInfo:
     tag: str
     commit: str
     built_at: str
+    signer_sha256: tuple[str, ...] = ()
 
     @property
     def is_release(self) -> bool:
@@ -55,11 +56,17 @@ def _load_build_info(path: Path = _BUILD_INFO_PATH) -> BuildInfo:
             tag=data["tag"],
             commit=data["commit"],
             built_at=data["built_at"],
+            signer_sha256=tuple(data.get("signer_sha256", [])),
         )
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
         raise RuntimeError(f"invalid build info: {path}") from exc
-    if not all(isinstance(value, str) for value in info.__dict__.values()):
+    if not all(
+        isinstance(value, str)
+        for value in (info.version, info.tag, info.commit, info.built_at)
+    ):
         raise RuntimeError(f"invalid build info: {path}")
+    if any(re.fullmatch(r"[0-9a-f]{64}", digest) is None for digest in info.signer_sha256):
+        raise RuntimeError("invalid signer sha256 in build info")
     if not info.is_release:
         raise RuntimeError(f"invalid release version in build info: {info.version!r}")
     return info

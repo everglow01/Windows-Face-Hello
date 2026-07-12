@@ -51,6 +51,24 @@ def test_load_release_build_info(tmp_path):
     )
 
 
+def test_load_build_info_rejects_bad_signer_pin(tmp_path):
+    path = tmp_path / "build.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": "1.2.3",
+                "tag": "v1.2.3",
+                "commit": "a" * 40,
+                "built_at": "2026-07-12T00:00:00Z",
+                "signer_sha256": ["not-a-digest"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError):
+        _load_build_info(path)
+
+
 def test_load_build_info_rejects_tag_mismatch(tmp_path):
     path = tmp_path / "build.json"
     path.write_text(

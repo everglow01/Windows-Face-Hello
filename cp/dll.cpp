@@ -84,6 +84,8 @@ static HRESULT _SetSz(HKEY hk, PCWSTR name, PCWSTR val)
     return HRESULT_FROM_WIN32(r);
 }
 
+STDAPI DllUnregisterServer();
+
 STDAPI DllRegisterServer()
 {
     wchar_t szClsid[64];
@@ -103,25 +105,51 @@ STDAPI DllRegisterServer()
     LONG r = RegCreateKeyExW(HKEY_CLASSES_ROOT, key, 0, nullptr, 0,
                              KEY_WRITE, nullptr, &hk, nullptr);
     if (r != ERROR_SUCCESS) { return HRESULT_FROM_WIN32(r); }
-    _SetSz(hk, nullptr, kProviderName);
+    HRESULT hr = _SetSz(hk, nullptr, kProviderName);
+    if (FAILED(hr))
+    {
+        RegCloseKey(hk);
+        DllUnregisterServer();
+        return hr;
+    }
     HKEY hkInproc = nullptr;
     r = RegCreateKeyExW(hk, L"InprocServer32", 0, nullptr, 0, KEY_WRITE, nullptr, &hkInproc, nullptr);
-    if (r == ERROR_SUCCESS)
+    if (r != ERROR_SUCCESS)
     {
-        _SetSz(hkInproc, nullptr, szModule);
-        _SetSz(hkInproc, L"ThreadingModel", L"Apartment");
-        RegCloseKey(hkInproc);
+        RegCloseKey(hk);
+        DllUnregisterServer();
+        return HRESULT_FROM_WIN32(r);
     }
+    hr = _SetSz(hkInproc, nullptr, szModule);
+    if (SUCCEEDED(hr))
+    {
+        hr = _SetSz(hkInproc, L"ThreadingModel", L"Apartment");
+    }
+    RegCloseKey(hkInproc);
     RegCloseKey(hk);
+    if (FAILED(hr))
+    {
+        DllUnregisterServer();
+        return hr;
+    }
 
     // HKLM\...\Authentication\Credential Providers\{clsid}
     StringCchPrintfW(key, ARRAYSIZE(key),
         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Credential Providers\\%s",
         szClsid);
     r = RegCreateKeyExW(HKEY_LOCAL_MACHINE, key, 0, nullptr, 0, KEY_WRITE, nullptr, &hk, nullptr);
-    if (r != ERROR_SUCCESS) { return HRESULT_FROM_WIN32(r); }
-    _SetSz(hk, nullptr, kProviderName);
+    if (r != ERROR_SUCCESS)
+    {
+        DllUnregisterServer();
+        return HRESULT_FROM_WIN32(r);
+    }
+    hr = _SetSz(hk, nullptr, kProviderName);
     RegCloseKey(hk);
+    if (FAILED(hr))
+    {
+        DllUnregisterServer();
+        return hr;
+    }
 
     return S_OK;
 }

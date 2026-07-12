@@ -1,7 +1,10 @@
 """Windows Authenticode 信任校验。发布者 pin 在生产证书落地后启用。"""
 from __future__ import annotations
 
+import base64
 import ctypes
+import hashlib
+import subprocess
 import sys
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -12,6 +15,7 @@ from pathlib import Path
 class AuthenticodeResult:
     trusted: bool
     status: int
+    certificate_sha256: str = ""
 
 
 class _GUID(ctypes.Structure):
@@ -64,8 +68,31 @@ _WTD_STATEACTION_CLOSE = 2
 _WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT = 0x80
 
 
-def verify_authenticode(path: Path) -> AuthenticodeResult:
-    """用 WinVerifyTrust 校验签名、信任链、吊销状态和时间戳。"""
+def _certificate_sha256(path: Path) -> str:
+    script = (
+        "$s = Get-AuthenticodeSignature -LiteralPath $args[0]; "
+        "if ($null -eq $s.SignerCertificate) { exit 2 }; "
+        "[Convert]::ToBase64String($s.SignerCertificate.RawData)"
+    )
+    process = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, str(path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if process.returncode != 0:
+        return ""
+    try:
+        certificate = base64.b64decode(process.stdout.strip(), validate=True)
+    except ValueError:
+        return ""
+    return hashlib.sha256(certificate).hexdigest()
+
+
+def verify_authenticode(
+    path: Path, expected_certificate_sha256: tuple[str, ...] = ()
+) -> AuthenticodeResult:
+    """用 WinVerifyTrust 校验信任链，并可固定允许的签名叶证书 SHA-256。"""
     if sys.platform != "win32":
         raise NotImplementedError("Authenticode verification requires Windows")
     path = path.resolve()
@@ -89,4 +116,9 @@ def verify_authenticode(path: Path) -> AuthenticodeResult:
     status = int(verify(None, ctypes.byref(_WINTRUST_ACTION_GENERIC_VERIFY_V2), ctypes.byref(trust_data)))
     trust_data.dwStateAction = _WTD_STATEACTION_CLOSE
     verify(None, ctypes.byref(_WINTRUST_ACTION_GENERIC_VERIFY_V2), ctypes.byref(trust_data))
-    return AuthenticodeResult(status == 0, status)
+    certificate_sha256 = _certificate_sha256(path) if status == 0 else ""
+    expected = {digest.lower() for digest in expected_certificate_sha256}
+    trusted = status == 0 and bool(certificate_sha256) and bool(expected)
+    if expected:
+        trusted = trusted and certificate_sha256 in expected
+    return AuthenticodeResult(trusted, status, certificate_sha256)
