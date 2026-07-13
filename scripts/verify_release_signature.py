@@ -17,6 +17,9 @@ _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
 def _signature_info(path: Path) -> dict[str, object]:
     script = (
         "$ErrorActionPreference = 'Stop'; "
+        "$securityModule = Join-Path $PSHOME "
+        "'Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1'; "
+        "Import-Module -Name $securityModule -Force; "
         "$s = Get-AuthenticodeSignature -LiteralPath $env:FACEHELLO_VERIFY_PATH; "
         "if ($null -eq $s.SignerCertificate) { $cert = '' } else { "
         "$cert = [Convert]::ToBase64String($s.SignerCertificate.RawData) }; "
