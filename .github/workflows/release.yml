@@ -136,7 +136,7 @@ jobs:
           [IO.File]::WriteAllBytes($certPath, $publicBytes)
           foreach ($storeName in "Root", "TrustedPublisher") {
             Write-Host "Adding public certificate to CurrentUser/$storeName"
-            & certutil.exe -user -addstore -f $storeName $certPath
+            & certutil.exe -user -addstore -f -silent $storeName $certPath
             if ($LASTEXITCODE -ne 0) {
               throw "certutil failed to add the certificate to CurrentUser/$storeName"
             }
