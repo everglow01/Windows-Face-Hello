@@ -248,6 +248,22 @@ begin
   Result := ServiceState() = 1; { SERVICE_STOPPED }
 end;
 
+function WaitForServiceRunning(): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to 120 do begin
+    if ServiceStopped() then
+      exit;
+    if ServiceRunning() and (I >= 30) then begin
+      Result := True; { old service survived normal model warm-up window }
+      exit;
+    end;
+    Sleep(1000);
+  end;
+end;
+
 function StopServiceAndWait(): Boolean;
 var
   ResultCode: Integer;
@@ -306,6 +322,9 @@ var
   ResultCode: Integer;
   StartValue: String;
 begin
+  Result := SaveStringToFile(ExpandConstant('{app}\.installed'), '', False);
+  if not Result then
+    exit;
   if ShouldStartService() then
     StartValue := 'yes'
   else
@@ -319,18 +338,33 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
+  Restored: Boolean;
+  RecoveryReady: Boolean;
 begin
   if (CurStep = ssPostInstall) and (not RunPostInstall()) then begin
+    Restored := False;
+    RecoveryReady := False;
     if ServiceExisted then begin
-      Exec(ExpandConstant('{sys}\sc.exe'), 'stop FaceHello', '', SW_HIDE,
-        ewWaitUntilTerminated, ResultCode);
-      if RestoreExistingInstall() then begin
-        if ServiceWasRunning then
-          Exec(ExpandConstant('{sys}\sc.exe'), 'start FaceHello', '', SW_HIDE,
-            ewWaitUntilTerminated, ResultCode);
+      if StopServiceAndWait() then begin
+        Restored := RestoreExistingInstall();
+        if Restored then begin
+          if ServiceWasRunning then begin
+            RecoveryReady := Exec(ExpandConstant('{sys}\sc.exe'), 'start FaceHello', '', SW_HIDE,
+              ewWaitUntilTerminated, ResultCode) and WaitForServiceRunning();
+          end
+          else
+            RecoveryReady := True;
+        end;
       end;
     end;
-    RaiseException('FaceHello 服务或锁屏组件配置失败。已尝试恢复上一版本；人脸数据和系统密码/PIN 未被删除，请查看安装日志。');
+    if Restored and RecoveryReady then begin
+      DelTree(BackupDir, True, True, True);
+      RaiseException('FaceHello 服务或锁屏组件配置失败，已恢复并验证上一版本；人脸数据和系统密码/PIN 未被删除。');
+    end
+    else if ServiceExisted then
+      RaiseException('FaceHello 服务或锁屏组件配置失败，未能确认上一版本已恢复。恢复备份保留在 ' + BackupDir + '；人脸数据和系统密码/PIN 未被删除。')
+    else
+      RaiseException('FaceHello 服务或锁屏组件配置失败。安装未完成；人脸数据和系统密码/PIN 未被删除。');
   end;
   if (CurStep = ssDone) and (BackupDir <> '') then
     DelTree(BackupDir, True, True, True);
