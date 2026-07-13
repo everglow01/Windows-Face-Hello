@@ -125,7 +125,16 @@ def step_sign_dll() -> None:
         args += ["/p", os.environ["FACEHELLO_SIGN_PASS"]]
     args += ["/tr", ts, "/td", "SHA256", str(dll)]
     run(*args)
-    run(signtool, "verify", "/pa", str(dll))
+    signer_sha256 = os.environ.get("FACEHELLO_SIGNER_SHA256", "")
+    if not signer_sha256:
+        raise SystemExit("签名构建必须设置 FACEHELLO_SIGNER_SHA256")
+    run(
+        sys.executable,
+        str(ROOT / "scripts" / "verify_release_signature.py"),
+        str(dll),
+        "--signer-sha256",
+        signer_sha256,
+    )
 
 
 def _export_signing_certificate() -> Path | None:

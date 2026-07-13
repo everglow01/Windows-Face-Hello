@@ -134,13 +134,6 @@ jobs:
           $certPath = Join-Path $env:RUNNER_TEMP "FaceHello-Signer.cer"
           $publicBytes = $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert)
           [IO.File]::WriteAllBytes($certPath, $publicBytes)
-          foreach ($storeName in "TrustedPeople", "TrustedPublisher") {
-            Write-Host "Adding public certificate to CurrentUser/$storeName"
-            & certutil.exe -user -addstore -f $storeName $certPath
-            if ($LASTEXITCODE -ne 0) {
-              throw "certutil failed to add the certificate to CurrentUser/$storeName"
-            }
-          }
           Write-Host "Signing certificate preparation complete"
 
       - name: Build portable package (DLL + python + deps + models + payload)
@@ -171,10 +164,8 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
-          signtool verify /pa /v "$env:LOCALAPPDATA\FaceHello-build\FaceHello\FaceHelloCP-${{ steps.ver.outputs.version }}.dll"
-          if ($LASTEXITCODE -ne 0) { throw "CP signature verification failed" }
-          signtool verify /pa /v "installer\Output\FaceHello-Setup-${{ steps.ver.outputs.version }}.exe"
-          if ($LASTEXITCODE -ne 0) { throw "installer signature verification failed" }
+          uv run python scripts/verify_release_signature.py "$env:LOCALAPPDATA\FaceHello-build\FaceHello\FaceHelloCP-${{ steps.ver.outputs.version }}.dll" --signer-sha256 "$env:FACEHELLO_SIGNER_SHA256"
+          uv run python scripts/verify_release_signature.py "installer\Output\FaceHello-Setup-${{ steps.ver.outputs.version }}.exe" --signer-sha256 "$env:FACEHELLO_SIGNER_SHA256"
 
       - name: Generate updater metadata
         shell: pwsh
@@ -231,5 +222,4 @@ jobs:
           if ([int64]$manifest.installer.size -ne $actualSize) { throw "draft installer size mismatch" }
           if ($manifest.installer.sha256 -ne $actualHash) { throw "draft manifest hash mismatch" }
           if (-not $checksumLine.StartsWith("$actualHash  ")) { throw "draft checksum mismatch" }
-          signtool verify /pa /v $installer
-          if ($LASTEXITCODE -ne 0) { throw "downloaded installer signature verification failed" }
+          uv run python scripts/verify_release_signature.py $installer --signer-sha256 "$env:FACEHELLO_SIGNER_SHA256"
