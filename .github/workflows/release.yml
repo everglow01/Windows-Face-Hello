@@ -134,9 +134,9 @@ jobs:
           $certPath = Join-Path $env:RUNNER_TEMP "FaceHello-Signer.cer"
           $publicBytes = $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert)
           [IO.File]::WriteAllBytes($certPath, $publicBytes)
-          foreach ($storeName in "Root", "TrustedPublisher") {
+          foreach ($storeName in "TrustedPeople", "TrustedPublisher") {
             Write-Host "Adding public certificate to CurrentUser/$storeName"
-            & certutil.exe -user -addstore -f -silent $storeName $certPath
+            & certutil.exe -user -addstore -f $storeName $certPath
             if ($LASTEXITCODE -ne 0) {
               throw "certutil failed to add the certificate to CurrentUser/$storeName"
             }
