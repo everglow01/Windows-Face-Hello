@@ -93,7 +93,7 @@ Filename: "{#PyWExe}"; Parameters: "-m app.main"; WorkingDir: "{app}"; Descripti
 ; 每条独立 RunOnceId;失败不阻断卸载。
 Filename: "{#PyExe}"; Parameters: "winservice_main.py stop"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "StopSvc"
 Filename: "{#PyExe}"; Parameters: "winservice_main.py remove"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveSvc"
-Filename: "{#PyExe}"; Parameters: "install_maintenance.py unregister-cp"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "UnregCP"
+Filename: "{#PyExe}"; Parameters: "install_maintenance.py uninstall"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "UnregCP"
 ; 完全干净:清 LSA 登录密码 + 删人脸库(此刻 .installed 还在,清理脚本走安装态路径)
 Filename: "{#PyExe}"; Parameters: "uninstall_cleanup.py"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "WipeSecrets"
 
@@ -319,7 +319,6 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
-  RestoreStart: String;
 begin
   if (CurStep = ssPostInstall) and (not RunPostInstall()) then begin
     if ServiceExisted then begin
@@ -327,13 +326,8 @@ begin
         ewWaitUntilTerminated, ResultCode);
       if RestoreExistingInstall() then begin
         if ServiceWasRunning then
-          RestoreStart := 'yes'
-        else
-          RestoreStart := 'no';
-        Exec(ExpandConstant('{#PyExe}'),
-          'install_maintenance.py configure --service-command update --start ' +
-          RestoreStart, ExpandConstant('{app}'), SW_HIDE,
-          ewWaitUntilTerminated, ResultCode);
+          Exec(ExpandConstant('{sys}\sc.exe'), 'start FaceHello', '', SW_HIDE,
+            ewWaitUntilTerminated, ResultCode);
       end;
     end;
     RaiseException('FaceHello 服务或锁屏组件配置失败。已尝试恢复上一版本；人脸数据和系统密码/PIN 未被删除，请查看安装日志。');

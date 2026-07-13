@@ -2,16 +2,107 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import subprocess
 import sys
 import winreg
 from pathlib import Path
 
 from face_hello import config, probes
-from face_hello.version import display_version
+from face_hello.version import display_version, get_build_info
 
 _CLSID = "{E071A7CE-5D7F-4063-9A10-AE39AEC64EE8}"
 _CP_KEY = rf"CLSID\{_CLSID}\InprocServer32"
+_CERT_NAME = "FaceHello-Signer.cer"
+
+
+def _certificate_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _store_contains(store: str, digest: str) -> bool:
+    script = (
+        "$want = $args[0]; $store = $args[1]; "
+        "$sha = [Security.Cryptography.SHA256]::Create(); "
+        "try { foreach ($cert in Get-ChildItem $store) { "
+        "$got = ([BitConverter]::ToString($sha.ComputeHash($cert.RawData))).Replace('-', '').ToLowerInvariant(); "
+        "if ($got -eq $want) { exit 0 } } } finally { $sha.Dispose() }; exit 1"
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, digest, store]
+    )
+    return result.returncode == 0
+
+
+def _trust_marker(store: str, digest: str) -> Path:
+    safe_store = store.rsplit("\\", 1)[-1].lower()
+    return config.DATA_DIR / f"signer-{safe_store}-{digest}.installed"
+
+
+def _import_signer(root: Path, allowed_signers: tuple[str, ...]) -> list[Path]:
+    added_markers = []
+    certificate = root / _CERT_NAME
+    if not certificate.is_file():
+        if allowed_signers:
+            raise FileNotFoundError(certificate)
+        return added_markers
+    digest = _certificate_sha256(certificate)
+    if digest not in allowed_signers:
+        raise RuntimeError("signing certificate does not match build info")
+    for store, certutil_store in (
+        (r"Cert:\LocalMachine\Root", "Root"),
+        (r"Cert:\LocalMachine\TrustedPublisher", "TrustedPublisher"),
+    ):
+        if not _store_contains(store, digest):
+            _run("certutil.exe", "-addstore", "-f", certutil_store, str(certificate))
+            config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+            marker = _trust_marker(store, digest)
+            marker.touch()
+            added_markers.append(marker)
+    return added_markers
+
+
+
+def _remove_certificate_by_digest(store: str, digest: str) -> None:
+    script = (
+        "$want = $args[0]; $store = $args[1]; "
+        "$sha = [Security.Cryptography.SHA256]::Create(); "
+        "try { foreach ($cert in Get-ChildItem $store) { "
+        "$got = ([BitConverter]::ToString($sha.ComputeHash($cert.RawData))).Replace('-', '').ToLowerInvariant(); "
+        "if ($got -eq $want) { Remove-Item -LiteralPath $cert.PSPath -Force } } } "
+        "finally { $sha.Dispose() }"
+    )
+    _run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, digest, store)
+
+
+def _rollback_signer(markers: list[Path]) -> None:
+    for marker in markers:
+        parts = marker.stem.split("-")
+        if len(parts) < 3:
+            continue
+        store_name = parts[1]
+        digest = parts[2]
+        store = (
+            r"Cert:\LocalMachine\TrustedPublisher"
+            if store_name == "trustedpublisher"
+            else r"Cert:\LocalMachine\Root"
+        )
+        _remove_certificate_by_digest(store, digest)
+        marker.unlink(missing_ok=True)
+
+
+def _remove_signer(root: Path, allowed_signers: tuple[str, ...]) -> None:
+    certificate = root / _CERT_NAME
+    if not certificate.is_file():
+        return
+    digest = _certificate_sha256(certificate)
+    if digest not in allowed_signers:
+        raise RuntimeError("refusing to remove unexpected signing certificate")
+    for store in (r"Cert:\LocalMachine\Root", r"Cert:\LocalMachine\TrustedPublisher"):
+        marker = _trust_marker(store, digest)
+        if marker.exists():
+            _remove_certificate_by_digest(store, digest)
+            marker.unlink()
 
 
 def _run(*args: str) -> None:
@@ -73,6 +164,7 @@ def _wait_ready(version: str, timeout: float = 120) -> None:
 def configure(service_command: str, should_start: bool) -> None:
     root = config.INSTALL_ROOT.resolve()
     version = display_version()
+    build_info = get_build_info()
     new_cp = root / f"FaceHelloCP-{version}.dll"
     if not new_cp.is_file():
         raise FileNotFoundError(new_cp)
@@ -80,7 +172,9 @@ def configure(service_command: str, should_start: bool) -> None:
     if old_cp is not None and not _owned_cp(old_cp, root):
         raise RuntimeError(f"registered CP is outside install root: {old_cp}")
 
+    added_trust: list[Path] = []
     try:
+        added_trust = _import_signer(root, build_info.signer_sha256)
         (root / ".installed").touch()
         _run(
             "icacls.exe",
@@ -110,6 +204,7 @@ def configure(service_command: str, should_start: bool) -> None:
                 _register(old_cp)
             if should_start:
                 _run(sys.executable, str(root / "winservice_main.py"), "start")
+            _rollback_signer(added_trust)
         except Exception:  # noqa: BLE001 保留原始升级异常
             pass
         raise
@@ -125,18 +220,25 @@ def unregister_current() -> None:
     _unregister(current)
 
 
+def uninstall() -> None:
+    root = config.INSTALL_ROOT.resolve()
+    build_info = get_build_info()
+    unregister_current()
+    _remove_signer(root, build_info.signer_sha256)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
     configure_parser = sub.add_parser("configure")
     configure_parser.add_argument("--service-command", choices=("install", "update"), required=True)
     configure_parser.add_argument("--start", choices=("yes", "no"), required=True)
-    sub.add_parser("unregister-cp")
+    sub.add_parser("uninstall")
     args = parser.parse_args()
     if args.command == "configure":
         configure(args.service_command, args.start == "yes")
     else:
-        unregister_current()
+        uninstall()
     return 0
 
 

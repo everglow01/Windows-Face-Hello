@@ -1,6 +1,39 @@
 from __future__ import annotations
 
+import hashlib
+
 from scripts import install_maintenance
+
+
+def test_import_signer_requires_pinned_certificate(tmp_path, monkeypatch):
+    root = tmp_path / "FaceHello"
+    root.mkdir()
+    certificate = root / "FaceHello-Signer.cer"
+    certificate.write_bytes(b"public certificate")
+    digest = hashlib.sha256(certificate.read_bytes()).hexdigest()
+    monkeypatch.setattr(install_maintenance.config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(install_maintenance, "_store_contains", lambda store, value: False)
+    calls = []
+    monkeypatch.setattr(install_maintenance, "_run", lambda *args: calls.append(args))
+
+    markers = install_maintenance._import_signer(root, (digest,))
+
+    assert [call[3] for call in calls] == ["Root", "TrustedPublisher"]
+    assert len(markers) == 2
+    assert len(list((tmp_path / "data").glob("signer-*.installed"))) == 2
+
+
+def test_import_signer_rejects_unpinned_certificate(tmp_path):
+    root = tmp_path / "FaceHello"
+    root.mkdir()
+    (root / "FaceHello-Signer.cer").write_bytes(b"wrong certificate")
+
+    try:
+        install_maintenance._import_signer(root, ("0" * 64,))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("certificate pin mismatch should fail")
 
 
 def test_owned_cp_accepts_only_versioned_dll_below_root(tmp_path):

@@ -117,6 +117,10 @@ jobs:
           "FACEHELLO_SIGN_PFX=$pfx" >> $env:GITHUB_ENV
           "FACEHELLO_SIGN_PASS=$env:SIGN_PFX_PASSWORD" >> $env:GITHUB_ENV
           "FACEHELLO_SIGNER_SHA256=$signerSha256" >> $env:GITHUB_ENV
+          $certPath = Join-Path $env:RUNNER_TEMP "FaceHello-Signer.cer"
+          [IO.File]::WriteAllBytes($certPath, $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+          Import-Certificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
+          Import-Certificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\TrustedPublisher | Out-Null
 
       - name: Build portable package (DLL + python + deps + models + payload)
         env:
