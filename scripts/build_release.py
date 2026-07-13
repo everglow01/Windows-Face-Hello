@@ -13,11 +13,14 @@ mediapipe/insightface/onnxruntime 的原生数据文件全部保留,避开冻结
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +33,35 @@ _BUILD_ROOT = Path(os.environ.get(
 BUILD = _BUILD_ROOT / "FaceHello"
 PYDIR = BUILD / "python"
 PYVER = os.environ.get("PYVER", "3.11")
+_VERSION_RE = re.compile(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z")
+
+
+def _release_version() -> str:
+    version = os.environ.get("FACEHELLO_VERSION", "1.0.0")
+    if _VERSION_RE.fullmatch(version) is None:
+        raise SystemExit("FACEHELLO_VERSION 必须是规范的 MAJOR.MINOR.PATCH")
+    return version
+
+
+def _build_info(version: str) -> dict:
+    commit = os.environ.get("FACEHELLO_COMMIT")
+    if not commit:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True
+        ).stdout.strip()
+    built_at = os.environ.get("FACEHELLO_BUILT_AT") or datetime.now(timezone.utc).isoformat(
+        timespec="seconds"
+    ).replace("+00:00", "Z")
+    signers = [value.lower() for value in os.environ.get("FACEHELLO_SIGNER_SHA256", "").split(",") if value]
+    if any(re.fullmatch(r"[0-9a-f]{64}", signer) is None for signer in signers):
+        raise SystemExit("FACEHELLO_SIGNER_SHA256 必须是逗号分隔的 64 位十六进制 SHA-256")
+    return {
+        "version": version,
+        "tag": f"v{version}",
+        "commit": commit,
+        "built_at": built_at,
+        "signer_sha256": signers,
+    }
 
 
 def run(*args: str, **kw) -> subprocess.CompletedProcess:
@@ -96,6 +128,35 @@ def step_sign_dll() -> None:
     run(signtool, "verify", "/pa", str(dll))
 
 
+def _export_signing_certificate() -> Path | None:
+    """从签名 PFX 导出公钥 DER；只把公钥证书放进便携包。"""
+    pfx = os.environ.get("FACEHELLO_SIGN_PFX")
+    if not pfx:
+        return None
+    output = BUILD.parent / "FaceHello-Signer.cer"
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "$pfx = $args[0]; $pass = $args[1]; $out = $args[2]; "
+        "$cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2($pfx, $pass); "
+        "[IO.File]::WriteAllBytes($out, $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))",
+        pfx,
+        os.environ.get("FACEHELLO_SIGN_PASS", ""),
+        str(output),
+    ]
+    run(*command)
+    return output
+
+
+def step_prepare_build() -> None:
+    """清空上一轮便携包，避免残留旧源码或版本化 CP DLL。"""
+    if BUILD.exists():
+        shutil.rmtree(BUILD)
+    BUILD.mkdir(parents=True)
+
+
 def step_portable_python() -> None:
     """取 uv 管理的 standalone CPython(非项目 .venv!),整目录拷到 build\\FaceHello\\python\\。
 
@@ -148,14 +209,23 @@ def step_slim() -> None:
                     f.unlink()
 
 
-def step_copy_payload() -> None:
+def step_copy_payload(version: str, signer_certificate: Path | None = None) -> None:
     """拷源码 + 模型 + CP DLL + pywin32 运行 DLL 到 build\\FaceHello\\。"""
-    ignore = shutil.ignore_patterns("__pycache__")
+    ignore = shutil.ignore_patterns("__pycache__", "_build_info.json")
     for name in ("face_hello", "app"):
         shutil.copytree(ROOT / name, BUILD / name, dirs_exist_ok=True, ignore=ignore)
+    build_info_path = BUILD / "face_hello" / "_build_info.json"
+    build_info_path.write_text(
+        json.dumps(_build_info(version), ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    if signer_certificate is not None:
+        shutil.copy(signer_certificate, BUILD / "FaceHello-Signer.cer")
     # 根级引导脚本:服务宿主 + 卸载清理(都靠仓库根在 sys.path 才 import 得到 face_hello)
     for name in ("winservice_main.py", "uninstall_cleanup.py"):
         shutil.copy(ROOT / name, BUILD / name)
+    for name in ("install_maintenance.py",):
+        shutil.copy(ROOT / "scripts" / name, BUILD / name)
 
     models = ROOT / "models"
     if not models.exists():
@@ -169,7 +239,7 @@ def step_copy_payload() -> None:
     dll = ROOT / "cp" / "x64" / "Release" / "FaceHelloCP.dll"
     if not dll.exists():
         raise SystemExit("CP DLL 不存在,step_build_dll 可能失败")
-    shutil.copy(dll, BUILD / "FaceHelloCP.dll")
+    shutil.copy(dll, BUILD / f"FaceHelloCP-{version}.dll")
 
     # pywin32 的 pythoncomXX.dll / pywintypesXX.dll 拷到 python 根,
     # 便携布局下服务(SYSTEM)才能 import win32service/servicemanager(DESIGN 10.10 风险点)
@@ -188,13 +258,16 @@ def step_smoke() -> None:
 
 
 def main() -> None:
-    print(f"=== build_release -> {BUILD} ===", flush=True)
+    version = _release_version()
+    print(f"=== build_release {version} -> {BUILD} ===", flush=True)
+    step_prepare_build()
     step_build_dll()
     step_sign_dll()
+    signer_certificate = _export_signing_certificate()
     step_portable_python()
     step_install_deps()
     step_slim()
-    step_copy_payload()
+    step_copy_payload(version, signer_certificate)
     step_smoke()
     print(f"\n[OK] 便携包就绪:{BUILD}", flush=True)
     print(r"验证启动:  build\FaceHello\python\pythonw.exe -m app.main", flush=True)

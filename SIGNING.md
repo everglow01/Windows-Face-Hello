@@ -15,7 +15,9 @@
 powershell -ExecutionPolicy Bypass -File scripts\sign\setup_selfsigned.ps1 -Trust
 ```
 
-`out\` 与 `*.pfx` 已被 `.gitignore` 忽略,**私钥绝不入库**。在另一台测试 VM 上要让签名校验通过,把 `FaceHello-Dev.cer` 拷过去装进信任库:
+`out\` 与 `*.pfx` 已被 `.gitignore` 忽略,**私钥绝不入库**。Release 构建会从 PFX 另行导出仅含公钥的 `FaceHello-Signer.cer` 放进安装包；安装器在用户批准 UAC 后，会先核对该 CER 的 SHA-256 是否等于 build info 中固定的 signer pin，再导入 `LocalMachine\Root` 与 `LocalMachine\TrustedPublisher`。卸载只移除 FaceHello 本次实际新增的证书库项；如果证书在安装前已经受信任，则保留不动。
+
+在另一台测试 VM 上也可提前手动信任同一张证书:
 
 ```powershell
 Import-Certificate -FilePath FaceHello-Dev.cer -CertStoreLocation Cert:\LocalMachine\Root

@@ -15,9 +15,13 @@ def main() -> int:
     from face_hello import config
     from face_hello.detector import FaceDetector
     from face_hello.liveness import FaceMeshTracker
+    from face_hello.version import get_build_info, get_current_version
 
     if config.ROOT.resolve() != root:
         raise RuntimeError(f"portable root mismatch: {config.ROOT}")
+    build_info = get_build_info()
+    if not build_info.is_release or get_current_version() is None:
+        raise RuntimeError("portable build has no valid release version")
     FaceDetector().load()
     tracker = FaceMeshTracker()
     try:

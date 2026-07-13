@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -38,6 +39,8 @@ from app.workers import (
     DiagnosticsWorker,
     EnrollWorker,
     SimilarityMonitorWorker,
+    UpdateCheckWorker,
+    UpdateDownloadWorker,
     WarmupWorker,
 )
 from app.dialogs import HotkeyDialog, TemplateLabelDialog, hotkey_text as _hotkey_text
@@ -58,8 +61,11 @@ from face_hello.auth import AuthResult
 from face_hello.detector import FaceDetector
 from face_hello.i18n import save_hotkey_mirror, save_lang_mirror, set_lang, tr
 from face_hello.store import FaceStore
+from face_hello.updater import UpdateCandidate, UpdateErrorCode
+from face_hello.version import display_version, get_build_info
 
 WARN = "#9A5B16"
+_CONSOLE_MUTEX = None
 
 # 大号活体提示文字的基础样式(颜色随结果在内联追加)
 _INSTR_BASE = "font-size:18px;font-weight:600;padding:8px;color:#2F261F;"
@@ -759,6 +765,10 @@ class SettingsTab(QWidget):
     def __init__(self, store: FaceStore):
         super().__init__()
         self.store = store
+        self._update_check: UpdateCheckWorker | None = None
+        self._update_download: UpdateDownloadWorker | None = None
+        self._update_candidate: UpdateCandidate | None = None
+        self._update_installer: Path | None = None
 
         s = self.store.get_settings()
         self.match_spin = self._dspin(0.0, 1.0, 0.01, s["match_threshold"])
@@ -884,6 +894,31 @@ class SettingsTab(QWidget):
         panel_layout.addLayout(grid)
         panel_layout.addWidget(save_btn, alignment=Qt.AlignLeft)
 
+        update_title = QLabel(tr("update_title"))
+        update_title.setObjectName("h2")
+        self.update_status = QLabel(tr("update_current", version=display_version()))
+        self.update_status.setWordWrap(True)
+        self.update_progress = QProgressBar()
+        self.update_progress.setRange(0, 100)
+        self.update_progress.hide()
+        self.update_btn = QPushButton(tr("update_check"))
+        self.update_btn.clicked.connect(self._check_update)
+        self.update_download_btn = QPushButton(tr("update_download"))
+        self.update_download_btn.clicked.connect(self._download_update)
+        self.update_download_btn.hide()
+        self.update_install_btn = QPushButton(tr("update_install"))
+        self.update_install_btn.clicked.connect(self._install_update)
+        self.update_install_btn.hide()
+        update_actions = QHBoxLayout()
+        update_actions.addWidget(self.update_btn)
+        update_actions.addWidget(self.update_download_btn)
+        update_actions.addWidget(self.update_install_btn)
+        update_actions.addStretch(1)
+        panel_layout.addWidget(update_title)
+        panel_layout.addWidget(self.update_status)
+        panel_layout.addWidget(self.update_progress)
+        panel_layout.addLayout(update_actions)
+
         center = QHBoxLayout()
         center.addStretch(1)
         center.addWidget(panel, 8)
@@ -902,6 +937,92 @@ class SettingsTab(QWidget):
         sp.setSingleStep(step)
         sp.setValue(val)
         return sp
+
+    def _check_update(self) -> None:
+        if self._update_check is not None and self._update_check.isRunning():
+            return
+        self.update_btn.setEnabled(False)
+        self.update_download_btn.hide()
+        self.update_install_btn.hide()
+        self._update_candidate = None
+        self._update_installer = None
+        self.update_status.setText(tr("update_checking"))
+        self._update_check = UpdateCheckWorker()
+        self._update_check.checked.connect(self._on_update_checked)
+        self._update_check.failed.connect(self._on_update_failed)
+        self._update_check.finished.connect(lambda: self.update_btn.setEnabled(True))
+        self._update_check.start()
+
+    def _on_update_checked(self, candidate: UpdateCandidate) -> None:
+        self._update_candidate = candidate
+        if candidate.is_newer is False:
+            self.update_status.setText(tr("update_current", version=display_version()))
+            return
+        if candidate.is_newer is None:
+            self.update_status.setText(tr("update_dev_available", version=str(candidate.version)))
+        else:
+            self.update_status.setText(tr("update_available", version=str(candidate.version)))
+        self.update_download_btn.show()
+
+    def _on_update_failed(self, code: str, _detail: str) -> None:
+        key = "update_cancelled" if code == UpdateErrorCode.CANCELLED.value else "update_failed"
+        self.update_status.setText(tr(key))
+
+    def _download_update(self) -> None:
+        if self._update_candidate is None:
+            return
+        self.update_btn.setEnabled(False)
+        self.update_download_btn.setEnabled(False)
+        self.update_progress.setValue(0)
+        self.update_progress.show()
+        self.update_status.setText(tr("update_downloading"))
+        self._update_download = UpdateDownloadWorker(self._update_candidate)
+        self._update_download.progress.connect(self._on_update_progress)
+        self._update_download.downloaded.connect(self._on_update_downloaded)
+        self._update_download.failed.connect(self._on_update_failed)
+        self._update_download.finished.connect(self._on_update_download_finished)
+        self._update_download.start()
+
+    def _on_update_progress(self, downloaded: int, total: int) -> None:
+        self.update_progress.setValue(int(downloaded * 100 / total) if total else 0)
+
+    def _on_update_downloaded(self, path: str) -> None:
+        self.update_progress.setValue(100)
+        self._update_installer = Path(path)
+        if config.IS_INSTALLED and get_build_info().signer_sha256:
+            self.update_status.setText(tr("update_ready"))
+            self.update_install_btn.show()
+        else:
+            self.update_status.setText(tr("update_downloaded", path=path))
+        self.update_download_btn.setText(tr("update_download_again"))
+
+    def _install_update(self) -> None:
+        if self._update_installer is None or not self._update_installer.is_file():
+            return
+        import ctypes
+
+        shell_execute = ctypes.windll.shell32.ShellExecuteW
+        shell_execute.restype = ctypes.c_void_p
+        result = shell_execute(
+            None,
+            "runas",
+            str(self._update_installer),
+            f"/FaceHelloParentPID={os.getpid()}",
+            str(self._update_installer.parent),
+            1,
+        )
+        if int(result or 0) <= 32:
+            QMessageBox.warning(
+                self, tr("update_title"), tr("update_launch_failed", msg=int(result or 0))
+            )
+            return
+        window = self.window()
+        if window is not None:
+            window.close()
+
+    def _on_update_download_finished(self) -> None:
+        self.update_btn.setEnabled(True)
+        self.update_download_btn.setEnabled(True)
 
     def _save(self) -> None:
         self.store.update_settings(
@@ -1477,6 +1598,8 @@ class MainWindow(QWidget):
             self.auth_tab.worker,
             self.auth_tab.monitor,
             self.settings_tab._cam_test,
+            self.settings_tab._update_check,
+            self.settings_tab._update_download,
             self.service_tab.diag_worker,
             self._warmup,
         ]
@@ -1516,6 +1639,22 @@ def _set_app_user_model_id() -> None:
         pass
 
 
+def _acquire_console_mutex() -> bool:
+    global _CONSOLE_MUTEX
+    if sys.platform != "win32":
+        return True
+    import ctypes
+
+    handle = ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\FaceHello.Console")
+    if not handle:
+        return False
+    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return False
+    _CONSOLE_MUTEX = handle
+    return True
+
+
 def main() -> None:
     _set_app_user_model_id()
     app = QApplication(sys.argv)
@@ -1524,6 +1663,8 @@ def main() -> None:
     if config.IS_INSTALLED and not _is_admin():
         if not _relaunch_elevated():
             QMessageBox.warning(None, tr("failed_title"), tr("admin_console_required"))
+        return
+    if not _acquire_console_mutex():
         return
     win = MainWindow()
     win.setMinimumSize(1040, 640)

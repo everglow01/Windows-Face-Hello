@@ -87,12 +87,45 @@ jobs:
           $inp = "${{ github.event.inputs.version }}"
           $ref = "${{ github.ref_name }}"
           if ($inp) { $v = $inp }
-          elseif ($ref -match '^v(.+)$') { $v = $Matches[1] }
-          else { $v = '0.0.0-dev' }
+          elseif ($ref -match '^v((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$') { $v = $Matches[1] }
+          else { throw "release version must be canonical MAJOR.MINOR.PATCH" }
+          if ($v -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw "invalid release version: $v"
+          }
           "version=$v" >> $env:GITHUB_OUTPUT
           Write-Host "resolved version=$v"
 
+      - name: Prepare production signing certificate
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          SIGN_PFX_BASE64: ${{ secrets.FACEHELLO_SIGN_PFX_BASE64 }}
+          SIGN_PFX_PASSWORD: ${{ secrets.FACEHELLO_SIGN_PASS }}
+        run: |
+          if (-not $env:SIGN_PFX_BASE64) {
+            throw "tagged releases require FACEHELLO_SIGN_PFX_BASE64"
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP "facehello-signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGN_PFX_BASE64))
+          $cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2($pfx, $env:SIGN_PFX_PASSWORD)
+          $sha = [Security.Cryptography.SHA256]::Create()
+          try {
+            $signerSha256 = ([BitConverter]::ToString($sha.ComputeHash($cert.RawData))).Replace('-', '').ToLowerInvariant()
+          } finally {
+            $sha.Dispose()
+          }
+          "FACEHELLO_SIGN_PFX=$pfx" >> $env:GITHUB_ENV
+          "FACEHELLO_SIGN_PASS=$env:SIGN_PFX_PASSWORD" >> $env:GITHUB_ENV
+          "FACEHELLO_SIGNER_SHA256=$signerSha256" >> $env:GITHUB_ENV
+          $certPath = Join-Path $env:RUNNER_TEMP "FaceHello-Signer.cer"
+          [IO.File]::WriteAllBytes($certPath, $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+          Import-Certificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
+          Import-Certificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\TrustedPublisher | Out-Null
+
       - name: Build portable package (DLL + python + deps + models + payload)
+        env:
+          FACEHELLO_VERSION: ${{ steps.ver.outputs.version }}
+          FACEHELLO_COMMIT: ${{ github.sha }}
         run: uv run python scripts/build_release.py
 
       - name: Install Inno Setup
@@ -103,20 +136,79 @@ jobs:
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           $build = "$env:LOCALAPPDATA\FaceHello-build\FaceHello"
-          & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" "/DBuildDir=$build" "installer/FaceHello.iss"
+          $args = @("/DMyAppVersion=${{ steps.ver.outputs.version }}", "/DBuildDir=$build")
+          if ($env:FACEHELLO_SIGN_PFX) {
+            $sign = "signtool sign /fd SHA256 /f `"$env:FACEHELLO_SIGN_PFX`" /p `"$env:FACEHELLO_SIGN_PASS`" /tr http://timestamp.digicert.com /td SHA256 `$f"
+            $args += "/DSign"
+            $args += "/Sfacehello=$sign"
+          }
+          $args += "installer/FaceHello.iss"
+          & $iscc @args
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit $LASTEXITCODE" }
 
-      - name: Upload installer artifact
+      - name: Verify production signatures
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          signtool verify /pa /v "$env:LOCALAPPDATA\FaceHello-build\FaceHello\FaceHelloCP-${{ steps.ver.outputs.version }}.dll"
+          if ($LASTEXITCODE -ne 0) { throw "CP signature verification failed" }
+          signtool verify /pa /v "installer\Output\FaceHello-Setup-${{ steps.ver.outputs.version }}.exe"
+          if ($LASTEXITCODE -ne 0) { throw "installer signature verification failed" }
+
+      - name: Generate updater metadata
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "installer/Output/FaceHello-Setup-${{ steps.ver.outputs.version }}.exe" | Select-Object -First 1
+          if (-not $installer) { throw "installer not found" }
+          uv run python scripts/generate_update_manifest.py $installer.FullName --version "${{ steps.ver.outputs.version }}" --commit "${{ github.sha }}" --output "installer/Output"
+
+      - name: Validate updater metadata
+        shell: pwsh
+        run: |
+          uv run --group test pytest tests/test_version.py tests/test_update_manifest.py -q
+          $manifest = Get-Content "installer/Output/facehello-update.json" -Raw | ConvertFrom-Json
+          if ($manifest.version -ne "${{ steps.ver.outputs.version }}") { throw "manifest version mismatch" }
+
+      - name: Upload release artifact set
         uses: actions/upload-artifact@v4
         with:
           name: FaceHello-Setup-${{ steps.ver.outputs.version }}
-          path: installer/Output/FaceHello-Setup-*.exe
+          path: |
+            installer/Output/FaceHello-Setup-*.exe
+            installer/Output/FaceHello-Setup-*.exe.sha256
+            installer/Output/facehello-update.json
           if-no-files-found: error
 
-      - name: Publish GitHub Release
+      - name: Publish draft GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: installer/Output/FaceHello-Setup-*.exe
+          files: |
+            installer/Output/FaceHello-Setup-*.exe
+            installer/Output/FaceHello-Setup-*.exe.sha256
+            installer/Output/facehello-update.json
           fail_on_unmatched_files: true
           generate_release_notes: true
+          draft: true
+
+      - name: Re-download and verify draft assets
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $verify = Join-Path $env:RUNNER_TEMP "facehello-release-verify"
+          New-Item -ItemType Directory -Path $verify -Force | Out-Null
+          gh release download "${{ github.ref_name }}" --dir $verify --pattern "FaceHello-Setup-${{ steps.ver.outputs.version }}.exe" --pattern "FaceHello-Setup-${{ steps.ver.outputs.version }}.exe.sha256" --pattern "facehello-update.json"
+          $installer = Join-Path $verify "FaceHello-Setup-${{ steps.ver.outputs.version }}.exe"
+          $manifest = Get-Content (Join-Path $verify "facehello-update.json") -Raw | ConvertFrom-Json
+          $checksumLine = (Get-Content (Join-Path $verify "FaceHello-Setup-${{ steps.ver.outputs.version }}.exe.sha256") -Raw).Trim()
+          $actualHash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $actualSize = (Get-Item $installer).Length
+          if ($manifest.version -ne "${{ steps.ver.outputs.version }}") { throw "draft manifest version mismatch" }
+          if ($manifest.installer.name -ne (Split-Path $installer -Leaf)) { throw "draft installer name mismatch" }
+          if ([int64]$manifest.installer.size -ne $actualSize) { throw "draft installer size mismatch" }
+          if ($manifest.installer.sha256 -ne $actualHash) { throw "draft manifest hash mismatch" }
+          if (-not $checksumLine.StartsWith("$actualHash  ")) { throw "draft checksum mismatch" }
+          signtool verify /pa /v $installer
+          if ($LASTEXITCODE -ne 0) { throw "downloaded installer signature verification failed" }
