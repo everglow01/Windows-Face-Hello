@@ -8,7 +8,7 @@ import pytest
 from scripts import verify_release_signature
 
 
-def test_verify_accepts_pinned_untrusted_self_signed_signature(tmp_path, monkeypatch):
+def test_verify_accepts_pinned_untrusted_root_unknown_error(tmp_path, monkeypatch):
     target = tmp_path / "signed.exe"
     target.write_bytes(b"signed payload")
     certificate = b"signer certificate"
@@ -17,13 +17,33 @@ def test_verify_accepts_pinned_untrusted_self_signed_signature(tmp_path, monkeyp
         verify_release_signature,
         "_signature_info",
         lambda path: {
-            "status": "NotTrusted",
+            "status": "UnknownError",
             "certificate": base64.b64encode(certificate).decode("ascii"),
             "timestamped": True,
+            "status_message": "A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider.",
         },
     )
 
     verify_release_signature.verify(target, digest)
+
+
+def test_verify_rejects_other_unknown_error(tmp_path, monkeypatch):
+    target = tmp_path / "unknown.exe"
+    target.write_bytes(b"signed payload")
+    certificate = b"signer certificate"
+    monkeypatch.setattr(
+        verify_release_signature,
+        "_signature_info",
+        lambda path: {
+            "status": "UnknownError",
+            "certificate": base64.b64encode(certificate).decode("ascii"),
+            "timestamped": True,
+            "status_message": "An unrelated verification error occurred.",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="UnknownError"):
+        verify_release_signature.verify(target, hashlib.sha256(certificate).hexdigest())
 
 
 def test_verify_rejects_hash_mismatch_status(tmp_path, monkeypatch):
@@ -37,6 +57,7 @@ def test_verify_rejects_hash_mismatch_status(tmp_path, monkeypatch):
             "status": "HashMismatch",
             "certificate": base64.b64encode(certificate).decode("ascii"),
             "timestamped": True,
+            "status_message": "A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider.",
         },
     )
 
@@ -54,6 +75,7 @@ def test_verify_rejects_wrong_signer(tmp_path, monkeypatch):
             "status": "NotTrusted",
             "certificate": base64.b64encode(b"wrong certificate").decode("ascii"),
             "timestamped": True,
+            "status_message": "A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider.",
         },
     )
 
