@@ -97,17 +97,30 @@ jobs:
 
       - name: Prepare production signing certificate
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: 2
         shell: pwsh
         env:
           SIGN_PFX_BASE64: ${{ secrets.FACEHELLO_SIGN_PFX_BASE64 }}
           SIGN_PFX_PASSWORD: ${{ secrets.FACEHELLO_SIGN_PASS }}
         run: |
+          $ErrorActionPreference = "Stop"
           if (-not $env:SIGN_PFX_BASE64) {
             throw "tagged releases require FACEHELLO_SIGN_PFX_BASE64"
           }
+          Write-Host "Decoding signing certificate"
           $pfx = Join-Path $env:RUNNER_TEMP "facehello-signing.pfx"
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGN_PFX_BASE64))
-          $cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2($pfx, $env:SIGN_PFX_PASSWORD)
+          Write-Host "Loading signing certificate with an ephemeral private key"
+          $keyFlags = [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+          $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
+            $pfx,
+            $env:SIGN_PFX_PASSWORD,
+            $keyFlags
+          )
+          if (-not $cert.HasPrivateKey) {
+            throw "signing PFX does not contain a private key"
+          }
+          Write-Host "Computing signer certificate pin"
           $sha = [Security.Cryptography.SHA256]::Create()
           try {
             $signerSha256 = ([BitConverter]::ToString($sha.ComputeHash($cert.RawData))).Replace('-', '').ToLowerInvariant()
@@ -117,20 +130,18 @@ jobs:
           "FACEHELLO_SIGN_PFX=$pfx" >> $env:GITHUB_ENV
           "FACEHELLO_SIGN_PASS=$env:SIGN_PFX_PASSWORD" >> $env:GITHUB_ENV
           "FACEHELLO_SIGNER_SHA256=$signerSha256" >> $env:GITHUB_ENV
+          Write-Host "Exporting public signer certificate"
           $certPath = Join-Path $env:RUNNER_TEMP "FaceHello-Signer.cer"
-          [IO.File]::WriteAllBytes($certPath, $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+          $publicBytes = $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+          [IO.File]::WriteAllBytes($certPath, $publicBytes)
           foreach ($storeName in "Root", "TrustedPublisher") {
-            $store = [Security.Cryptography.X509Certificates.X509Store]::new(
-              $storeName,
-              [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
-            )
-            try {
-              $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-              $store.Add($cert)
-            } finally {
-              $store.Close()
+            Write-Host "Adding public certificate to CurrentUser/$storeName"
+            & certutil.exe -user -addstore -f $storeName $certPath
+            if ($LASTEXITCODE -ne 0) {
+              throw "certutil failed to add the certificate to CurrentUser/$storeName"
             }
           }
+          Write-Host "Signing certificate preparation complete"
 
       - name: Build portable package (DLL + python + deps + models + payload)
         env:
