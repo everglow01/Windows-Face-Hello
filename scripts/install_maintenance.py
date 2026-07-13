@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import subprocess
 import sys
 import winreg
@@ -22,14 +23,17 @@ def _certificate_sha256(path: Path) -> str:
 
 def _store_contains(store: str, digest: str) -> bool:
     script = (
-        "$want = $args[0]; $store = $args[1]; "
+        "$want = $env:FACEHELLO_CERT_DIGEST; $store = $env:FACEHELLO_CERT_STORE; "
         "$sha = [Security.Cryptography.SHA256]::Create(); "
         "try { foreach ($cert in Get-ChildItem $store) { "
         "$got = ([BitConverter]::ToString($sha.ComputeHash($cert.RawData))).Replace('-', '').ToLowerInvariant(); "
         "if ($got -eq $want) { exit 0 } } } finally { $sha.Dispose() }; exit 1"
     )
+    env = os.environ.copy()
+    env["FACEHELLO_CERT_DIGEST"] = digest
+    env["FACEHELLO_CERT_STORE"] = store
     result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, digest, store]
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], env=env
     )
     return result.returncode == 0
 
@@ -65,14 +69,21 @@ def _import_signer(root: Path, allowed_signers: tuple[str, ...]) -> list[Path]:
 
 def _remove_certificate_by_digest(store: str, digest: str) -> None:
     script = (
-        "$want = $args[0]; $store = $args[1]; "
+        "$want = $env:FACEHELLO_CERT_DIGEST; $store = $env:FACEHELLO_CERT_STORE; "
         "$sha = [Security.Cryptography.SHA256]::Create(); "
         "try { foreach ($cert in Get-ChildItem $store) { "
         "$got = ([BitConverter]::ToString($sha.ComputeHash($cert.RawData))).Replace('-', '').ToLowerInvariant(); "
         "if ($got -eq $want) { Remove-Item -LiteralPath $cert.PSPath -Force } } } "
         "finally { $sha.Dispose() }"
     )
-    _run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, digest, store)
+    env = os.environ.copy()
+    env["FACEHELLO_CERT_DIGEST"] = digest
+    env["FACEHELLO_CERT_STORE"] = store
+    subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        check=True,
+        env=env,
+    )
 
 
 def _rollback_signer(markers: list[Path]) -> None:

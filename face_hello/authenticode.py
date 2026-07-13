@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import ctypes
 import hashlib
+import os
 import subprocess
 import sys
 from ctypes import wintypes
@@ -70,14 +71,20 @@ _WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT = 0x80
 
 def _certificate_sha256(path: Path) -> str:
     script = (
-        "$s = Get-AuthenticodeSignature -LiteralPath $args[0]; "
+        "$securityModule = Join-Path $PSHOME "
+        "'Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1'; "
+        "Import-Module -Name $securityModule -Force; "
+        "$s = Get-AuthenticodeSignature -LiteralPath $env:FACEHELLO_VERIFY_PATH; "
         "if ($null -eq $s.SignerCertificate) { exit 2 }; "
         "[Convert]::ToBase64String($s.SignerCertificate.RawData)"
     )
+    env = os.environ.copy()
+    env["FACEHELLO_VERIFY_PATH"] = str(path)
     process = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, str(path)],
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True,
         text=True,
+        env=env,
         timeout=30,
     )
     if process.returncode != 0:

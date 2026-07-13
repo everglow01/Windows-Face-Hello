@@ -5,9 +5,14 @@ import argparse
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
 
-from face_hello.version import parse_stable_version
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from face_hello.version import parse_stable_version  # noqa: E402
 
 _COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 

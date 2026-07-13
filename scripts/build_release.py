@@ -143,19 +143,21 @@ def _export_signing_certificate() -> Path | None:
     if not pfx:
         return None
     output = BUILD.parent / "FaceHello-Signer.cer"
+    env = os.environ.copy()
+    env["FACEHELLO_EXPORT_PFX"] = pfx
+    env["FACEHELLO_EXPORT_PASS"] = os.environ.get("FACEHELLO_SIGN_PASS", "")
+    env["FACEHELLO_EXPORT_CERT"] = str(output)
     command = [
         "powershell.exe",
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        "$pfx = $args[0]; $pass = $args[1]; $out = $args[2]; "
-        "$cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2($pfx, $pass); "
-        "[IO.File]::WriteAllBytes($out, $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))",
-        pfx,
-        os.environ.get("FACEHELLO_SIGN_PASS", ""),
-        str(output),
+        "$cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2("
+        "$env:FACEHELLO_EXPORT_PFX, $env:FACEHELLO_EXPORT_PASS); "
+        "[IO.File]::WriteAllBytes($env:FACEHELLO_EXPORT_CERT, "
+        "$cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))",
     ]
-    run(*command)
+    run(*command, env=env)
     return output
 
 
@@ -174,7 +176,7 @@ def step_portable_python() -> None:
     """
     run("uv", "python", "install", PYVER)
     pyroot = subprocess.run(
-        ["uv", "python", "dir"], capture_output=True, text=True, check=True
+        ["uv", "--no-color", "python", "dir"], capture_output=True, text=True, check=True
     ).stdout.strip()
     cands = sorted(Path(pyroot).glob(f"cpython-{PYVER}.*/python.exe"))
     if not cands:

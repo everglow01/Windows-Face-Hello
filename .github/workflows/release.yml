@@ -152,7 +152,21 @@ jobs:
           $build = "$env:LOCALAPPDATA\FaceHello-build\FaceHello"
           $args = @("/DMyAppVersion=${{ steps.ver.outputs.version }}", "/DBuildDir=$build")
           if ($env:FACEHELLO_SIGN_PFX) {
-            $sign = "signtool sign /fd SHA256 /f `"$env:FACEHELLO_SIGN_PFX`" /p `"$env:FACEHELLO_SIGN_PASS`" /tr http://timestamp.digicert.com /td SHA256 `$f"
+            $signtool = $env:SIGNTOOL
+            if (-not $signtool) {
+              $command = Get-Command signtool.exe -ErrorAction SilentlyContinue
+              if ($command) { $signtool = $command.Source }
+            }
+            if (-not $signtool) {
+              $kits = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+              $signtool = Get-ChildItem $kits -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+                Sort-Object FullName | Select-Object -Last 1 -ExpandProperty FullName
+            }
+            if (-not $signtool) { throw "signtool.exe not found" }
+            "SIGNTOOL=$signtool" >> $env:GITHUB_ENV
+            $env:SIGNTOOL = $signtool
+            $sign = "$env:GITHUB_WORKSPACE\scripts\sign\sign_file.cmd `$f"
             $args += "/DSign"
             $args += "/Sfacehello=$sign"
           }
