@@ -119,8 +119,18 @@ jobs:
           "FACEHELLO_SIGNER_SHA256=$signerSha256" >> $env:GITHUB_ENV
           $certPath = Join-Path $env:RUNNER_TEMP "FaceHello-Signer.cer"
           [IO.File]::WriteAllBytes($certPath, $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
-          Import-Certificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
-          Import-Certificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\TrustedPublisher | Out-Null
+          foreach ($storeName in "Root", "TrustedPublisher") {
+            $store = [Security.Cryptography.X509Certificates.X509Store]::new(
+              $storeName,
+              [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+            )
+            try {
+              $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+              $store.Add($cert)
+            } finally {
+              $store.Close()
+            }
+          }
 
       - name: Build portable package (DLL + python + deps + models + payload)
         env:
