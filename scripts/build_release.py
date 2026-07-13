@@ -13,6 +13,7 @@ mediapipe/insightface/onnxruntime 的原生数据文件全部保留,避开冻结
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -55,6 +56,8 @@ def _build_info(version: str) -> dict:
     signers = [value.lower() for value in os.environ.get("FACEHELLO_SIGNER_SHA256", "").split(",") if value]
     if any(re.fullmatch(r"[0-9a-f]{64}", signer) is None for signer in signers):
         raise SystemExit("FACEHELLO_SIGNER_SHA256 必须是逗号分隔的 64 位十六进制 SHA-256")
+    if os.environ.get("FACEHELLO_SIGN_PFX") and not signers:
+        raise SystemExit("签名发布构建必须设置 FACEHELLO_SIGNER_SHA256")
     return {
         "version": version,
         "tag": f"v{version}",
@@ -158,6 +161,11 @@ def _export_signing_certificate() -> Path | None:
         "$cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))",
     ]
     run(*command, env=env)
+    signer_sha256 = os.environ.get("FACEHELLO_SIGNER_SHA256", "").lower().split(",")
+    certificate_sha256 = hashlib.sha256(output.read_bytes()).hexdigest()
+    if certificate_sha256 not in signer_sha256:
+        output.unlink(missing_ok=True)
+        raise SystemExit("导出的签名证书与 FACEHELLO_SIGNER_SHA256 不一致")
     return output
 
 
@@ -275,6 +283,8 @@ def main() -> None:
     step_build_dll()
     step_sign_dll()
     signer_certificate = _export_signing_certificate()
+    os.environ.pop("FACEHELLO_SIGN_PFX", None)
+    os.environ.pop("FACEHELLO_SIGN_PASS", None)
     step_portable_python()
     step_install_deps()
     step_slim()

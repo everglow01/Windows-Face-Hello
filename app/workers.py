@@ -7,6 +7,7 @@ import cv2
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
+from face_hello import config
 from face_hello.authenticode import verify_authenticode
 from face_hello.auth import AuthResult, AuthSession
 from face_hello.camera import Camera
@@ -62,13 +63,15 @@ class UpdateDownloadWorker(QThread):
 
     def run(self) -> None:
         try:
+            build_info = get_build_info()
+            if config.IS_INSTALLED and not build_info.signer_sha256:
+                raise UpdateError(UpdateErrorCode.VERIFY, "release build has no signer pin")
             result = download_installer(
                 self.candidate,
                 progress=self._progress,
                 should_cancel=lambda: self._stop,
             )
-            build_info = get_build_info()
-            if build_info.signer_sha256:
+            if config.IS_INSTALLED:
                 signature = verify_authenticode(result.path, build_info.signer_sha256)
                 if not signature.trusted:
                     result.path.unlink(missing_ok=True)

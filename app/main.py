@@ -61,60 +61,60 @@ from face_hello.auth import AuthResult
 from face_hello.detector import FaceDetector
 from face_hello.i18n import save_hotkey_mirror, save_lang_mirror, set_lang, tr
 from face_hello.store import FaceStore
-from face_hello.updater import UpdateCandidate, UpdateErrorCode
+from face_hello.updater import UpdateCandidate, UpdateError, UpdateErrorCode, verify_installer
 from face_hello.version import display_version, get_build_info
 
-WARN = "#9A5B16"
+WARN = "#CC7D5E"
 _CONSOLE_MUTEX = None
 
 # 大号活体提示文字的基础样式(颜色随结果在内联追加)
-_INSTR_BASE = "font-size:18px;font-weight:600;padding:8px;color:#2F261F;"
+_INSTR_BASE = "font-size:18px;font-weight:600;padding:8px;color:#1D1B16;"
 
 # Win11 Fluent 浅色主题
 FLUENT_QSS = """
 * {
-    font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI",
-                 "Microsoft YaHei", sans-serif;
+    font-family: "思源宋体 VF", "Source Han Serif SC", "Source Han Serif CN",
+                 "Microsoft YaHei UI", "Microsoft YaHei", serif;
     font-size: 14px;
-    color: #2F261F;
+    color: #1D1B16;
 }
-QWidget { background-color: #F7F2EA; }
+QWidget { background-color: #F5F3EE; }
 
 QPushButton {
-    background-color: #FFFCF7;
-    border: 1px solid #D9CABB;
+    background-color: #FFFDF9;
+    border: 1px solid #D5CFC6;
     border-radius: 6px;
     padding: 7px 16px;
 }
-QPushButton:hover { background-color: #F7EDE2; border-color: #CDB8A6; }
-QPushButton:pressed { background-color: #EEDFD0; border-color: #B99D87; }
-QPushButton:focus { border: 1px solid #B99D87; }
-QPushButton:default { background-color: #FFF7EF; border: 1px solid #C78F72; }
-QPushButton:default:pressed { background-color: #EEDFD0; border-color: #B99D87; }
+QPushButton:hover { background-color: #F7EDE2; border-color: #D5CFC6; }
+QPushButton:pressed { background-color: #E3DDD4; border-color: #C9C2B8; }
+QPushButton:focus { border: 1px solid #C9C2B8; }
+QPushButton:default { background-color: #F9E8E1; border: 1px solid #C78F72; }
+QPushButton:default:pressed { background-color: #E3DDD4; border-color: #C9C2B8; }
 QPushButton:disabled { background-color: #F0E8DF; color: #A99C8F; border-color: #E8DED3; }
 
 QPushButton#accent {
-    background-color: #B45E3C;
-    border: 1px solid #B45E3C;
+    background-color: #DA7756;
+    border: 1px solid #DA7756;
     color: #FFF9F2;
     font-weight: 600;
 }
-QPushButton#accent:hover { background-color: #C06B47; border-color: #C06B47; }
-QPushButton#accent:pressed { background-color: #9E4D30; border-color: #9E4D30; }
-QPushButton#accent:focus { border: 1px solid #7F3B24; }
-QPushButton#accent:default { background-color: #B45E3C; border: 1px solid #7F3B24; }
-QPushButton#accent:default:pressed { background-color: #9E4D30; border-color: #7F3B24; }
-QPushButton#accent:disabled { background-color: #D9B7A6; border-color: #D9B7A6; color: #FFF1E9; }
+QPushButton#accent:hover { background-color: #E48766; border-color: #E48766; }
+QPushButton#accent:pressed { background-color: #BF5F42; border-color: #BF5F42; }
+QPushButton#accent:focus { border: 1px solid #9D4934; }
+QPushButton#accent:default { background-color: #DA7756; border: 1px solid #9D4934; }
+QPushButton#accent:default:pressed { background-color: #BF5F42; border-color: #9D4934; }
+QPushButton#accent:disabled { background-color: #EAB49F; border-color: #EAB49F; color: #FFF9F6; }
 
 QLineEdit, QSpinBox, QDoubleSpinBox {
     background: #FFFFFF;
     border: 1px solid #D1D1D1;
     border-radius: 6px;
     padding: 6px 8px;
-    selection-background-color: #B45E3C;
+    selection-background-color: #DA7756;
     selection-color: #FFF9F2;
 }
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #B45E3C; }
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #DA7756; }
 
 /* 自定义边框后必须显式给上下按钮几何,否则点击区域塌陷、点上三角会落到输入框上 */
 QSpinBox, QDoubleSpinBox { padding-right: 22px; }
@@ -122,22 +122,22 @@ QSpinBox::up-button, QDoubleSpinBox::up-button {
     subcontrol-origin: border;
     subcontrol-position: top right;
     width: 20px;
-    border-left: 1px solid #D9CABB;
+    border-left: 1px solid #D5CFC6;
     border-top-right-radius: 6px;
-    background: #F3E9DE;
+    background: #E9E4DC;
 }
 QSpinBox::down-button, QDoubleSpinBox::down-button {
     subcontrol-origin: border;
     subcontrol-position: bottom right;
     width: 20px;
-    border-left: 1px solid #D9CABB;
+    border-left: 1px solid #D5CFC6;
     border-bottom-right-radius: 6px;
-    background: #F3E9DE;
+    background: #E9E4DC;
 }
 QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
-QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover { background: #E9D8C8; }
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover { background: #DFD9D0; }
 QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
-QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed { background: #DFC6B3; }
+QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed { background: #D2CBC1; }
 QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(__UP_ARROW__); }
 QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(__DOWN_ARROW__); }
 
@@ -148,10 +148,10 @@ QTableWidget {
     gridline-color: #F0F0F0;
 }
 QTableWidget::item { padding: 6px; }
-QTableWidget::item:selected { background: #F3DCCB; color: #2F261F; }
+QTableWidget::item:selected { background: #F7E8E1; color: #1D1B16; }
 QHeaderView::section {
     background: #FAFAFA;
-    color: #5A5A5A;
+    color: #625E56;
     border: none;
     border-bottom: 1px solid #E5E5E5;
     padding: 8px;
@@ -166,7 +166,7 @@ QLabel#h2 {
     font-weight: 600;
     color: #1A1A1A;
 }
-QLabel#hint { color: #5A5A5A; }
+QLabel#hint { color: #625E56; }
 
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
 QScrollBar::handle:vertical { background: #C9C9C9; border-radius: 5px; min-height: 24px; }
@@ -175,13 +175,13 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 
 QWidget#sideBar {
-    background: #EFE4D8;
-    border: 1px solid #E1D0BE;
+    background: #EEEAE3;
+    border: 1px solid #DDD8CF;
     border-radius: 8px;
 }
 QWidget#contentPanel {
-    background: #FFFCF7;
-    border: 1px solid #E6D8C9;
+    background: #FFFDF9;
+    border: 1px solid #E5E0D8;
     border-radius: 8px;
 }
 QWidget#rootWindow {
@@ -191,78 +191,78 @@ QWidget#resizeHandle {
     background: transparent;
 }
 QWidget#windowShell {
-    background: #F7F2EA;
-    border: 1px solid #DDCBB8;
+    background: #F5F3EE;
+    border: 1px solid #DAD5CD;
     border-radius: 12px;
 }
-QPushButton:checked { background-color: #FFF7EF; border-color: #E4C5B2; }
-QPushButton:checked:pressed { background-color: #EEDFD0; border-color: #B99D87; }
+QPushButton:checked { background-color: #F9E8E1; border-color: #ECD5CB; }
+QPushButton:checked:pressed { background-color: #E3DDD4; border-color: #C9C2B8; }
 QPushButton#navButton {
     background: transparent;
     border: 1px solid transparent;
-    color: #5E5146;
+    color: #514D46;
     text-align: left;
     padding: 9px 12px;
     font-weight: 500;
 }
 QPushButton#navButton:hover {
-    background: #F1E6DA;
-    border-color: #E2D2C3;
+    background: #F1EDE7;
+    border-color: #E1DCD4;
 }
 QPushButton#navButton:pressed {
-    background: #E8D8C8;
-    border-color: #CDB8A6;
+    background: #E9E4DC;
+    border-color: #D5CFC6;
 }
 QPushButton#navButton:checked {
-    background: #FFF7EF;
-    border-color: #E4C5B2;
-    color: #9E4D30;
+    background: #F9E8E1;
+    border-color: #ECD5CB;
+    color: #BF5F42;
     font-weight: 600;
 }
 QPushButton#navButton:checked:pressed {
-    background: #EEDFD0;
-    border-color: #B99D87;
+    background: #E3DDD4;
+    border-color: #C9C2B8;
 }
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
-    background: #FFFCF7;
-    border: 1px solid #D9CABB;
-    selection-background-color: #B45E3C;
+    background: #FFFDF9;
+    border: 1px solid #D5CFC6;
+    selection-background-color: #DA7756;
     selection-color: #FFF9F2;
 }
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
-    border: 1px solid #B45E3C;
+    border: 1px solid #DA7756;
 }
 QTableWidget {
-    background: #FFFCF7;
-    border: 1px solid #E6D8C9;
-    gridline-color: #EFE3D6;
+    background: #FFFDF9;
+    border: 1px solid #E5E0D8;
+    gridline-color: #E1DCD4;
 }
-QTableWidget::item:selected { background: #F3DCCB; color: #2F261F; }
+QTableWidget::item:selected { background: #F7E8E1; color: #1D1B16; }
 QHeaderView::section {
-    background: #F5EADF;
-    color: #6A5B4E;
-    border-bottom: 1px solid #E6D8C9;
+    background: #F1EDE7;
+    color: #625E56;
+    border-bottom: 1px solid #E5E0D8;
 }
-QLabel#h2 { color: #2F261F; }
+QLabel#h2 { color: #1D1B16; }
 QLabel#brand {
     font-size: 22px;
     font-weight: 700;
-    color: #2F261F;
+    color: #1D1B16;
     background: transparent;
 }
-QLabel#hint, QLabel#sideHint { color: #716457; }
+QLabel#hint, QLabel#sideHint { color: #625E56; }
 QLabel#sideHint {
     font-size: 12px;
     background: transparent;
 }
 QComboBox#sideCombo {
-    background: #EFE4D8;
-    border: 1px solid #D8C5B3;
+    background: #EEEAE3;
+    border: 1px solid #D8D2C9;
     padding: 5px 28px 5px 8px;
 }
 QComboBox#sideCombo:hover {
-    background: #F3E8DC;
-    border-color: #CDB8A6;
+    background: #F0ECE6;
+    border-color: #D5CFC6;
 }
 QComboBox#sideCombo::drop-down {
     subcontrol-origin: padding;
@@ -286,14 +286,14 @@ QPushButton#windowButton, QPushButton#windowCloseButton {
     padding: 0;
     min-width: 46px;
     min-height: 32px;
-    color: #6A5B4E;
+    color: #625E56;
 }
 QPushButton#windowButton:hover {
-    background: #EDE1D5;
+    background: #E9E5DE;
     border-color: transparent;
 }
 QPushButton#windowButton:pressed {
-    background: #E2D0BF;
+    background: #DED8CF;
     border-color: transparent;
 }
 QPushButton#windowCloseButton:hover {
@@ -302,22 +302,22 @@ QPushButton#windowCloseButton:hover {
     color: #FFF9F2;
 }
 QPushButton#windowCloseButton:pressed {
-    background: #9E4D30;
-    border-color: #9E4D30;
+    background: #BF5F42;
+    border-color: #BF5F42;
     color: #FFF9F2;
 }
 QProgressBar {
-    background: #F1E6DA;
-    border: 1px solid #E1D0BE;
+    background: #F1EDE7;
+    border: 1px solid #DDD8CF;
     border-radius: 5px;
     height: 10px;
 }
 QProgressBar::chunk {
-    background: #B45E3C;
+    background: #DA7756;
     border-radius: 5px;
 }
-QScrollBar::handle:vertical { background: #CDB8A6; }
-QScrollBar::handle:vertical:hover { background: #B99D87; }
+QScrollBar::handle:vertical { background: #D5CFC6; }
+QScrollBar::handle:vertical:hover { background: #C9C2B8; }
 """
 
 
@@ -327,7 +327,7 @@ def _make_arrow(path: str, up: bool) -> None:
     pm.fill(Qt.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing)
-    p.setBrush(QColor("#5A5A5A"))
+    p.setBrush(QColor("#625E56"))
     p.setPen(Qt.NoPen)
     if up:
         tri = QPolygon([QPoint(2, 8), QPoint(10, 8), QPoint(6, 4)])
@@ -343,7 +343,7 @@ def _make_combo_arrow(path: str) -> None:
     pm.fill(Qt.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing)
-    pen = QColor("#8A6A55")
+    pen = QColor("#777169")
     p.setPen(pen)
     p.drawLine(3, 5, 6, 8)
     p.drawLine(6, 8, 9, 5)
@@ -997,7 +997,26 @@ class SettingsTab(QWidget):
         self.update_download_btn.setText(tr("update_download_again"))
 
     def _install_update(self) -> None:
-        if self._update_installer is None or not self._update_installer.is_file():
+        if (
+            self._update_installer is None
+            or self._update_candidate is None
+            or not self._update_installer.is_file()
+        ):
+            return
+        build_info = get_build_info()
+        try:
+            if not build_info.signer_sha256:
+                raise UpdateError(UpdateErrorCode.VERIFY, "release build has no signer pin")
+            verify_installer(
+                self._update_installer,
+                self._update_candidate,
+                build_info.signer_sha256,
+            )
+        except Exception:  # noqa: BLE001 文件/签名平台 API 任一异常都必须 fail closed
+            self._update_installer.unlink(missing_ok=True)
+            self._update_installer = None
+            self.update_install_btn.hide()
+            self.update_status.setText(tr("update_failed"))
             return
         import ctypes
 
@@ -1327,7 +1346,7 @@ class ServiceTab(QWidget):
             "ok": SUCCESS,
             "warn": WARN,
             "fail": DANGER,
-            "info": "#5A5A5A",
+            "info": "#625E56",
         }
         self.diag_table.setRowCount(len(report.items))
         for row, item in enumerate(report.items):
@@ -1335,7 +1354,7 @@ class ServiceTab(QWidget):
             for col, text in enumerate(cells):
                 cell = QTableWidgetItem(text)
                 if col == 1:
-                    cell.setForeground(QBrush(QColor(colors.get(item.status, "#5A5A5A"))))
+                    cell.setForeground(QBrush(QColor(colors.get(item.status, "#625E56"))))
                 self.diag_table.setItem(row, col, cell)
         self.diag_table.resizeRowsToContents()
 

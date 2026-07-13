@@ -9,8 +9,8 @@ from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy, QWidget
 from face_hello.i18n import tr
 
 PREVIEW_W, PREVIEW_H = 560, 420
-SUCCESS = "#2F7D57"
-DANGER = "#B42318"
+SUCCESS = "#00C853"
+DANGER = "#FF5F38"
 
 
 class PreviewLabel(QLabel):
@@ -23,7 +23,7 @@ class PreviewLabel(QLabel):
         self.setSizePolicy(policy)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(
-            "background:#24201C;color:#D8CFC5;border:1px solid #E6D8C9;border-radius:8px;"
+            "background:#1D1B16;color:#D8D4CC;border:1px solid #E5E0D8;border-radius:8px;"
         )
 
     def sizeHint(self) -> QSize:
@@ -85,8 +85,8 @@ class SimilarityHistogram(QWidget):
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         width, height = self.width(), self.height()
-        painter.fillRect(0, 0, width, height, QColor("#FFFCF7"))
-        painter.setPen(QColor("#E6D8C9"))
+        painter.fillRect(0, 0, width, height, QColor("#FFFDF9"))
+        painter.setPen(QColor("#E5E0D8"))
         painter.drawRect(0, 0, width - 1, height - 1)
 
         pad_l, pad_r, pad_t, pad_b = 8, 8, 22, 18
@@ -104,13 +104,13 @@ class SimilarityHistogram(QWidget):
             x = pad_l + index * bar_w
             y = pad_t + (plot_h - bar_h)
             center = (index + 0.5) / self._BINS
-            color = QColor(SUCCESS) if center >= self._threshold else QColor("#CDB8A6")
+            color = QColor(SUCCESS) if center >= self._threshold else QColor("#D5CFC6")
             painter.fillRect(int(x) + 1, int(y), max(1, int(bar_w) - 1), int(bar_h), color)
 
         threshold_x = pad_l + self._threshold * plot_w
         painter.setPen(QColor(DANGER))
         painter.drawLine(int(threshold_x), pad_t, int(threshold_x), pad_t + plot_h)
-        painter.setPen(QColor("#716457"))
+        painter.setPen(QColor("#625E56"))
         painter.drawText(pad_l, 14, tr("hist_title"))
         current = (
             tr("hist_current", sim=self._current)
@@ -161,7 +161,7 @@ class CaptionButton(QPushButton):
         color = (
             QColor("#FFF9F2")
             if self.kind == "close" and self.underMouse()
-            else QColor("#5E5146")
+            else QColor("#514D46")
         )
         painter.setPen(color)
         cx = self.width() // 2

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
 
+from .authenticode import AuthenticodeResult, verify_authenticode
 from .version import Version, parse_stable_version
 
 _REPOSITORY = "everglow01/Windows-Face-Hello"
@@ -334,14 +335,32 @@ def _load_resume_state(path: Path, candidate: UpdateCandidate) -> dict | None:
     return state
 
 
-def _verified(path: Path, candidate: UpdateCandidate) -> bool:
-    if not path.exists() or path.stat().st_size != candidate.manifest.installer_size:
-        return False
+def verify_installer(
+    path: Path,
+    candidate: UpdateCandidate,
+    signer_sha256: tuple[str, ...] = (),
+    *,
+    signature_verifier: Callable[[Path, tuple[str, ...]], AuthenticodeResult] = verify_authenticode,
+) -> None:
+    """重新核对已下载安装包的大小、SHA-256 和发布者签名。"""
+    if not path.is_file() or path.stat().st_size != candidate.manifest.installer_size:
+        raise UpdateError(UpdateErrorCode.VERIFY, "installer size mismatch")
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(_CHUNK_SIZE), b""):
             digest.update(chunk)
-    return digest.hexdigest() == candidate.manifest.installer_sha256
+    if digest.hexdigest() != candidate.manifest.installer_sha256:
+        raise UpdateError(UpdateErrorCode.VERIFY, "installer sha256 mismatch")
+    if signer_sha256 and not signature_verifier(path, signer_sha256).trusted:
+        raise UpdateError(UpdateErrorCode.VERIFY, "installer signature mismatch")
+
+
+def _verified(path: Path, candidate: UpdateCandidate) -> bool:
+    try:
+        verify_installer(path, candidate)
+    except (OSError, UpdateError):
+        return False
+    return True
 
 
 def _validate_download_url(url: str, allow_http: bool) -> None:
