@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -22,6 +23,13 @@ def main() -> int:
     build_info = get_build_info()
     if not build_info.is_release or get_current_version() is None:
         raise RuntimeError("portable build has no valid release version")
+    certificate = root / "FaceHello-Signer.cer"
+    if bool(build_info.signer_sha256) != certificate.is_file():
+        raise RuntimeError("portable signer pin and certificate must be present together")
+    if certificate.is_file():
+        certificate_sha256 = hashlib.sha256(certificate.read_bytes()).hexdigest()
+        if certificate_sha256 not in build_info.signer_sha256:
+            raise RuntimeError("portable signer certificate does not match build info")
     FaceDetector().load()
     tracker = FaceMeshTracker()
     try:

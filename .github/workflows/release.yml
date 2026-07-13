@@ -29,6 +29,8 @@ jobs:
     env:
       # runner 默认 cp1252,脚本里 print 中文会 UnicodeEncodeError;开 UTF-8 模式
       PYTHONUTF8: "1"
+      # v1.0.2 正式安装器的 signer 叶证书 DER SHA-256；旧客户端只接受该证书。
+      FACEHELLO_EXPECTED_SIGNER_SHA256: "bf7e498485e0d1c307b268ca36a1e99738719a0b70db5e6a210872fa1fb06c02"
     steps:
       - uses: actions/checkout@v4
 
@@ -95,7 +97,11 @@ jobs:
           "version=$v" >> $env:GITHUB_OUTPUT
           Write-Host "resolved version=$v"
 
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
       - name: Prepare production signing certificate
+        id: signing
         if: startsWith(github.ref, 'refs/tags/')
         timeout-minutes: 2
         shell: pwsh
@@ -127,26 +133,27 @@ jobs:
           } finally {
             $sha.Dispose()
           }
-          "FACEHELLO_SIGN_PFX=$pfx" >> $env:GITHUB_ENV
-          "FACEHELLO_SIGN_PASS=$env:SIGN_PFX_PASSWORD" >> $env:GITHUB_ENV
-          "FACEHELLO_SIGNER_SHA256=$signerSha256" >> $env:GITHUB_ENV
-          Write-Host "Exporting public signer certificate"
-          $certPath = Join-Path $env:RUNNER_TEMP "FaceHello-Signer.cer"
-          $publicBytes = $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert)
-          [IO.File]::WriteAllBytes($certPath, $publicBytes)
+          if ($signerSha256 -ne $env:FACEHELLO_EXPECTED_SIGNER_SHA256) {
+            throw "signing certificate does not match the v1.0.2 update signer"
+          }
+          "FACEHELLO_SIGN_PFX=$pfx" >> $env:GITHUB_OUTPUT
+          "FACEHELLO_SIGNER_SHA256=$signerSha256" >> $env:GITHUB_OUTPUT
           Write-Host "Signing certificate preparation complete"
 
       - name: Build portable package (DLL + python + deps + models + payload)
         env:
           FACEHELLO_VERSION: ${{ steps.ver.outputs.version }}
           FACEHELLO_COMMIT: ${{ github.sha }}
+          FACEHELLO_SIGN_PFX: ${{ steps.signing.outputs.FACEHELLO_SIGN_PFX }}
+          FACEHELLO_SIGN_PASS: ${{ secrets.FACEHELLO_SIGN_PASS }}
+          FACEHELLO_SIGNER_SHA256: ${{ steps.signing.outputs.FACEHELLO_SIGNER_SHA256 }}
         run: uv run python scripts/build_release.py
-
-      - name: Install Inno Setup
-        run: choco install innosetup -y --no-progress
 
       - name: Compile installer
         shell: pwsh
+        env:
+          FACEHELLO_SIGN_PFX: ${{ steps.signing.outputs.FACEHELLO_SIGN_PFX }}
+          FACEHELLO_SIGN_PASS: ${{ secrets.FACEHELLO_SIGN_PASS }}
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           $build = "$env:LOCALAPPDATA\FaceHello-build\FaceHello"
@@ -164,7 +171,6 @@ jobs:
                 Sort-Object FullName | Select-Object -Last 1 -ExpandProperty FullName
             }
             if (-not $signtool) { throw "signtool.exe not found" }
-            "SIGNTOOL=$signtool" >> $env:GITHUB_ENV
             $env:SIGNTOOL = $signtool
             $sign = "$env:GITHUB_WORKSPACE\scripts\sign\sign_file.cmd `$f"
             $args += "/DSign"
@@ -174,12 +180,21 @@ jobs:
           & $iscc @args
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit $LASTEXITCODE" }
 
+      - name: Delete temporary signing key
+        if: always() && startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "facehello-signing.pfx"
+          if (Test-Path -LiteralPath $pfx) {
+            Remove-Item -LiteralPath $pfx -Force
+          }
+
       - name: Verify production signatures
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
-          uv run python scripts/verify_release_signature.py "$env:LOCALAPPDATA\FaceHello-build\FaceHello\FaceHelloCP-${{ steps.ver.outputs.version }}.dll" --signer-sha256 "$env:FACEHELLO_SIGNER_SHA256"
-          uv run python scripts/verify_release_signature.py "installer\Output\FaceHello-Setup-${{ steps.ver.outputs.version }}.exe" --signer-sha256 "$env:FACEHELLO_SIGNER_SHA256"
+          uv run python scripts/verify_release_signature.py "$env:LOCALAPPDATA\FaceHello-build\FaceHello\FaceHelloCP-${{ steps.ver.outputs.version }}.dll" --signer-sha256 "${{ steps.signing.outputs.FACEHELLO_SIGNER_SHA256 }}"
+          uv run python scripts/verify_release_signature.py "installer\Output\FaceHello-Setup-${{ steps.ver.outputs.version }}.exe" --signer-sha256 "${{ steps.signing.outputs.FACEHELLO_SIGNER_SHA256 }}"
 
       - name: Generate updater metadata
         shell: pwsh
@@ -232,8 +247,9 @@ jobs:
           $actualHash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
           $actualSize = (Get-Item $installer).Length
           if ($manifest.version -ne "${{ steps.ver.outputs.version }}") { throw "draft manifest version mismatch" }
+          if ($manifest.release_commit -ne "${{ github.sha }}") { throw "draft manifest commit mismatch" }
           if ($manifest.installer.name -ne (Split-Path $installer -Leaf)) { throw "draft installer name mismatch" }
           if ([int64]$manifest.installer.size -ne $actualSize) { throw "draft installer size mismatch" }
           if ($manifest.installer.sha256 -ne $actualHash) { throw "draft manifest hash mismatch" }
           if (-not $checksumLine.StartsWith("$actualHash  ")) { throw "draft checksum mismatch" }
-          uv run python scripts/verify_release_signature.py $installer --signer-sha256 "$env:FACEHELLO_SIGNER_SHA256"
+          uv run python scripts/verify_release_signature.py $installer --signer-sha256 "${{ steps.signing.outputs.FACEHELLO_SIGNER_SHA256 }}"

@@ -7,12 +7,14 @@ from email.message import Message
 
 import pytest
 
+from face_hello.authenticode import AuthenticodeResult
 from face_hello.updater import (
     UpdateError,
     UpdateErrorCode,
     download_installer,
     parse_manifest,
     select_candidate,
+    verify_installer,
 )
 from face_hello.version import Version
 
@@ -65,6 +67,59 @@ def _release(payload: bytes, base_url: str, version: str = "1.2.3") -> bytes:
 
 def _candidate(payload: bytes, base_url: str = "http://localhost"):
     return select_candidate(_release(payload, base_url), _manifest(payload), Version(1, 0, 0))
+
+
+def test_verify_installer_rechecks_hash_and_signature(tmp_path):
+    payload = b"signed installer"
+    candidate = _candidate(payload)
+    installer = tmp_path / candidate.installer.name
+    installer.write_bytes(payload)
+    seen = []
+
+    def signature_verifier(path, signers):
+        seen.append((path, signers))
+        return AuthenticodeResult(True, 0, signers[0])
+
+    verify_installer(
+        installer,
+        candidate,
+        ("a" * 64,),
+        signature_verifier=signature_verifier,
+    )
+
+    assert seen == [(installer, ("a" * 64,))]
+
+
+@pytest.mark.parametrize("replacement", [b"tampered installeR", b"short"])
+def test_verify_installer_rejects_replaced_file(tmp_path, replacement):
+    payload = b"signed installer"
+    candidate = _candidate(payload)
+    installer = tmp_path / candidate.installer.name
+    installer.write_bytes(replacement)
+
+    with pytest.raises(UpdateError) as exc:
+        verify_installer(installer, candidate)
+
+    assert exc.value.code == UpdateErrorCode.VERIFY
+
+
+def test_verify_installer_rejects_wrong_signer(tmp_path):
+    payload = b"signed installer"
+    candidate = _candidate(payload)
+    installer = tmp_path / candidate.installer.name
+    installer.write_bytes(payload)
+
+    with pytest.raises(UpdateError) as exc:
+        verify_installer(
+            installer,
+            candidate,
+            ("a" * 64,),
+            signature_verifier=lambda path, signers: AuthenticodeResult(
+                False, 0, "b" * 64
+            ),
+        )
+
+    assert exc.value.code == UpdateErrorCode.VERIFY
 
 
 class Response(io.BytesIO):

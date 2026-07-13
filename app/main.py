@@ -61,7 +61,7 @@ from face_hello.auth import AuthResult
 from face_hello.detector import FaceDetector
 from face_hello.i18n import save_hotkey_mirror, save_lang_mirror, set_lang, tr
 from face_hello.store import FaceStore
-from face_hello.updater import UpdateCandidate, UpdateErrorCode
+from face_hello.updater import UpdateCandidate, UpdateError, UpdateErrorCode, verify_installer
 from face_hello.version import display_version, get_build_info
 
 WARN = "#9A5B16"
@@ -997,7 +997,26 @@ class SettingsTab(QWidget):
         self.update_download_btn.setText(tr("update_download_again"))
 
     def _install_update(self) -> None:
-        if self._update_installer is None or not self._update_installer.is_file():
+        if (
+            self._update_installer is None
+            or self._update_candidate is None
+            or not self._update_installer.is_file()
+        ):
+            return
+        build_info = get_build_info()
+        try:
+            if not build_info.signer_sha256:
+                raise UpdateError(UpdateErrorCode.VERIFY, "release build has no signer pin")
+            verify_installer(
+                self._update_installer,
+                self._update_candidate,
+                build_info.signer_sha256,
+            )
+        except Exception:  # noqa: BLE001 文件/签名平台 API 任一异常都必须 fail closed
+            self._update_installer.unlink(missing_ok=True)
+            self._update_installer = None
+            self.update_install_btn.hide()
+            self.update_status.setText(tr("update_failed"))
             return
         import ctypes
 
