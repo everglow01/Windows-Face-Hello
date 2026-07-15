@@ -243,7 +243,7 @@ def step_copy_payload(version: str, signer_certificate: Path | None = None) -> N
     # 根级引导脚本:服务宿主 + 卸载清理(都靠仓库根在 sys.path 才 import 得到 face_hello)
     for name in ("winservice_main.py", "uninstall_cleanup.py"):
         shutil.copy(ROOT / name, BUILD / name)
-    for name in ("install_maintenance.py",):
+    for name in ("install_maintenance.py", "doctor.py"):
         shutil.copy(ROOT / "scripts" / name, BUILD / name)
 
     models = ROOT / "models"
