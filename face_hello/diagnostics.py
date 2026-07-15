@@ -8,6 +8,7 @@ from typing import Callable
 from . import config, cred_vault, probes
 from .i18n import t
 from .store import FaceStore
+from .version import display_version
 
 STATUS_OK = "ok"
 STATUS_WARN = "warn"
@@ -218,12 +219,28 @@ def _check_pipe(report: DiagnosticReport, lang: str) -> None:
         _add(report, lang, "diag_item_pipe", STATUS_FAIL, t("diag_pipe_ping_fail", lang, e=exc))
         return
 
-    if resp.get("ok"):
+    health = probes.service_health(resp, display_version())
+    if health.healthy:
         users = resp.get("users", [])
         _add(report, lang, "diag_item_pipe", STATUS_OK,
              t("diag_pipe_ok", lang, users=", ".join(users) if users else t("diag_none", lang)))
+    elif health.code == probes.ServiceHealthCode.NOT_READY:
+        _add(report, lang, "diag_item_pipe", STATUS_FAIL, t("diag_pipe_not_ready", lang),
+             "diag_advice_wait_service")
+    elif health.code == probes.ServiceHealthCode.VERSION_MISMATCH:
+        _add(
+            report, lang, "diag_item_pipe", STATUS_FAIL,
+            t("diag_pipe_version_mismatch", lang, expected=display_version(), actual=health.version),
+            "diag_advice_repair_install",
+        )
+    elif health.code == probes.ServiceHealthCode.PROTOCOL_MISMATCH:
+        _add(
+            report, lang, "diag_item_pipe", STATUS_FAIL,
+            t("diag_pipe_protocol_mismatch", lang, expected=1, actual=health.protocol),
+            "diag_advice_repair_install",
+        )
     else:
-        _add(report, lang, "diag_item_pipe", STATUS_FAIL, t("diag_pipe_bad_response", lang, resp=resp))
+        _add(report, lang, "diag_item_pipe", STATUS_FAIL, t("diag_pipe_bad_response", lang))
 
 
 def _check_cp(report: DiagnosticReport, lang: str) -> None:

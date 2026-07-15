@@ -225,6 +225,27 @@ def test_wait_ready_accepts_expected_pipe_response(monkeypatch):
     install_maintenance._wait_ready("1.1.0", timeout=0.1)
 
 
+def test_wait_ready_reports_wrong_service_version_immediately(monkeypatch):
+    monkeypatch.setattr(
+        install_maintenance.probes,
+        "call_pipe",
+        lambda request: {
+            "ok": True,
+            "ready": True,
+            "version": "1.0.0",
+            "protocol": 1,
+        },
+    )
+    monkeypatch.setattr(
+        install_maintenance,
+        "_service_status",
+        lambda: (_ for _ in ()).throw(AssertionError("SCM should not be queried")),
+    )
+
+    with pytest.raises(RuntimeError, match=r"expected=1\.1\.0, actual=1\.0\.0"):
+        install_maintenance._wait_ready("1.1.0", timeout=120)
+
+
 def test_wait_ready_fails_immediately_when_service_stops(monkeypatch):
     monkeypatch.setattr(
         install_maintenance.probes,

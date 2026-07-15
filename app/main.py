@@ -67,6 +67,23 @@ from face_hello.version import display_version, get_build_info
 WARN = "#CC7D5E"
 _CONSOLE_MUTEX = None
 
+_UPDATE_ERROR_KEYS = {
+    UpdateErrorCode.NETWORK.value: "update_error_network",
+    UpdateErrorCode.REMOTE_SERVICE.value: "update_error_remote_service",
+    UpdateErrorCode.RATE_LIMIT.value: "update_error_rate_limit",
+    UpdateErrorCode.INVALID_RELEASE.value: "update_error_invalid_release",
+    UpdateErrorCode.UNSUPPORTED_MANIFEST.value: "update_error_unsupported_manifest",
+    UpdateErrorCode.DISK_SPACE.value: "update_error_disk_space",
+    UpdateErrorCode.DOWNLOAD.value: "update_error_download",
+    UpdateErrorCode.VERIFY.value: "update_error_verify",
+    UpdateErrorCode.CANCELLED.value: "update_cancelled",
+}
+
+
+def _update_error_key(code: str) -> str:
+    return _UPDATE_ERROR_KEYS.get(code, "update_failed")
+
+
 # 大号活体提示文字的基础样式(颜色随结果在内联追加)
 _INSTR_BASE = "font-size:18px;font-weight:600;padding:8px;color:#1D1B16;"
 
@@ -965,8 +982,7 @@ class SettingsTab(QWidget):
         self.update_download_btn.show()
 
     def _on_update_failed(self, code: str, _detail: str) -> None:
-        key = "update_cancelled" if code == UpdateErrorCode.CANCELLED.value else "update_failed"
-        self.update_status.setText(tr(key))
+        self.update_status.setText(tr(_update_error_key(code)))
 
     def _download_update(self) -> None:
         if self._update_candidate is None:
@@ -1016,7 +1032,7 @@ class SettingsTab(QWidget):
             self._update_installer.unlink(missing_ok=True)
             self._update_installer = None
             self.update_install_btn.hide()
-            self.update_status.setText(tr("update_failed"))
+            self.update_status.setText(tr("update_error_verify"))
             return
         import ctypes
 

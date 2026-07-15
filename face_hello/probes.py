@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from . import config
@@ -24,6 +25,25 @@ class PipeConnectError(RuntimeError):
         self.winerror = getattr(cause, "winerror", None)
 
 
+class ServiceHealthCode(str, Enum):
+    HEALTHY = "healthy"
+    NOT_READY = "not_ready"
+    VERSION_MISMATCH = "version_mismatch"
+    PROTOCOL_MISMATCH = "protocol_mismatch"
+    BAD_RESPONSE = "bad_response"
+
+
+@dataclass(frozen=True)
+class ServiceHealth:
+    code: ServiceHealthCode
+    version: str = ""
+    protocol: int | None = None
+
+    @property
+    def healthy(self) -> bool:
+        return self.code == ServiceHealthCode.HEALTHY
+
+
 _SERVICE_STATE_KEYS = {
     1: "svc_stopped",
     2: "svc_starting",
@@ -35,6 +55,33 @@ _SERVICE_STATE_KEYS = {
 
 def service_state_key(status: int) -> str | None:
     return _SERVICE_STATE_KEYS.get(status)
+
+
+def service_health(
+    response: object,
+    expected_version: str,
+    expected_protocol: int = 1,
+) -> ServiceHealth:
+    if not isinstance(response, dict) or response.get("ok") is not True:
+        return ServiceHealth(ServiceHealthCode.BAD_RESPONSE)
+    version = response.get("version")
+    protocol = response.get("protocol")
+    ready = response.get("ready")
+    if (
+        not isinstance(version, str)
+        or not version
+        or not isinstance(protocol, int)
+        or isinstance(protocol, bool)
+        or not isinstance(ready, bool)
+    ):
+        return ServiceHealth(ServiceHealthCode.BAD_RESPONSE)
+    if not ready:
+        return ServiceHealth(ServiceHealthCode.NOT_READY, version, protocol)
+    if version != expected_version:
+        return ServiceHealth(ServiceHealthCode.VERSION_MISMATCH, version, protocol)
+    if protocol != expected_protocol:
+        return ServiceHealth(ServiceHealthCode.PROTOCOL_MISMATCH, version, protocol)
+    return ServiceHealth(ServiceHealthCode.HEALTHY, version, protocol)
 
 
 def required_model_paths() -> list[tuple[str, Path]]:

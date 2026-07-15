@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import urllib.error
 from email.message import Message
 
 import pytest
@@ -11,12 +12,43 @@ from face_hello.authenticode import AuthenticodeResult
 from face_hello.updater import (
     UpdateError,
     UpdateErrorCode,
+    _request_bytes,
     download_installer,
     parse_manifest,
     select_candidate,
     verify_installer,
 )
 from face_hello.version import Version
+
+
+def test_metadata_http_failure_is_remote_service_error() -> None:
+    def opener(request, timeout):
+        raise urllib.error.HTTPError(request.full_url, 503, "unavailable", {}, None)
+
+    with pytest.raises(UpdateError) as exc:
+        _request_bytes("https://api.github.com/test", 1, opener)
+
+    assert exc.value.code == UpdateErrorCode.REMOTE_SERVICE
+
+
+def test_metadata_connectivity_failure_is_network_error() -> None:
+    def opener(request, timeout):
+        raise urllib.error.URLError("offline")
+
+    with pytest.raises(UpdateError) as exc:
+        _request_bytes("https://api.github.com/test", 1, opener)
+
+    assert exc.value.code == UpdateErrorCode.NETWORK
+
+
+def test_metadata_rate_limit_is_distinct() -> None:
+    def opener(request, timeout):
+        raise urllib.error.HTTPError(request.full_url, 429, "limited", {}, None)
+
+    with pytest.raises(UpdateError) as exc:
+        _request_bytes("https://api.github.com/test", 1, opener)
+
+    assert exc.value.code == UpdateErrorCode.RATE_LIMIT
 
 
 def _manifest(payload: bytes, version: str = "1.2.3") -> bytes:

@@ -1,12 +1,32 @@
 from __future__ import annotations
 
 from face_hello.authenticode import AuthenticodeResult
-from face_hello.updater import DownloadResult, UpdateErrorCode
+from face_hello.updater import DownloadResult, UpdateError, UpdateErrorCode
 from face_hello.version import BuildInfo
 
 
 def _build_info(signers: tuple[str, ...]) -> BuildInfo:
     return BuildInfo("1.0.3", "v1.0.3", "a" * 40, "2026-07-13T00:00:00Z", signers)
+
+
+def test_update_check_preserves_specific_error_code(monkeypatch):
+    from app import workers
+
+    monkeypatch.setattr(workers, "get_current_version", lambda: None)
+    monkeypatch.setattr(
+        workers,
+        "check_latest",
+        lambda version: (_ for _ in ()).throw(
+            UpdateError(UpdateErrorCode.NETWORK, "timed out")
+        ),
+    )
+    failures = []
+    worker = workers.UpdateCheckWorker()
+    worker.failed.connect(lambda code, detail: failures.append((code, detail)))
+
+    worker.run()
+
+    assert failures == [(UpdateErrorCode.NETWORK.value, "timed out")]
 
 
 def test_installed_download_requires_signer_pin(monkeypatch, tmp_path):

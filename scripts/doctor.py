@@ -69,8 +69,9 @@ def check_camera() -> bool:
 
 
 def check_pipe() -> bool:
-    """给认证服务管道发 ping,确认 LocalSystem 服务在线。"""
+    """给认证服务管道发 ping,确认版本和协议均与当前程序一致。"""
     from face_hello import config, probes
+    from face_hello.version import display_version
 
     try:
         resp = probes.call_pipe({"cmd": "ping"})
@@ -88,11 +89,19 @@ def check_pipe() -> bool:
     except Exception as e:  # noqa: BLE001
         _print(FAIL, f"管道 ping 失败:{e}")
         return False
-    if resp.get("ok"):
+    health = probes.service_health(resp, display_version())
+    if health.healthy:
         users = resp.get("users", [])
-        _print(OK, f"服务在线:ping 通,已录入用户 {users or '（无）'}")
+        _print(OK, f"服务健康:版本 {health.version},协议 {health.protocol},已录入用户 {users or '（无）'}")
         return True
-    _print(FAIL, f"服务回应异常:{resp}")
+    if health.code == probes.ServiceHealthCode.NOT_READY:
+        _print(FAIL, "服务尚未就绪:可能仍在预热,请稍后重试")
+    elif health.code == probes.ServiceHealthCode.VERSION_MISMATCH:
+        _print(FAIL, f"服务版本不一致:当前程序 {display_version()},服务 {health.version};请修复或重新安装当前版本")
+    elif health.code == probes.ServiceHealthCode.PROTOCOL_MISMATCH:
+        _print(FAIL, f"服务协议不兼容:当前程序需要 1,服务返回 {health.protocol};请修复或重新安装当前版本")
+    else:
+        _print(FAIL, "服务响应格式异常:请重启服务,仍失败则修复或重新安装")
     return False
 
 

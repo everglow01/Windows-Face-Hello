@@ -388,15 +388,24 @@ def _wait_ready(version: str, timeout: float = 120) -> None:
     while time.monotonic() < deadline:
         try:
             response = probes.call_pipe({"cmd": "ping"})
-            if (
-                response.get("ok") is True
-                and response.get("ready") is True
-                and response.get("version") == version
-                and response.get("protocol") == 1
-            ):
+        except Exception:  # noqa: BLE001 服务预热期间管道尚不可用或响应未完成是预期状态
+            response = None
+        if response is not None:
+            health = probes.service_health(response, version)
+            if health.healthy:
                 return
-        except Exception:  # noqa: BLE001 服务预热期间连接失败是预期状态
-            pass
+            if health.code == probes.ServiceHealthCode.VERSION_MISMATCH:
+                raise RuntimeError(
+                    "FaceHello service version mismatch "
+                    f"(expected={version}, actual={health.version})"
+                )
+            if health.code == probes.ServiceHealthCode.PROTOCOL_MISMATCH:
+                raise RuntimeError(
+                    "FaceHello service protocol mismatch "
+                    f"(expected=1, actual={health.protocol})"
+                )
+            if health.code == probes.ServiceHealthCode.BAD_RESPONSE:
+                raise RuntimeError("FaceHello service returned an invalid ping response")
         status = _service_status()
         if status is None:
             raise RuntimeError("FaceHello service is not installed")

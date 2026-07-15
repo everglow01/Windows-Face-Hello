@@ -78,6 +78,70 @@ def test_pipe_error_becomes_diagnostic_item(monkeypatch) -> None:
     assert "pipe boom" in report.items[0].detail
 
 
+def test_pipe_health_reports_version_mismatch(monkeypatch) -> None:
+    monkeypatch.setattr(
+        diagnostics.probes,
+        "call_pipe",
+        lambda request: {
+            "ok": True,
+            "ready": True,
+            "version": "1.0.3",
+            "protocol": 1,
+        },
+    )
+    monkeypatch.setattr(diagnostics, "display_version", lambda: "1.0.4")
+    report = _report()
+
+    diagnostics._check_pipe(report, "en")
+
+    assert report.items[0].status == diagnostics.STATUS_FAIL
+    assert "app 1.0.4" in report.items[0].detail
+    assert "service 1.0.3" in report.items[0].detail
+    assert "repair or reinstall" in report.items[0].advice
+
+
+def test_pipe_health_reports_protocol_mismatch(monkeypatch) -> None:
+    monkeypatch.setattr(
+        diagnostics.probes,
+        "call_pipe",
+        lambda request: {
+            "ok": True,
+            "ready": True,
+            "version": "1.0.4",
+            "protocol": 2,
+        },
+    )
+    monkeypatch.setattr(diagnostics, "display_version", lambda: "1.0.4")
+    report = _report()
+
+    diagnostics._check_pipe(report, "en")
+
+    assert report.items[0].status == diagnostics.STATUS_FAIL
+    assert "expected 1" in report.items[0].detail
+    assert "service returned 2" in report.items[0].detail
+
+
+def test_pipe_health_reports_not_ready(monkeypatch) -> None:
+    monkeypatch.setattr(
+        diagnostics.probes,
+        "call_pipe",
+        lambda request: {
+            "ok": True,
+            "ready": False,
+            "version": "1.0.4",
+            "protocol": 1,
+        },
+    )
+    monkeypatch.setattr(diagnostics, "display_version", lambda: "1.0.4")
+    report = _report()
+
+    diagnostics._check_pipe(report, "en")
+
+    assert report.items[0].status == diagnostics.STATUS_FAIL
+    assert "warm-up" in report.items[0].detail
+    assert "Wait for model warm-up" in report.items[0].advice
+
+
 def test_cp_registry_error_becomes_diagnostic_item(monkeypatch, tmp_path) -> None:
     def open_key(*args, **kwargs):
         raise FileNotFoundError("missing key")

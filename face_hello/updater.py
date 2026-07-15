@@ -35,6 +35,7 @@ _CONTENT_RANGE_RE = re.compile(r"bytes (\d+)-(\d+)/(\d+)\Z")
 
 class UpdateErrorCode(str, Enum):
     NETWORK = "network"
+    REMOTE_SERVICE = "remote_service"
     RATE_LIMIT = "rate_limit"
     INVALID_RELEASE = "invalid_release"
     UNSUPPORTED_MANIFEST = "unsupported_manifest"
@@ -243,7 +244,10 @@ def _request_bytes(
                 _validate_https_url(response.geturl(), allowed_final_hosts, "metadata")
             raw = response.read(_MAX_METADATA_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        code = UpdateErrorCode.RATE_LIMIT if exc.code == 429 else UpdateErrorCode.NETWORK
+        if exc.code in (403, 429):
+            code = UpdateErrorCode.RATE_LIMIT
+        else:
+            code = UpdateErrorCode.REMOTE_SERVICE
         raise UpdateError(code, f"HTTP {exc.code}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise UpdateError(UpdateErrorCode.NETWORK, str(exc)) from exc
@@ -377,7 +381,10 @@ def _open_download(request, timeout, opener):
     except urllib.error.HTTPError as exc:
         if exc.code == 416:
             return exc
-        code = UpdateErrorCode.RATE_LIMIT if exc.code == 429 else UpdateErrorCode.NETWORK
+        if exc.code in (403, 429):
+            code = UpdateErrorCode.RATE_LIMIT
+        else:
+            code = UpdateErrorCode.REMOTE_SERVICE
         raise UpdateError(code, f"HTTP {exc.code}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise UpdateError(UpdateErrorCode.NETWORK, str(exc)) from exc
