@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QTimer, Qt
+from PySide6.QtCore import QEvent, QPoint, QSize, QTimer, Qt
 from PySide6.QtGui import QBrush, QColor, QIcon, QImage, QPainter, QPixmap, QPolygon
 from PySide6.QtWidgets import (
     QApplication,
@@ -1690,6 +1690,13 @@ def _acquire_console_mutex() -> bool:
     return True
 
 
+def _initial_window_size(window: QWidget, preferred: QSize) -> QSize:
+    window.ensurePolished()
+    if window.layout() is not None:
+        window.layout().activate()
+    return preferred.expandedTo(window.sizeHint())
+
+
 def main() -> None:
     _set_app_user_model_id()
     app = QApplication(sys.argv)
@@ -1703,7 +1710,7 @@ def main() -> None:
         return
     win = MainWindow()
     win.setMinimumSize(1040, 640)
-    win.resize(1180, 720)
+    win.resize(_initial_window_size(win, QSize(1180, 720)))
     win.show()
     sys.exit(app.exec())
 
