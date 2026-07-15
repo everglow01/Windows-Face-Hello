@@ -267,7 +267,24 @@ def _face_store_state() -> dict[str, object]:
     }
 
 
+def _face_store_baseline_state() -> dict[str, object]:
+    from face_hello import config
+
+    if not config.FACE_STORE.exists():
+        return {"present": False, "sha256": None, "size": 0, "profiles": 0}
+    state = _face_store_state()
+    return {"present": True, **state}
+
+
 def check_face_store(baseline: dict | None = None) -> bool:
+    if baseline is not None and baseline.get("face_store_present") is False:
+        from face_hello import config
+
+        if config.FACE_STORE.exists():
+            _print(FAIL, "人脸库状态与升级前基线不同")
+            return False
+        _print(OK, "升级前后均未创建人脸库")
+        return True
     try:
         state = _face_store_state()
     except Exception as exc:  # noqa: BLE001
@@ -396,12 +413,13 @@ def check_provider_safety(baseline: dict | None = None) -> bool:
 
 
 def _baseline_data() -> dict[str, object]:
-    store = _face_store_state()
+    store = _face_store_baseline_state()
     providers = _provider_state()
     if providers["facehello_filter"] or providers["provider_count"] == 0:
         raise RuntimeError("Credential Provider 当前状态不满足安全基线要求")
     return {
         "schema_version": _BASELINE_SCHEMA,
+        "face_store_present": store["present"],
         "face_store_sha256": store["sha256"],
         "face_store_size": store["size"],
         "face_store_profiles": store["profiles"],
@@ -439,7 +457,12 @@ def _load_baseline(path: Path | None) -> dict | None:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or data.get("schema_version") != _BASELINE_SCHEMA:
         raise ValueError("升级基线格式不受支持")
-    required = ("face_store_sha256", "providers_sha256", "filters_sha256")
+    present = data.get("face_store_present", True)
+    if not isinstance(present, bool):
+        raise ValueError("升级基线人脸库状态无效")
+    required = ["providers_sha256", "filters_sha256"]
+    if present:
+        required.append("face_store_sha256")
     if any(
         not isinstance(data.get(key), str)
         or len(data[key]) != 64

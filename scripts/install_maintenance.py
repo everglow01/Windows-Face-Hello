@@ -419,7 +419,30 @@ def _wait_ready(version: str, timeout: float = 120) -> None:
     raise RuntimeError("FaceHello service remained alive but did not become ready")
 
 
-def configure(service_command: str, should_start: bool) -> None:
+def _capture_acceptance_baseline(root: Path, baseline: Path) -> None:
+    _run(
+        sys.executable,
+        str(root / "doctor.py"),
+        "--capture-baseline",
+        str(baseline),
+    )
+
+
+def _run_installed_acceptance(root: Path, baseline: Path) -> None:
+    _run(
+        sys.executable,
+        str(root / "doctor.py"),
+        "--installed-acceptance",
+        "--baseline",
+        str(baseline),
+    )
+
+
+def configure(
+    service_command: str,
+    should_start: bool,
+    acceptance_baseline: Path | None = None,
+) -> None:
     root = config.INSTALL_ROOT.resolve()
     version = display_version()
     build_info = get_build_info()
@@ -437,6 +460,8 @@ def configure(service_command: str, should_start: bool) -> None:
     try:
         (root / ".installed").touch()
         _repair_runtime_acl()
+        if acceptance_baseline is not None:
+            _capture_acceptance_baseline(root, acceptance_baseline)
         added_trust = _import_signer(root, build_info.signer_sha256)
         service_configured = True
         _run(
@@ -448,10 +473,15 @@ def configure(service_command: str, should_start: bool) -> None:
         )
         new_cp_registered = True
         _register(new_cp)
-        if should_start:
+        if should_start or acceptance_baseline is not None:
             service_start_attempted = True
             _run(sys.executable, str(root / "winservice_main.py"), "start")
             _wait_ready(version)
+        if acceptance_baseline is not None:
+            _run_installed_acceptance(root, acceptance_baseline)
+            if not should_start:
+                _stop_service(root)
+            acceptance_baseline.unlink(missing_ok=True)
     except Exception:
         try:
             if service_start_attempted:
@@ -500,10 +530,15 @@ def main() -> int:
     configure_parser = sub.add_parser("configure")
     configure_parser.add_argument("--service-command", choices=("install", "update"), required=True)
     configure_parser.add_argument("--start", choices=("yes", "no"), required=True)
+    configure_parser.add_argument("--acceptance-baseline", type=Path)
     sub.add_parser("uninstall")
     args = parser.parse_args()
     if args.command == "configure":
-        configure(args.service_command, args.start == "yes")
+        configure(
+            args.service_command,
+            args.start == "yes",
+            args.acceptance_baseline,
+        )
     else:
         uninstall()
     return 0

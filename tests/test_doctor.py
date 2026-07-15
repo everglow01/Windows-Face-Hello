@@ -196,6 +196,7 @@ def test_capture_baseline_contains_only_safe_fields(
         "_baseline_data",
         lambda: {
             "schema_version": 1,
+            "face_store_present": True,
             "face_store_sha256": "a" * 64,
             "face_store_size": 123,
             "face_store_profiles": 2,
@@ -210,6 +211,7 @@ def test_capture_baseline_contains_only_safe_fields(
     data = json.loads(path.read_text(encoding="utf-8"))
     assert set(data) == {
         "schema_version",
+        "face_store_present",
         "face_store_sha256",
         "face_store_size",
         "face_store_profiles",
@@ -222,6 +224,26 @@ def test_capture_baseline_contains_only_safe_fields(
     assert "password" not in serialized.casefold()
     assert "embedding" not in serialized.casefold()
     assert "username" not in serialized.casefold()
+
+
+def test_capture_baseline_allows_missing_face_store(
+    monkeypatch, installed_config, tmp_path
+):
+    path = tmp_path / "baseline.json"
+    provider_state = {
+        "providers_sha256": "b" * 64,
+        "provider_count": 4,
+        "filters_sha256": "c" * 64,
+        "filter_count": 1,
+        "facehello_filter": False,
+    }
+    monkeypatch.setattr(doctor, "_provider_state", lambda: provider_state)
+
+    assert doctor.capture_baseline(path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["face_store_present"] is False
+    assert data["face_store_sha256"] is None
+    assert doctor._load_baseline(path) == data
 
 
 def test_run_installed_acceptance_requires_admin(monkeypatch):

@@ -137,6 +137,7 @@ var
   ServiceWasRunning: Boolean;
   ParentPID: Cardinal;
   BackupDir: String;
+  BaselinePath: String;
 
 function BackupExistingInstall(): Boolean;
 var
@@ -282,6 +283,12 @@ begin
   Result := False;
 end;
 
+procedure PrepareAcceptanceBaseline();
+begin
+  BaselinePath := ExpandConstant('{commonappdata}\FaceHello\doctor-baseline.json');
+  DeleteFile(BaselinePath);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
@@ -325,14 +332,16 @@ begin
   Result := SaveStringToFile(ExpandConstant('{app}\.installed'), '', False);
   if not Result then
     exit;
+  PrepareAcceptanceBaseline();
   if ShouldStartService() then
     StartValue := 'yes'
   else
     StartValue := 'no';
   Result := Exec(ExpandConstant('{#PyExe}'),
     'install_maintenance.py configure --service-command ' + ServiceInstallCommand('') +
-    ' --start ' + StartValue, ExpandConstant('{app}'), SW_HIDE,
-    ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+    ' --start ' + StartValue + ' --acceptance-baseline "' + BaselinePath + '"',
+    ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) and
+    (ResultCode = 0);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -359,12 +368,12 @@ begin
     end;
     if Restored and RecoveryReady then begin
       DelTree(BackupDir, True, True, True);
-      RaiseException('FaceHello 服务或锁屏组件配置失败，已恢复并验证上一版本；人脸数据和系统密码/PIN 未被删除。');
+      RaiseException('FaceHello 自动验收或安装配置失败，已恢复并验证上一版本；验收基线保留在 ' + BaselinePath + '；人脸数据和系统密码/PIN 未被删除。');
     end
     else if ServiceExisted then
-      RaiseException('FaceHello 服务或锁屏组件配置失败，未能确认上一版本已恢复。恢复备份保留在 ' + BackupDir + '；人脸数据和系统密码/PIN 未被删除。')
+      RaiseException('FaceHello 自动验收或安装配置失败，未能确认上一版本已恢复。恢复备份保留在 ' + BackupDir + '，验收基线保留在 ' + BaselinePath + '；人脸数据和系统密码/PIN 未被删除。')
     else
-      RaiseException('FaceHello 服务或锁屏组件配置失败。安装未完成；人脸数据和系统密码/PIN 未被删除。');
+      RaiseException('FaceHello 自动验收或安装配置失败。安装未完成；验收基线保留在 ' + BaselinePath + '；人脸数据和系统密码/PIN 未被删除。');
   end;
   if (CurStep = ssDone) and (BackupDir <> '') then
     DelTree(BackupDir, True, True, True);

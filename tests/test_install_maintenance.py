@@ -304,6 +304,104 @@ def test_configure_acl_failure_does_not_touch_service_or_cp(tmp_path, monkeypatc
     assert cp_calls == []
 
 
+def test_configure_runs_acceptance_after_ready(tmp_path, monkeypatch):
+    root, _old_cp, _new_cp = _configure_fixture(tmp_path, monkeypatch)
+    baseline = tmp_path / "doctor-baseline.json"
+    events = []
+    monkeypatch.setattr(
+        install_maintenance,
+        "_capture_acceptance_baseline",
+        lambda actual_root, actual_baseline: events.append(
+            ("capture", actual_root, actual_baseline)
+        ),
+    )
+    monkeypatch.setattr(
+        install_maintenance,
+        "_run_installed_acceptance",
+        lambda actual_root, actual_baseline: events.append(
+            ("accept", actual_root, actual_baseline)
+        ),
+    )
+    monkeypatch.setattr(
+        install_maintenance,
+        "_wait_ready",
+        lambda version: events.append(("ready", version)),
+    )
+    monkeypatch.setattr(install_maintenance, "_register", lambda path: None)
+    monkeypatch.setattr(install_maintenance, "_run", lambda *args: None)
+
+    baseline.write_text("baseline", encoding="utf-8")
+    install_maintenance.configure("update", True, baseline)
+
+    assert events == [
+        ("capture", root, baseline),
+        ("ready", "1.1.0"),
+        ("accept", root, baseline),
+    ]
+    assert not baseline.exists()
+
+
+def test_configure_temporarily_starts_service_for_acceptance(tmp_path, monkeypatch):
+    root, _old_cp, _new_cp = _configure_fixture(tmp_path, monkeypatch)
+    baseline = tmp_path / "doctor-baseline.json"
+    run_calls = []
+    stopped = []
+    monkeypatch.setattr(
+        install_maintenance, "_capture_acceptance_baseline", lambda root, path: None
+    )
+    monkeypatch.setattr(
+        install_maintenance, "_run_installed_acceptance", lambda root, path: None
+    )
+    monkeypatch.setattr(install_maintenance, "_wait_ready", lambda version: None)
+    monkeypatch.setattr(install_maintenance, "_register", lambda path: None)
+    monkeypatch.setattr(
+        install_maintenance, "_run", lambda *args: run_calls.append(args)
+    )
+    monkeypatch.setattr(
+        install_maintenance, "_stop_service", lambda actual_root: stopped.append(actual_root)
+    )
+
+    install_maintenance.configure("update", False, baseline)
+
+    service_actions = [call[-1] for call in run_calls if "winservice_main.py" in call[1]]
+    assert service_actions == ["update", "start"]
+    assert stopped == [root]
+
+
+def test_acceptance_failure_uses_existing_cleanup(tmp_path, monkeypatch):
+    root, old_cp, new_cp = _configure_fixture(tmp_path, monkeypatch, old_cp=True)
+    baseline = tmp_path / "doctor-baseline.json"
+    cp_calls = []
+    stopped = []
+    monkeypatch.setattr(
+        install_maintenance, "_capture_acceptance_baseline", lambda root, path: None
+    )
+    monkeypatch.setattr(install_maintenance, "_wait_ready", lambda version: None)
+    monkeypatch.setattr(
+        install_maintenance,
+        "_run_installed_acceptance",
+        lambda root, path: (_ for _ in ()).throw(RuntimeError("acceptance failed")),
+    )
+    monkeypatch.setattr(
+        install_maintenance, "_register", lambda path: cp_calls.append(("reg", path))
+    )
+    monkeypatch.setattr(
+        install_maintenance, "_unregister", lambda path: cp_calls.append(("unreg", path))
+    )
+    monkeypatch.setattr(install_maintenance, "_run", lambda *args: None)
+    monkeypatch.setattr(
+        install_maintenance, "_stop_service", lambda actual_root: stopped.append(actual_root)
+    )
+
+    baseline.write_text("baseline", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="acceptance failed"):
+        install_maintenance.configure("update", True, baseline)
+
+    assert baseline.exists()
+    assert stopped == [root]
+    assert cp_calls == [("reg", new_cp), ("unreg", new_cp), ("reg", old_cp)]
+
+
 def test_configure_failure_restores_cp_without_restarting_old_service(
     tmp_path, monkeypatch
 ):
