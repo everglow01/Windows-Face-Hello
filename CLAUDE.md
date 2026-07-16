@@ -13,6 +13,8 @@ uvx --from ruff==0.15.21 ruff check app face_hello scripts tests winservice_main
 uv run python -m compileall face_hello app scripts winservice_main.py  # 语法/字节编译检查
 uv run python scripts/offline_check.py       # 离线自检(不需摄像头/显示器)——改完核心库先跑这个
 uv run python scripts/doctor.py              # 实机自检(摄像头取帧+模型加载+服务管道 ping);管道项需管理员终端
+uv run python scripts/doctor.py --capture-baseline <path>  # 安装/升级前安全基线(安装态、管理员)
+uv run python scripts/doctor.py --installed-acceptance --baseline <path>  # 安装态完整验收
 uv run --group test pytest -q                # 跑全部单测
 uv run --group test pytest tests/test_auth_recognize.py::test_match_success -q  # 跑单个测试
 uv run python -m app.main                     # 启动 PySide6 管理台 GUI
@@ -37,7 +39,8 @@ C++ Credential Provider(VS2022 + “使用 C++ 的桌面开发”;**用 PowerShe
 # 产物 cp\x64\Release\FaceHelloCP.dll;改 Python 不必重编 DLL,二者只靠命名管道协议耦合。
 ```
 
-- pytest 现覆盖匹配/锁定、认证与反欺骗门、录入、多模板持久化、诊断/i18n、摄像头互斥和 tracker 复用等纯逻辑路径；改核心库后跑 `uv run --group test pytest -q`。`scripts/offline_check.py` 是断言式冒烟自检：验证 matcher、DPAPI 加密往返、FaceMesh、InsightFace 加载；两者均应通过。
+- pytest 现覆盖匹配/锁定、认证与反欺骗门、录入、多模板持久化、诊断/i18n、摄像头互斥、tracker 复用和安装态验收等纯逻辑路径；改核心库后跑 `uv run --group test pytest -q`。`scripts/offline_check.py` 是断言式冒烟自检：验证 matcher、DPAPI 加密往返、FaceMesh、InsightFace 加载；两者均应通过。
+- `doctor.py` 默认做实机健康检查；安装态还提供 `--capture-baseline` 与 `--installed-acceptance --baseline`。正式安装器会自动执行这两步：修复 ProgramData ACL 后、改服务/CP 前保存仅含哈希/大小/计数的基线，服务与当前版本 CP 就绪后验收版本、SCM、管道、CP DLL、`service.log`、人脸库和系统密码/PIN Provider。成功删除临时基线；失败保留基线并进入安装器回滚。基线绝不能加入用户名、人脸特征、密码或 LSA Secret。
 - 首次运行自动下载模型到 `models/`:InsightFace `buffalo_l`(~191MB,已剪枝)、MediaPipe `face_landmarker.task`(~3.7MB)。`data/`(加密人脸库)和 `models/` 均 gitignored。
 - `cred_vault` 的写/删需**管理员**终端;读需 **SYSTEM**(`psexec -s` 模拟,见 `cred_vault_cli.py` 顶部注释)。服务跑起来后排错看 `data/service.log`(服务无控制台,stdout/stderr 都落这)。
 - PowerShell 里 `sc` 是 `Set-Content` 的别名,查/控服务务必用 `sc.exe`。
@@ -59,6 +62,8 @@ C++ Credential Provider(VS2022 + “使用 C++ 的桌面开发”;**用 PowerShe
 - `cred_vault.py` — 阶段 5 用:把登录密码存进 LSA Secret(键 `L$FaceHello_<user>`,UTF-16LE)。密码**永不经过 IPC**,由 CP 自己在 SYSTEM 上下文读。`current_user()` 从 `platform_backend` re-export(Windows=`GetUserName()`)。
 - `service.py` — 命名管道(`\\.\pipe\FaceHello`)服务端,**单实例串行**(`nMaxInstances=1`),JSON 消息模式。同步命令 `ping`/`authenticate`(`authenticate` 绕过失败锁定,故**仅开发态可用、安装态禁用**);里程碑 d 加的异步对:`auth_start`(后台线程跑一次认证,立即返回)+ `auth_poll`(取实时活体提示与最终结果),让锁屏能边识别边刷提示。响应只回 `{ok, user, similarity}`,不回密码。
 - `win_service.py` + 仓库根 `winservice_main.py` — 把 `serve()` 封成 LocalSystem Windows 服务(开机自启,锁定/睡眠唤醒都常驻)。服务 ImagePath 用 venv 的 python 直接跑 `winservice_main.py` 引导脚本(把根目录加进 `sys.path`),**不用**默认 `PythonService.exe`——后者在 SCM 上下文 import 不到 `face_hello`(`package=false`,没装进 venv)。
+- `probes.py` — SCM / 管道 / 模型 / 摄像头探针。`service_health()` 是安装维护、GUI 诊断和 doctor 共用的服务健康契约，状态为 `healthy` / `not_ready` / `version_mismatch` / `protocol_mismatch` / `bad_response`；不要在入口各自复制判断。
+- `updater.py` — 应用内更新检查、manifest 和下载校验。错误类型由 UI 映射成具体提示(已是最新、本地网络、GitHub 远端 / 限流、manifest、磁盘、响应、哈希 / 签名、暂停下载)，不要重新合并成泛化的「当前无法安装」。
 
 **`cp/` C++ Credential Provider**(COM in-proc DLL,锁屏「Face Unlock」磁贴;CLSID `{E071A7CE-5D7F-4063-9A10-AE39AEC64EE8}`):
 - `CFaceProvider.{h,cpp}` — `ICredentialProvider`,枚举出 1 个磁贴。`SignalAutoLogon()` 由扫描线程在识别通过后调用 → 置标志 + `CredentialsChanged` → `GetCredentialCount` 回 `pbAutoLogonWithDefault=TRUE` 让 LogonUI 自动提交。
@@ -67,7 +72,7 @@ C++ Credential Provider(VS2022 + “使用 C++ 的桌面开发”;**用 PowerShe
 - 绝不替换/过滤系统密码/PIN 提供程序;只在打了快照的 VM 里 `regsvr32` 注册测试。详见 `cp/README.md`。
 
 **`app/` PySide6 管理台**(页面:录入 / 测试解锁 / 服务、凭据与诊断 / 设置):
-- `main.py` — UI;`FaceDetector` 和 `FaceStore` 在 `MainWindow` 创建一次后注入各页共享。录入页用户名预填 `cred_vault.current_user()`;服务页设 LSA 密码 + 一键装/起/停/删服务(均经 `winservice_main.py`)并提供诊断;设置页有「启用活体检测」开关(`liveness_enabled`)和刷脸启动热键。
+- `main.py` — UI;`FaceDetector` 和 `FaceStore` 在 `MainWindow` 创建一次后注入各页共享。首次显示会先 polish/激活布局并按 `sizeHint()` 扩大窗口，避免文字在用户拖动窗口前被裁切。录入页用户名预填 `cred_vault.current_user()`;服务页设 LSA 密码 + 一键装/起/停/删服务(均经 `winservice_main.py`)并提供诊断;设置页有「启用活体检测」开关(`liveness_enabled`)和刷脸启动热键。
 - `workers.py` — 所有摄像头 + 推理放 `QThread`(`WarmupWorker`/`EnrollWorker`/`AuthWorker`),Signal 回主线程更新 UI,避免卡死。
 
 数据流(锁屏解锁):CP 磁贴选中 → 用户按「→」或配置热键 → 服务 `auth_start` 起后台线程 → `AuthSession.feed()` 逐帧先跑 `liveness`(活体关则跳过),通过后 `detector` 提特征 → `matcher.best_match` 比对 gallery → `AuthResult` → CP `auth_poll` 拿到 user → 读 LSA → KERB 解锁。

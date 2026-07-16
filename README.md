@@ -53,10 +53,12 @@ Extraction Code: afnw
 Regular users don't need Python / uv — just grab the installer from the Release page:
 
 1. Download the latest `FaceHello-Setup-x.y.z.exe` from [Releases](https://github.com/everglow01/Windows-Face-Hello/releases).
-2. Right-click **Run as administrator** and follow the Chinese wizard, next-next-next. The installer automatically registers and starts the background auth service, registers the lock-screen Credential Provider, and creates the data directory.
+2. Right-click **Run as administrator** and complete the wizard. The installer registers the background authentication service and lock-screen Credential Provider, then creates the data directory. Before finishing, it also checks the service, pipe, current-version DLL, log, and face gallery; a failed acceptance check does not silently complete the install.
 3. Once installed, open the "FaceHello Console" from the Start menu or desktop (use admin privileges the first time), enroll your face, set your sign-in password, and you can unlock by face at the lock screen.
 
-> The recognition models are all bundled in the installer — no network download during install.
+> The recognition models are all bundled in the installer, so installation does not download them.
+>
+> Later releases can be installed through the console's update check. Downloads can resume after interruption, and FaceHello rechecks the release metadata, SHA-256, and signature before launching the installer. Upgrades preserve the face gallery and compare the relevant data and Windows sign-in components before and after the upgrade. If configuration or acceptance fails, the installer attempts to restore the previous version. Installation is never silent and never restarts Windows automatically.
 
 **Uninstall**: uninstall via Windows "Settings → Apps" or "Uninstall FaceHello" in the Start menu. The uninstall removes both the program and all local data, leaving no leftover files behind.
 
@@ -86,7 +88,7 @@ For detailed developer docs and a contribution guide, see [contribute.md](./cont
 
 ## 🖥️ Using the Console
 
-Launch the installed app with admin privileges to enter the console desktop app. The frameless window can be resized from any edge or corner, and camera previews keep their aspect ratio as the window changes:
+Launch the installed app with admin privileges to enter the console desktop app. On first show, the window expands to fit its content; you can still resize it from any edge or corner, and camera previews keep their aspect ratio as the window changes:
 
 ![GUI](README_image/GUI.png)
 
@@ -96,7 +98,7 @@ Launch the installed app with admin privileges to enter the console desktop app.
    > 💡 **Tip: enroll more than one template per user.** After the first "Start enrolling", change the **angle, lighting, makeup / hairstyle, glasses on/off**, etc., and click **"Add angle"** to append another template (one username can hold several; unlock automatically takes the most similar one). Enrolling **2+ templates** noticeably improves the unlock success rate across scenarios and reduces occasional misses. The per-user cap is adjustable on the Settings tab.
 2. **Test unlock** — follow the random liveness prompt (blink N times / turn left / turn right), then recognition runs and shows the similarity and result.
 3. **Settings** — pick the camera (with a **Test** button that previews the selected one, handy on multi-camera machines); tune the match threshold, turn angle, blink count, and recommended re-enrollment interval; toggle **liveness** and **passive anti-spoofing**. Reaching that date only shows a reminder—the template still works for authentication.
-4. **Service & credentials** — set the sign-in password used for lock-screen unlock (written to an LSA Secret) and install / start / stop the auth service in one click. **Requires Administrator**, otherwise the relevant buttons are disabled.
+4. **Service, credentials & diagnostics** — set the sign-in password used for lock-screen unlock (written to an LSA Secret), install / start / stop the authentication service, and check its version, pipe protocol, and runtime state. **Requires Administrator**, otherwise the relevant buttons are disabled.
 
 *Some stutter on the first enrollment and test is normal.*
 
@@ -213,7 +215,7 @@ A: 1. Some USB or built-in laptop cameras *aren't powered* on the lock screen, s
 
 **Q: The lock screen shows "service not started" and face unlock doesn't work.**      
 
-A: Enter the console with admin privileges and check the service status under "Service & credentials." If it's not running, click the start button. If the status is "Running," please file an issue with your machine's environment so we can investigate further.
+A: Open the console as Administrator and check the service on the "Service, credentials & diagnostics" page. Start it if it is stopped. If it says "Running" but the lock screen still fails, run the diagnostics on that page first. They distinguish a service that is not ready from a version mismatch, incompatible protocol, or malformed response. When filing an issue, include the diagnostic result and machine details, but never upload a password, LSA Secret, or face-gallery file.
 
 **Q: Why is my face recognition unstable at the lock screen — Face Hello takes a long time to start and finally fails, yet sometimes it works fine?**     
 
@@ -222,6 +224,14 @@ A: This is indeed a current bug. We've fixed and optimized the slow-start / some
 **Q: Why can't I use Face Hello after restarting my computer following a Windows update?**      
 
 A: This is normal. Windows updates typically refresh Windows services, which may cause the Face Hello service to hang. After unlocking the system with your password, the service will resume the next time you lock the screen. You don't need to run the service again in the console.
+
+**Q: Why does the update check show different failure messages?**
+
+A: The console distinguishes an already-current installation from a local network failure, a temporary GitHub error or rate limit, invalid release metadata, an unsupported update manifest, insufficient disk space, an invalid download response, a failed installer hash / signature check, and a paused download. Follow the specific message; an installer that fails verification will not run.
+
+**Q: Will an upgrade erase enrolled faces?**
+
+A: A normal upgrade preserves the gallery under `C:\ProgramData\FaceHello\data`. Before changing the service or lock-screen component, the installer writes a temporary baseline containing only hashes and counts, then compares it after the upgrade. It contains no usernames, face embeddings, Windows passwords, or LSA Secrets. The baseline is deleted after successful acceptance; on failure it is retained while the installer attempts to restore the previous version.
 
 ## 📝 TODO
 

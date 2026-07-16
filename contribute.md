@@ -70,7 +70,7 @@ More test coverage is welcome — open an issue or PR to discuss.
 
 - `app/` — the PySide6 console. `main.py` is the UI, settings, diagnostics, and enrollment/test flows; `workers.py` pushes all camera + inference work into `QThread`s, with signals back to the main thread to update the UI, avoiding freezes.
 - `cp/` — the C++ Credential Provider (in-proc COM DLL). `CFaceProvider` (enumerates the tile), `CFaceCredential` (starts scanning from "→" or the configured hotkey, 3-attempt retry then password fallback + submits the credential), `PipeClient` (pipe client). See [cp/README.md](./cp/README.md).
-- `scripts/` — `offline_check.py` (self-check), `doctor.py` (on-machine health check: camera frame + model load + service pipe ping), `liveness_tune.py` (calibrate liveness thresholds), `auth_client.py` (simulate the CP calling the service), `cred_vault_cli.py` (LSA read/write test), `build_release.py` (build the portable package).
+- `scripts/` — `offline_check.py` (assertive offline self-check), `doctor.py` (hardware health check by default; safe baseline capture and full deployment acceptance in installed mode), `liveness_tune.py` (calibrate liveness thresholds), `auth_client.py` (simulate the CP calling the service), `cred_vault_cli.py` (LSA read/write test), `build_release.py` (build the portable package). The release installer invokes the baseline and acceptance modes from inside its maintenance transaction.
 - `winservice_main.py` / `uninstall_cleanup.py` — bootstrap scripts at the repo root (service host, uninstall cleanup).
 - `installer/` — the Inno Setup script + Chinese language file, builds setup.exe.
 - `.github/workflows/` — `ci.yml` (build sanity check on every push), `release.yml` (release on git tag push).
@@ -82,7 +82,10 @@ More test coverage is welcome — open an issue or PR to discuss.
 ```powershell
 uv sync                                                   # install deps
 uv run python scripts/offline_check.py                    # offline self-check (run after touching the core lib)
-uv run --group test pytest -q                             # security-logic unit tests (lockout / margin / anti-spoof gate / authenticate gating)
+uv run python scripts/doctor.py                           # hardware check (models, camera, service pipe)
+uv run python scripts/doctor.py --capture-baseline <path> # installed-state baseline (Administrator)
+uv run python scripts/doctor.py --installed-acceptance --baseline <path>  # full installed-state acceptance
+uv run --group test pytest -q                             # security and installer-logic tests
 uv run python -m app.main                                 # console GUI
 uv run python -m scripts.liveness_tune                    # calibrate liveness thresholds (live EAR/yaw, prints suggestions on exit)
 uv run python -m face_hello.service                       # run the named-pipe service in the foreground (for debugging)
@@ -170,7 +173,7 @@ The working directory often contains Chinese, and two C++ backend libraries can'
 Not a PyInstaller freeze, but a standalone CPython + distribution deps (the `dist` group, with PySide6 swapped for the slimmer `-Essentials`) + source copied as-is. Output defaults to `%LOCALAPPDATA%\FaceHello-build\FaceHello`; verify it runs free of uv with `pythonw.exe -m app.main`.
 
 ### Installer (`installer/FaceHello.iss`)
-Inno Setup packs the portable build into a single `setup.exe`: Chinese wizard, auto register / start the service + register the CP, one-click clean uninstall (stop/remove service, unregister CP, wipe LSA password + gallery). The `.iss` / `.isl` are **UTF-8 with BOM**, otherwise they're read as ANSI/GBK on Chinese Windows → mojibake.
+Inno Setup packs the portable build into one `setup.exe`: Chinese wizard, automatic service and CP registration, and a clean one-click uninstall (stop/remove service, unregister CP, wipe the LSA password + gallery). `install_maintenance.py` runs setup finalization as one transaction: repair ProgramData ACLs → ask `doctor.py` for a safe baseline → configure the service and current-version CP → wait for the expected pipe version / protocol → run full installed-state acceptance. Success deletes the baseline; failure retains it and lets Inno restore the previous payload. If the service was stopped before an upgrade, it is started only for acceptance and stopped again afterward. The `.iss` / `.isl` are **UTF-8 with BOM**, otherwise they're read as ANSI/GBK on Chinese Windows → mojibake.
 
 ### CI / CD
 - `ci.yml` — the "gatekeeper" on every push.
