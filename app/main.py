@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPoint, QSize, QTimer, Qt
-from PySide6.QtGui import QBrush, QColor, QIcon, QImage, QPainter, QPixmap, QPolygon
+from PySide6.QtGui import QBrush, QColor, QIcon, QImage, QPainter, QPen, QPixmap, QPolygon
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -191,7 +191,34 @@ QHeaderView::section {
 QTableCornerButton::section { background: #FAFAFA; border: none; }
 
 QCheckBox { spacing: 8px; }
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    background: #FFFDF9;
+    border: 1px solid #8E887F;
+    border-radius: 3px;
+}
+QCheckBox::indicator:hover { border-color: #6F2F20; }
+QCheckBox::indicator:checked {
+    background: #8A4B20;
+    border-color: #8A4B20;
+    image: url("__CHECKBOX_CHECK__");
+}
+QCheckBox::indicator:disabled {
+    background: #EEEAE3;
+    border-color: #C9C2B8;
+}
 
+QLabel#pageTitle {
+    font-size: 20px;
+    font-weight: 700;
+    color: #1D1B16;
+}
+QLabel#sectionTitle {
+    font-size: 16px;
+    font-weight: 600;
+    color: #514D46;
+}
 QLabel#h2 {
     font-size: 15px;
     font-weight: 600;
@@ -392,6 +419,21 @@ def _make_combo_arrow(path: str) -> None:
     pm.save(path, "PNG")
 
 
+def _make_checkbox_check(path: str) -> None:
+    pm = QPixmap(12, 12)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor("#FFFFFF"), 2)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    p.drawLine(2, 6, 5, 9)
+    p.drawLine(5, 9, 10, 3)
+    p.end()
+    pm.save(path, "PNG")
+
+
 def _themed_qss() -> str:
     """生成箭头图标到临时目录(纯 ASCII 路径),把其路径填进 QSS。"""
     import os
@@ -401,14 +443,17 @@ def _themed_qss() -> str:
     up = os.path.join(tmp, "facehello_spin_up.png").replace("\\", "/")
     down = os.path.join(tmp, "facehello_spin_down.png").replace("\\", "/")
     combo = os.path.join(tmp, "facehello_combo_down.png").replace("\\", "/")
+    check = os.path.join(tmp, "facehello_checkbox_check.png").replace("\\", "/")
     _make_arrow(up, True)
     _make_arrow(down, False)
     _make_combo_arrow(combo)
+    _make_checkbox_check(check)
     return (
         FLUENT_QSS
         .replace("__UP_ARROW__", up)
         .replace("__DOWN_ARROW__", down)
         .replace("__COMBO_ARROW__", combo)
+        .replace("__CHECKBOX_CHECK__", check)
     )
 
 
@@ -902,36 +947,20 @@ class SettingsTab(QWidget):
         save_btn.clicked.connect(self._save)
 
         params_title = QLabel(tr("params_security"))
-        params_title.setObjectName("h2")
+        params_title.setObjectName("pageTitle")
+        common_title = QLabel(tr("settings_common_title"))
+        common_title.setObjectName("sectionTitle")
+        common_help = QLabel(tr("settings_common_help"))
+        common_help.setObjectName("hint")
+        common_help.setWordWrap(True)
 
-        # 两列网格:每组一个小标题横跨整行,组内左右各一对「标签 + 控件」
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(16)
-        grid.setVerticalSpacing(8)
-        grid.setColumnStretch(4, 1)  # 末列吃掉富余宽度,内容靠左不散开
-        r = 0
-        grid.addWidget(self.liveness_check, r, 0, 1, 4)
-        r += 1
-        grid.addWidget(self.antispoof_check, r, 0, 1, 4)
-        r += 1
-
-        def group(title_key: str) -> None:
-            nonlocal r
-            h = QLabel(tr(title_key))
-            h.setStyleSheet("color:#666;font-weight:600;margin-top:6px;")
-            grid.addWidget(h, r, 0, 1, 4)
-            r += 1
-
-        def pair(l1: str, w1, l2: str, w2) -> None:
-            nonlocal r
-            grid.addWidget(QLabel(tr(l1)), r, 0)
-            grid.addWidget(w1, r, 1)
-            grid.addWidget(QLabel(tr(l2)), r, 2)
-            grid.addWidget(w2, r, 3)
-            r += 1
-
-        group("grp_camera")
-        grid.addWidget(QLabel(tr("camera_index_label")), r, 0)
+        common_grid = QGridLayout()
+        common_grid.setHorizontalSpacing(16)
+        common_grid.setVerticalSpacing(8)
+        common_grid.setColumnStretch(2, 1)
+        common_grid.addWidget(self.liveness_check, 0, 0, 1, 3)
+        common_grid.addWidget(self.antispoof_check, 1, 0, 1, 3)
+        common_grid.addWidget(QLabel(tr("camera_index_label")), 2, 0)
         cam_row = QHBoxLayout()
         cam_row.setContentsMargins(0, 0, 0, 0)
         cam_row.setSpacing(8)
@@ -940,9 +969,8 @@ class SettingsTab(QWidget):
         cam_row.addStretch(1)
         cam_w = QWidget()
         cam_w.setLayout(cam_row)
-        grid.addWidget(cam_w, r, 1, 1, 3)
-        r += 1
-        grid.addWidget(QLabel(tr("unlock_hotkey_label")), r, 0)
+        common_grid.addWidget(cam_w, 2, 1, 1, 2)
+        common_grid.addWidget(QLabel(tr("unlock_hotkey_label")), 3, 0)
         hotkey_row = QHBoxLayout()
         hotkey_row.setContentsMargins(0, 0, 0, 0)
         hotkey_row.setSpacing(8)
@@ -952,8 +980,37 @@ class SettingsTab(QWidget):
         hotkey_row.addStretch(1)
         hotkey_w = QWidget()
         hotkey_w.setLayout(hotkey_row)
-        grid.addWidget(hotkey_w, r, 1, 1, 3)
-        r += 1
+        common_grid.addWidget(hotkey_w, 3, 1, 1, 2)
+
+        self.advanced_params_btn = QPushButton(tr("advanced_params_show"))
+        self.advanced_params_btn.setCheckable(True)
+        self.advanced_params_btn.setChecked(False)
+        self.advanced_params_btn.clicked.connect(self._toggle_advanced_params)
+        advanced_help = QLabel(tr("advanced_params_help"))
+        advanced_help.setObjectName("hint")
+        advanced_help.setWordWrap(True)
+
+        advanced_grid = QGridLayout()
+        advanced_grid.setHorizontalSpacing(16)
+        advanced_grid.setVerticalSpacing(8)
+        advanced_grid.setColumnStretch(4, 1)
+        r = 0
+
+        def group(title_key: str) -> None:
+            nonlocal r
+            h = QLabel(tr(title_key))
+            h.setStyleSheet("color:#666;font-weight:600;margin-top:6px;")
+            advanced_grid.addWidget(h, r, 0, 1, 4)
+            r += 1
+
+        def pair(l1: str, w1, l2: str, w2) -> None:
+            nonlocal r
+            advanced_grid.addWidget(QLabel(tr(l1)), r, 0)
+            advanced_grid.addWidget(w1, r, 1)
+            advanced_grid.addWidget(QLabel(tr(l2)), r, 2)
+            advanced_grid.addWidget(w2, r, 3)
+            r += 1
+
         group("grp_recognition")
         pair("match_threshold_label", self.match_spin, "match_margin_label", self.margin_spin)
         group("grp_liveness")
@@ -962,9 +1019,16 @@ class SettingsTab(QWidget):
         pair("lockout_fails_label", self.lockout_fails_spin, "lockout_secs_label", self.lockout_secs_spin)
         group("grp_enroll")
         pair("renewal_interval_label", self.renewal_spin, "samples_label", self.samples_spin)
-        grid.addWidget(QLabel(tr("max_templates_label")), r, 0)
-        grid.addWidget(self.max_templates_spin, r, 1)
-        r += 1
+        advanced_grid.addWidget(QLabel(tr("max_templates_label")), r, 0)
+        advanced_grid.addWidget(self.max_templates_spin, r, 1)
+
+        self.advanced_params_panel = QWidget()
+        advanced_layout = QVBoxLayout(self.advanced_params_panel)
+        advanced_layout.setContentsMargins(0, 4, 0, 0)
+        advanced_layout.setSpacing(6)
+        advanced_layout.addWidget(advanced_help)
+        advanced_layout.addLayout(advanced_grid)
+        self.advanced_params_panel.hide()
 
         panel = QWidget()
         panel.setMaximumWidth(920)
@@ -973,8 +1037,15 @@ class SettingsTab(QWidget):
         panel_layout.setContentsMargins(0, 0, 0, 0)
         panel_layout.setSpacing(10)
         panel_layout.addWidget(params_title)
-        panel_layout.addLayout(grid)
-        panel_layout.addWidget(save_btn, alignment=Qt.AlignLeft)
+        panel_layout.addWidget(common_title)
+        panel_layout.addWidget(common_help)
+        panel_layout.addLayout(common_grid)
+        panel_layout.addWidget(
+            self.advanced_params_btn,
+            alignment=Qt.AlignmentFlag.AlignLeft,
+        )
+        panel_layout.addWidget(self.advanced_params_panel)
+        panel_layout.addWidget(save_btn, alignment=Qt.AlignmentFlag.AlignLeft)
 
         update_title = QLabel(tr("update_title"))
         update_title.setObjectName("h2")
@@ -1015,6 +1086,11 @@ class SettingsTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(_scrollable_page(content))
+
+    def _toggle_advanced_params(self, checked: bool) -> None:
+        self.advanced_params_panel.setVisible(checked)
+        key = "advanced_params_hide" if checked else "advanced_params_show"
+        self.advanced_params_btn.setText(tr(key))
 
     @staticmethod
     def _dspin(lo, hi, step, val) -> QDoubleSpinBox:
