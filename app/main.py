@@ -1265,7 +1265,7 @@ class ServiceTab(QWidget):
         self.diag_copy_btn = QPushButton(tr("diag_copy"))
         self.diag_copy_btn.setEnabled(False)
         self.diag_copy_btn.clicked.connect(self._copy_diagnostics)
-        self.diag_summary = QLabel(tr("diag_idle"))
+        self.diag_summary = QLabel(tr("readiness_pending"))
         self.diag_summary.setObjectName("hint")
         self.diag_table = QTableWidget(0, 4)
         self.diag_table.setHorizontalHeaderLabels(
@@ -1285,15 +1285,52 @@ class ServiceTab(QWidget):
 
         account_lbl = QLabel(tr("current_account", user=self.user))
         account_lbl.setObjectName("hint")
-        step1 = QLabel(tr("step1"))
-        step1.setObjectName("h2")
-        step1.setWordWrap(True)
-        step2 = QLabel(tr("step2"))
-        step2.setObjectName("h2")
-        step2.setWordWrap(True)
-        step3 = QLabel(tr("step3"))
-        step3.setObjectName("h2")
-        step3.setWordWrap(True)
+
+        readiness_title = QLabel(tr("readiness_title"))
+        readiness_title.setObjectName("h2")
+        self.diag_summary.setText(tr("readiness_pending"))
+        self.diag_summary.setWordWrap(True)
+
+        unlock_title = QLabel(tr("unlock_config_title"))
+        unlock_title.setObjectName("h2")
+        unlock_help = QLabel(tr("unlock_config_help"))
+        unlock_help.setObjectName("hint")
+        unlock_help.setWordWrap(True)
+
+        diag_title = QLabel(tr("diag_title"))
+        diag_title.setObjectName("h2")
+
+        self.advanced_btn = QPushButton(tr("advanced_show"))
+        self.advanced_btn.setCheckable(True)
+        self.advanced_btn.setChecked(False)
+        self.advanced_btn.clicked.connect(self._toggle_advanced)
+        advanced_help = QLabel(tr("advanced_help"))
+        advanced_help.setObjectName("hint")
+        advanced_help.setWordWrap(True)
+        service_title = QLabel(tr("service_maintenance_title"))
+        service_title.setObjectName("h2")
+        cp_title = QLabel(tr("cp_maintenance_title"))
+        cp_title.setObjectName("h2")
+
+        self.advanced_panel = QWidget()
+        advanced_layout = QVBoxLayout(self.advanced_panel)
+        advanced_layout.setContentsMargins(0, 8, 0, 0)
+        advanced_layout.setSpacing(8)
+        advanced_layout.addWidget(advanced_help)
+        advanced_layout.addWidget(service_title)
+        svc_row = QHBoxLayout()
+        for b in (install_btn, start_btn, stop_btn, remove_btn, refresh_btn):
+            svc_row.addWidget(b)
+        svc_row.addStretch(1)
+        advanced_layout.addLayout(svc_row)
+        advanced_layout.addWidget(self.svc_status)
+        advanced_layout.addWidget(cp_title)
+        cp_row = QHBoxLayout()
+        cp_row.addWidget(register_btn)
+        cp_row.addWidget(unregister_btn)
+        cp_row.addStretch(1)
+        advanced_layout.addLayout(cp_row)
+        self.advanced_panel.hide()
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
@@ -1307,39 +1344,32 @@ class ServiceTab(QWidget):
             content_layout.addWidget(warn)
 
         content_layout.addSpacing(8)
-        content_layout.addWidget(step1)
+        content_layout.addWidget(readiness_title)
+        content_layout.addWidget(self.diag_summary)
+        diag_row = QHBoxLayout()
+        diag_row.addWidget(self.diag_run_btn)
+        diag_row.addWidget(self.diag_copy_btn)
+        diag_row.addStretch(1)
+        content_layout.addLayout(diag_row)
+
+        content_layout.addSpacing(12)
+        content_layout.addWidget(unlock_title)
+        content_layout.addWidget(unlock_help)
         pwd_row = QHBoxLayout()
         pwd_row.addWidget(self.pwd_edit, 1)
         pwd_row.addWidget(save_pwd_btn)
         content_layout.addLayout(pwd_row)
 
         content_layout.addSpacing(12)
-        content_layout.addWidget(step2)
-        svc_row = QHBoxLayout()
-        for b in (install_btn, start_btn, stop_btn, remove_btn, refresh_btn):
-            svc_row.addWidget(b)
-        content_layout.addLayout(svc_row)
-        content_layout.addWidget(self.svc_status)
-
-        content_layout.addSpacing(12)
-        content_layout.addWidget(step3)
-        cp_row = QHBoxLayout()
-        cp_row.addWidget(register_btn)
-        cp_row.addWidget(unregister_btn)
-        cp_row.addStretch(1)
-        content_layout.addLayout(cp_row)
-
-        content_layout.addSpacing(12)
-        diag_title = QLabel(tr("diag_title"))
-        diag_title.setObjectName("h2")
         content_layout.addWidget(diag_title)
-        diag_row = QHBoxLayout()
-        diag_row.addWidget(self.diag_run_btn)
-        diag_row.addWidget(self.diag_copy_btn)
-        diag_row.addStretch(1)
-        content_layout.addLayout(diag_row)
-        content_layout.addWidget(self.diag_summary)
         content_layout.addWidget(self.diag_table)
+
+        content_layout.addSpacing(12)
+        content_layout.addWidget(
+            self.advanced_btn,
+            alignment=Qt.AlignmentFlag.AlignLeft,
+        )
+        content_layout.addWidget(self.advanced_panel)
         content_layout.addStretch(1)
 
         layout = QVBoxLayout(self)
@@ -1350,6 +1380,10 @@ class ServiceTab(QWidget):
             for w in self._admin_widgets:
                 w.setEnabled(False)
         self._refresh_status()
+
+    def _toggle_advanced(self, checked: bool) -> None:
+        self.advanced_panel.setVisible(checked)
+        self.advanced_btn.setText(tr("advanced_hide" if checked else "advanced_show"))
 
     def _save_pwd(self) -> None:
         pwd = self.pwd_edit.text()
@@ -1420,12 +1454,16 @@ class ServiceTab(QWidget):
         self.diag_worker.start()
 
     def _on_diag_progress(self, step: str) -> None:
-        self.diag_summary.setText(tr("diag_running", step=step))
+        self.diag_summary.setStyleSheet("")
+        self.diag_summary.setText(tr("readiness_running", step=step))
 
     def _on_diag_done(self, report: DiagnosticReport) -> None:
         self.diag_report = report
         lang = self.store.get_settings().get("language", "zh")
-        self.diag_summary.setText(tr("diag_summary", status=status_label(report.overall_status, lang)))
+        status = status_label(report.overall_status, lang)
+        color = SUCCESS if report.overall_status == "ok" else DANGER
+        self.diag_summary.setStyleSheet(f"color:{color};font-weight:600;")
+        self.diag_summary.setText(tr("readiness_result", status=status))
         self._load_diag_table(report)
 
     def _on_diag_finished(self) -> None:
