@@ -39,6 +39,9 @@ _CATALOG: dict[str, dict[str, str]] = {
         "list_sep": "、",
         # --- GUI:录入页 ---
         "tab_enroll": "录入人脸",
+        "enroll_page_help": "为当前 Windows 账户建立或补充刷脸解锁模板。",
+        "enroll_action_title": "录入账户",
+        "enroll_action_help": "“开始录入”会替换该账户原有模板;“补录角度”会保留现有模板并追加一条。",
         "win_account_name": "Windows 账户名",
         "start_enroll": "开始录入",
         "enroll_hint": "用户名需与登录 Windows 的账户一致;请正对摄像头,光线充足。",
@@ -352,6 +355,9 @@ _CATALOG: dict[str, dict[str, str]] = {
         "list_sep": ", ",
         # --- GUI: enroll tab ---
         "tab_enroll": "Enroll",
+        "enroll_page_help": "Create or extend face unlock templates for the current Windows account.",
+        "enroll_action_title": "Enrollment account",
+        "enroll_action_help": "“Start enrolling” replaces the account's existing templates; “Add angle” keeps them and appends one template.",
         "win_account_name": "Windows account name",
         "start_enroll": "Start enrolling",
         "enroll_hint": "The username must match your Windows sign-in account; face the camera in good light.",
