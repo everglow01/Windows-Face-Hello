@@ -1,10 +1,48 @@
 #include "PipeClient.h"
 
+#include <vector>
+
 namespace
 {
 // 须与 face_hello/config.py 的 PIPE_NAME 一致(跨语言契约)。
 constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\FaceHello";
 constexpr DWORD kBufSize = 65536;
+
+bool IsPipeServerLocalSystem(HANDLE hPipe)
+{
+    ULONG serverPid = 0;
+    if (!GetNamedPipeServerProcessId(hPipe, &serverPid) || serverPid == 0)
+    {
+        return false;
+    }
+
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, serverPid);
+    if (process == nullptr)
+    {
+        return false;
+    }
+
+    HANDLE token = nullptr;
+    bool isLocalSystem = false;
+    if (OpenProcessToken(process, TOKEN_QUERY, &token))
+    {
+        DWORD size = 0;
+        GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+        if (GetLastError() == ERROR_INSUFFICIENT_BUFFER && size >= sizeof(TOKEN_USER))
+        {
+            std::vector<BYTE> buffer(size);
+            if (GetTokenInformation(token, TokenUser, buffer.data(), size, &size))
+            {
+                const auto* user = reinterpret_cast<const TOKEN_USER*>(buffer.data());
+                isLocalSystem = IsValidSid(user->User.Sid)
+                    && IsWellKnownSid(user->User.Sid, WinLocalSystemSid);
+            }
+        }
+        CloseHandle(token);
+    }
+    CloseHandle(process);
+    return isLocalSystem;
+}
 
 std::string WideToUtf8(const std::wstring& w)
 {
@@ -59,6 +97,12 @@ bool PipeClient::Call(const std::wstring& jsonRequest, std::wstring& outResponse
     if (hPipe == INVALID_HANDLE_VALUE)
     {
         outResponse = L"auth service not running";
+        return false;
+    }
+    if (!IsPipeServerLocalSystem(hPipe))
+    {
+        CloseHandle(hPipe);
+        outResponse = L"auth service identity verification failed";
         return false;
     }
 
