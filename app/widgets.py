@@ -9,8 +9,8 @@ from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy, QWidget
 from face_hello.i18n import tr
 
 PREVIEW_W, PREVIEW_H = 560, 420
-SUCCESS = "#00C853"
-DANGER = "#FF5F38"
+SUCCESS = "#177A3D"
+DANGER = "#B42318"
 
 
 class PreviewLabel(QLabel):

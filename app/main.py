@@ -12,10 +12,12 @@ from PySide6.QtCore import QEvent, QPoint, QSize, QTimer, Qt
 from PySide6.QtGui import QBrush, QColor, QIcon, QImage, QPainter, QPixmap, QPolygon
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -24,6 +26,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
@@ -64,7 +67,7 @@ from face_hello.store import FaceStore
 from face_hello.updater import UpdateCandidate, UpdateError, UpdateErrorCode, verify_installer
 from face_hello.version import display_version, get_build_info
 
-WARN = "#CC7D5E"
+WARN = "#8A4B20"
 _CONSOLE_MUTEX = None
 
 _UPDATE_ERROR_KEYS = {
@@ -105,7 +108,7 @@ QPushButton {
 }
 QPushButton:hover { background-color: #F7EDE2; border-color: #D5CFC6; }
 QPushButton:pressed { background-color: #E3DDD4; border-color: #C9C2B8; }
-QPushButton:focus { border: 1px solid #C9C2B8; }
+QPushButton:focus { border: 2px solid #8A4B20; padding: 6px 15px; }
 QPushButton:default { background-color: #F9E8E1; border: 1px solid #C78F72; }
 QPushButton:default:pressed { background-color: #E3DDD4; border-color: #C9C2B8; }
 QPushButton:disabled { background-color: #F0E8DF; color: #A99C8F; border-color: #E8DED3; }
@@ -118,10 +121,21 @@ QPushButton#accent {
 }
 QPushButton#accent:hover { background-color: #E48766; border-color: #E48766; }
 QPushButton#accent:pressed { background-color: #BF5F42; border-color: #BF5F42; }
-QPushButton#accent:focus { border: 1px solid #9D4934; }
+QPushButton#accent:focus { border: 2px solid #6F2F20; padding: 6px 15px; }
 QPushButton#accent:default { background-color: #DA7756; border: 1px solid #9D4934; }
 QPushButton#accent:default:pressed { background-color: #BF5F42; border-color: #9D4934; }
 QPushButton#accent:disabled { background-color: #EAB49F; border-color: #EAB49F; color: #FFF9F6; }
+
+QPushButton#danger {
+    background-color: #FFFDF9;
+    border: 1px solid #B42318;
+    color: #B42318;
+    font-weight: 600;
+}
+QPushButton#danger:hover { background-color: #FBE9E7; border-color: #8F1D14; }
+QPushButton#danger:pressed { background-color: #F4D2CE; border-color: #72170F; }
+QPushButton#danger:focus { border: 2px solid #72170F; padding: 6px 15px; }
+QPushButton#danger:disabled { color: #A99C8F; border-color: #D8C8C3; background-color: #F0E8DF; }
 
 QLineEdit, QSpinBox, QDoubleSpinBox {
     background: #FFFFFF;
@@ -201,6 +215,10 @@ QWidget#contentPanel {
     border: 1px solid #E5E0D8;
     border-radius: 8px;
 }
+QScrollArea#pageScroll, QWidget#pageScrollViewport, QWidget#scrollContent {
+    background: transparent;
+    border: none;
+}
 QWidget#rootWindow {
     background: transparent;
 }
@@ -230,6 +248,10 @@ QPushButton#navButton:pressed {
     background: #E9E4DC;
     border-color: #D5CFC6;
 }
+QPushButton#navButton:focus {
+    border: 2px solid #8A4B20;
+    padding: 8px 11px;
+}
 QPushButton#navButton:checked {
     background: #F9E8E1;
     border-color: #ECD5CB;
@@ -247,8 +269,10 @@ QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
     selection-color: #FFF9F2;
 }
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
-    border: 1px solid #DA7756;
+    border: 2px solid #8A4B20;
 }
+QTableWidget:focus { border: 2px solid #8A4B20; }
+QCheckBox:focus { color: #6F2F20; }
 QTableWidget {
     background: #FFFDF9;
     border: 1px solid #E5E0D8;
@@ -395,6 +419,26 @@ def _renewal_days_text(profile) -> str:
     return tr("renewal_remaining_days", days=days)
 
 
+def _scrollable_page(content: QWidget) -> QScrollArea:
+    scroll = QScrollArea()
+    scroll.setObjectName("pageScroll")
+    scroll.viewport().setObjectName("pageScrollViewport")
+    content.setObjectName("scrollContent")
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setWidget(content)
+    return scroll
+
+
+def _configure_profile_table(table: QTableWidget) -> None:
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+    table.setTextElideMode(Qt.TextElideMode.ElideRight)
+
+
 class EnrollTab(QWidget):
     def __init__(self, detector: FaceDetector, store: FaceStore):
         super().__init__()
@@ -427,12 +471,19 @@ class EnrollTab(QWidget):
             [tr("col_user"), tr("col_templates"), tr("col_enroll_date"),
              tr("col_days_until_renewal"), tr("col_status")]
         )
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        _configure_profile_table(self.table)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setMaximumHeight(160)  # 约 3 行高度封顶,超出滚动,不顶坏布局
+        self.table.itemSelectionChanged.connect(self._update_profile_actions)
+        self.empty_users = QLabel(tr("enrolled_users_empty"))
+        self.empty_users.setObjectName("hint")
+        self.empty_users.setWordWrap(True)
         self.del_btn = QPushButton(tr("delete_selected"))
+        self.del_btn.setObjectName("danger")
+        self.del_btn.setEnabled(False)
         self.del_btn.clicked.connect(self._delete_selected)
         self.manage_btn = QPushButton(tr("manage_templates"))  # 删该用户下单条补录模板
+        self.manage_btn.setEnabled(False)
         self.manage_btn.clicked.connect(self._manage_templates)
         users_title = QLabel(tr("enrolled_users"))
         users_title.setObjectName("h2")
@@ -467,6 +518,7 @@ class EnrollTab(QWidget):
         right.setSpacing(10)
         right.addWidget(users_title)
         right.addWidget(self.table)
+        right.addWidget(self.empty_users)
         right.addLayout(del_row)
         right.addSpacing(14)
         right.addWidget(guide_title)
@@ -550,7 +602,18 @@ class EnrollTab(QWidget):
             cells = [name, str(len(ps)), latest.enroll_date.isoformat(),
                      _renewal_days_text(next_due), status]
             for c, text in enumerate(cells):
-                self.table.setItem(r, c, QTableWidgetItem(text))
+                item = QTableWidgetItem(text)
+                item.setToolTip(text)
+                self.table.setItem(r, c, item)
+        has_profiles = bool(groups)
+        self.table.setVisible(has_profiles)
+        self.empty_users.setVisible(not has_profiles)
+        self._update_profile_actions()
+
+    def _update_profile_actions(self) -> None:
+        selected = self.table.currentRow() >= 0
+        self.del_btn.setEnabled(selected)
+        self.manage_btn.setEnabled(selected)
 
     def _delete_selected(self) -> None:
         row = self.table.currentRow()
@@ -586,14 +649,14 @@ class TemplateManagerDialog(QDialog):
             [tr("col_index"), tr("col_label"), tr("col_enroll_date"),
              tr("col_days_until_renewal"), tr("col_status")]
         )
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
 
         edit_btn = QPushButton(tr("edit_label"))
         edit_btn.clicked.connect(self._edit_label)
         del_btn = QPushButton(tr("delete_template"))
-        del_btn.setObjectName("accent")
+        del_btn.setObjectName("danger")
         del_btn.clicked.connect(self._delete)
         close_btn = QPushButton(tr("close_btn"))
         close_btn.clicked.connect(self.accept)
@@ -627,7 +690,9 @@ class TemplateManagerDialog(QDialog):
             cells = [f"#{r + 1}", p.label or tr("label_empty"),
                      p.enroll_date.isoformat(), _renewal_days_text(p), status]
             for c, text in enumerate(cells):
-                self.table.setItem(r, c, QTableWidgetItem(text))
+                item = QTableWidgetItem(text)
+                item.setToolTip(text)
+                self.table.setItem(r, c, item)
         self.table.selectRow(0)
 
     def _edit_label(self) -> None:
@@ -941,11 +1006,15 @@ class SettingsTab(QWidget):
         center.addWidget(panel, 8)
         center.addStretch(1)
 
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(20, 18, 20, 18)
+        content_layout.addLayout(center)
+        content_layout.addStretch(1)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.addStretch(1)
-        layout.addLayout(center)
-        layout.addStretch(1)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(_scrollable_page(content))
 
     @staticmethod
     def _dspin(lo, hi, step, val) -> QDoubleSpinBox:
@@ -1178,6 +1247,7 @@ class ServiceTab(QWidget):
         stop_btn = QPushButton(tr("btn_stop"))
         stop_btn.clicked.connect(lambda: self._svc_cmd("stop"))
         remove_btn = QPushButton(tr("btn_uninstall"))
+        remove_btn.setObjectName("danger")
         remove_btn.clicked.connect(self._remove)
         refresh_btn = QPushButton(tr("btn_refresh"))
         refresh_btn.clicked.connect(self._refresh_status)
@@ -1185,6 +1255,7 @@ class ServiceTab(QWidget):
         register_btn.setObjectName("accent")
         register_btn.clicked.connect(lambda: self._register_cp(unregister=False))
         unregister_btn = QPushButton(tr("unregister_cp"))
+        unregister_btn.setObjectName("danger")
         unregister_btn.clicked.connect(lambda: self._register_cp(unregister=True))
         self.svc_status = QLabel("—")
         self.svc_status.setObjectName("hint")
@@ -1224,50 +1295,56 @@ class ServiceTab(QWidget):
         step3.setObjectName("h2")
         step3.setWordWrap(True)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(8)
-        layout.addWidget(account_lbl)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(20, 18, 20, 18)
+        content_layout.setSpacing(8)
+        content_layout.addWidget(account_lbl)
         if not self.is_admin:
             warn = QLabel(tr("admin_warn"))
             warn.setStyleSheet(f"color:{DANGER};")
             warn.setWordWrap(True)
-            layout.addWidget(warn)
+            content_layout.addWidget(warn)
 
-        layout.addSpacing(8)
-        layout.addWidget(step1)
+        content_layout.addSpacing(8)
+        content_layout.addWidget(step1)
         pwd_row = QHBoxLayout()
         pwd_row.addWidget(self.pwd_edit, 1)
         pwd_row.addWidget(save_pwd_btn)
-        layout.addLayout(pwd_row)
+        content_layout.addLayout(pwd_row)
 
-        layout.addSpacing(12)
-        layout.addWidget(step2)
+        content_layout.addSpacing(12)
+        content_layout.addWidget(step2)
         svc_row = QHBoxLayout()
         for b in (install_btn, start_btn, stop_btn, remove_btn, refresh_btn):
             svc_row.addWidget(b)
-        layout.addLayout(svc_row)
-        layout.addWidget(self.svc_status)
+        content_layout.addLayout(svc_row)
+        content_layout.addWidget(self.svc_status)
 
-        layout.addSpacing(12)
-        layout.addWidget(step3)
+        content_layout.addSpacing(12)
+        content_layout.addWidget(step3)
         cp_row = QHBoxLayout()
         cp_row.addWidget(register_btn)
         cp_row.addWidget(unregister_btn)
         cp_row.addStretch(1)
-        layout.addLayout(cp_row)
+        content_layout.addLayout(cp_row)
 
-        layout.addSpacing(12)
+        content_layout.addSpacing(12)
         diag_title = QLabel(tr("diag_title"))
         diag_title.setObjectName("h2")
-        layout.addWidget(diag_title)
+        content_layout.addWidget(diag_title)
         diag_row = QHBoxLayout()
         diag_row.addWidget(self.diag_run_btn)
         diag_row.addWidget(self.diag_copy_btn)
         diag_row.addStretch(1)
-        layout.addLayout(diag_row)
-        layout.addWidget(self.diag_summary)
-        layout.addWidget(self.diag_table, 1)
+        content_layout.addLayout(diag_row)
+        content_layout.addWidget(self.diag_summary)
+        content_layout.addWidget(self.diag_table)
+        content_layout.addStretch(1)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(_scrollable_page(content))
 
         if not self.is_admin:
             for w in self._admin_widgets:
@@ -1369,6 +1446,7 @@ class ServiceTab(QWidget):
             cells = [item.name, status_label(item.status, lang), item.detail, item.advice]
             for col, text in enumerate(cells):
                 cell = QTableWidgetItem(text)
+                cell.setToolTip(text)
                 if col == 1:
                     cell.setForeground(QBrush(QColor(colors.get(item.status, "#625E56"))))
                 self.diag_table.setItem(row, col, cell)
@@ -1423,6 +1501,8 @@ class MainWindow(QWidget):
             btn.setObjectName("navButton")
             btn.setCheckable(True)
             btn.setProperty("pageIndex", i)
+            if i == 2:
+                btn.setToolTip(tr("tab_service_tooltip"))
             btn.clicked.connect(self._on_nav_clicked)
             self.nav_buttons.append(btn)
             nav_col.addWidget(btn)
