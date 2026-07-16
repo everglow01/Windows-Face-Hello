@@ -7,10 +7,21 @@ from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy, QWidget
 
 from face_hello.i18n import tr
+from app.theme import (
+    BORDER,
+    BORDER_CONTROL,
+    DANGER,
+    ON_ACCENT,
+    PREVIEW,
+    PREVIEW_TEXT,
+    RADIUS_CARD,
+    SUCCESS,
+    SURFACE,
+    TEXT_MUTED,
+    TEXT_SECONDARY,
+)
 
 PREVIEW_W, PREVIEW_H = 560, 420
-SUCCESS = "#177A3D"
-DANGER = "#B42318"
 
 
 class PreviewLabel(QLabel):
@@ -23,7 +34,8 @@ class PreviewLabel(QLabel):
         self.setSizePolicy(policy)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(
-            "background:#1D1B16;color:#D8D4CC;border:1px solid #E5E0D8;border-radius:8px;"
+            f"background:{PREVIEW};color:{PREVIEW_TEXT};"
+            f"border:1px solid {BORDER};border-radius:{RADIUS_CARD}px;"
         )
 
     def sizeHint(self) -> QSize:
@@ -85,8 +97,8 @@ class SimilarityHistogram(QWidget):
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         width, height = self.width(), self.height()
-        painter.fillRect(0, 0, width, height, QColor("#FFFDF9"))
-        painter.setPen(QColor("#E5E0D8"))
+        painter.fillRect(0, 0, width, height, QColor(SURFACE))
+        painter.setPen(QColor(BORDER))
         painter.drawRect(0, 0, width - 1, height - 1)
 
         pad_l, pad_r, pad_t, pad_b = 8, 8, 22, 18
@@ -104,13 +116,13 @@ class SimilarityHistogram(QWidget):
             x = pad_l + index * bar_w
             y = pad_t + (plot_h - bar_h)
             center = (index + 0.5) / self._BINS
-            color = QColor(SUCCESS) if center >= self._threshold else QColor("#D5CFC6")
+            color = QColor(SUCCESS) if center >= self._threshold else QColor(BORDER_CONTROL)
             painter.fillRect(int(x) + 1, int(y), max(1, int(bar_w) - 1), int(bar_h), color)
 
         threshold_x = pad_l + self._threshold * plot_w
         painter.setPen(QColor(DANGER))
         painter.drawLine(int(threshold_x), pad_t, int(threshold_x), pad_t + plot_h)
-        painter.setPen(QColor("#625E56"))
+        painter.setPen(QColor(TEXT_MUTED))
         painter.drawText(pad_l, 14, tr("hist_title"))
         current = (
             tr("hist_current", sim=self._current)
@@ -159,9 +171,9 @@ class CaptionButton(QPushButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         color = (
-            QColor("#FFF9F2")
+            QColor(ON_ACCENT)
             if self.kind == "close" and self.underMouse()
-            else QColor("#514D46")
+            else QColor(TEXT_SECONDARY)
         )
         painter.setPen(color)
         cx = self.width() // 2
