@@ -25,7 +25,7 @@
 | 一键干净卸载(停删服务、注销 CP、清 LSA 密码 + 人脸库) | ✅ 完成 |
 | 体积瘦身:PySide6-Essentials + buffalo_l 剪枝 → `setup.exe` ~322MB | ✅ 完成 |
 | GitHub Release 自动化(打 tag → CI 出 setup.exe) | ✅ 完成 |
-| **5-4 加固:管道 ACL(SYSTEM+Administrators)、失败兜底 / 锁定、日志完善、`authenticate` 开发态门控** | ✅ 完成(Python 侧;CP 端一处管道 PID 校验留待) |
+| **5-4 加固:管道 ACL(SYSTEM+Administrators)、CP 服务端身份验证、失败兜底 / 锁定、日志完善、`authenticate` 开发态门控** | ✅ 完成(Python + CP,随 `v1.0.5` 发布) |
 | **代码签名:签名管道已落地(自签名验证 + env/`#ifdef` 门控,见 SIGNING.md);真实 EV/Azure 证书待接** | 🚧 脚手架完成 |
 | 进一步瘦身:opencv-headless、砍 scipy/onnx 传递依赖 | ⏳ 待做 |
 | 被动反欺骗(Silent-Face MiniFASNet,默认开 + 模型缺失 fail-open) | ✅ 完成 |
@@ -33,7 +33,7 @@
 | 安全逻辑 pytest(锁定 / margin / 反欺骗门 / `authenticate` 门控),接进 CI | ✅ 完成 |
 | 阶段 6:跨平台(Linux/PAM、macOS)—— 平台抽象层已抽出,集成待做 | 🚧 规划中 |
 
-详细路线见 [§7 路线图](#7-路线图);剩余加固项见 [§9.2](#92-剩余加固5-4)和 [§10.5 发布前置](#105-发布前置)。
+详细路线见 [§7 路线图](#7-路线图);加固细节见 [§9.2](#92-加固5-4均已落地),卸载安全见 [§10.5](#105-卸载完全干净安全红线不能留坏-cp)。
 
 ---
 
@@ -130,7 +130,7 @@ Windows Hello 人脸不支持普通摄像头,根本原因不是模型不够好,�
 - [x] **阶段 4 — 认证编排 + 管理台**:`auth` 状态机 + PySide6 管理台(`app/`),包含横向新版 UI 与解锁准备诊断。
 - [x] **阶段 5 — Credential Provider**:C++ COM 锁屏集成 + LSA 凭据 + KERB 解锁。**主体完成、真机验证**(详见 §9)。
 - [x] **分发 — setup.exe**:便携包 + Inno 中文向导 + 干净卸载 + Release 自动化,已进入正式 `v1.0.0` 版本线；后续补齐应用内更新、可恢复升级和自动安装态验收(详见 §10)。
-- [x] **加固(5-4)**:管道 ACL(SYSTEM+Administrators)、失败兜底 / 锁定、日志完善、`authenticate` 开发态门控(Python 侧;CP 端一处管道 PID 校验留待)。
+- [x] **加固(5-4)**:管道 ACL(SYSTEM+Administrators)、CP 侧 LocalSystem 服务端验证、失败兜底 / 锁定、日志完善和 `authenticate` 开发态门控均已完成,随 `v1.0.5` 发布。
 - [ ] **发布前置:代码签名**——签名管道已搭通(`build_release` 按 `FACEHELLO_SIGN_PFX` 签 CP DLL、Inno `/DSign` 签 setup.exe;自签名已端到端验证,见 SIGNING.md);真实 EV/Azure 证书待接。
 - [x] **被动反欺骗**:Silent-Face MiniFASNet(`2.7_80x80`)+ RetinaFace 裁剪,识别阶段多帧采样判翻拍;默认开、可关、模型缺失 fail-open。
 - [ ] **可选增强**:GPU 推理、进一步瘦身(安全逻辑 pytest 已落地 + 接进 CI)。
@@ -163,10 +163,10 @@ Windows Hello 人脸不支持普通摄像头,根本原因不是模型不够好,�
 - [x] **锁屏重试(d 之后)**:刷脸失败后磁贴保留「→」提交按钮作重试入口——最多 3 次(`kMaxFaceAttempts`,任何失败都计数),用尽则停扫描、提示改用密码。Python 服务不变(其自带锁定 5 次/30s 仍是总当たり防御;3 < 5)。
 - [x] **端到端验证**:VM(打快照)+ 真机,**本地账户与微软账户**均成功刷脸解锁。SYSTEM/session-0 进程在锁屏能打开摄像头(服务可作 LocalSystem 常驻)。3 次重试已在真机验证。
 
-### 9.2 加固(5-4,均已落地,纯 Python 侧)
+### 9.2 加固(5-4,均已落地)
 
 - [x] **命名管道 ACL + 防抢注**:`service.py` 的 `CreateNamedPipe` 现带显式 DACL,只放行 **SYSTEM + Administrators**(CP 是 SYSTEM 能连;管理员身份的 GUI / `auth_client.py` 测试仍可用,挡掉本地非特权进程冒充 CP 调认证)。并加 `FILE_FLAG_FIRST_PIPE_INSTANCE`:同名实例已存在则创建失败 → 记安全告警 + 退避,不静默。
-  - **残留风险(已知,留待将来闭合)**:服务是「建管道→应答→关→重建」单实例串行,`关→重建` 有微秒级空窗;DACL 拦不住「别的进程抢先创建同名管道」(那是它自己的内核对象)。彻底堵死抢注需 **CP 端连上后用 `GetNamedPipeServerProcessId` 校验服务端进程是 SYSTEM**——属 C++ DLL 改动,本轮（只改 Python）未做。主要缓解是 **LocalSystem 开机自启早于任何用户态代码、首个实例即占名**,空窗期抢注窗口极小。
+  - [x] **CP 侧服务端身份验证(`v1.0.5`)**:`PipeClient::Call` 连接后调用 `GetNamedPipeServerProcessId`,打开服务端进程令牌,并要求 `TokenUser` 必须是 LocalSystem(`S-1-5-18`)。PID 或令牌无法验证、SID 不匹配时,CP 会在发送任何请求前关闭管道并回退密码 / PIN。快照 VM 已同时验收真实 LocalSystem 服务和非 SYSTEM 进程抢占同名管道两种场景。
 - [x] **失败兜底 / 锁定**:`_AuthRunner` 服务侧内存计数——**只对真生物特征拒绝**(不匹配 / 身份歧义 / 活体失败 / 未见人脸)计数,基础设施错误(未录入 / 摄像头不可用 / 异常)不计;连续 `lockout_max_fails`(默认 5)次后冷却 `lockout_seconds`(默认 30)秒,期间 `auth_start` 直接回「已锁定,走密码」不开摄像头;成功或冷却到期清零。阈值在设置页可调(0 关闭)。摄像头路径超时从 30s 收到 8s(`authenticate_blocking(camera_timeout_s=8)`),设备缺失/被占时快速回退密码而非干等。系统密码 / PIN 提供程序始终保留,天然兜底。
 - [x] **日志完善**:`service.py` 引入 `logging` + `RotatingFileHandler`(`service.log`,约 1MB×3,带时间戳 / 级别),替换裸 `print`;服务态用 `_StreamToLogger` 垫片把 `sys.stdout/stderr`(含原生库 print 与未捕获 traceback)转进同一滚动日志(纯 C 层 stderr 噪声可能不落盘,仅启动横幅、非审计内容)。**从不记密码**;记 user 名 + similarity(本地日志,SYSTEM / 管理员可读)。
 - [x] **后续加固(v0.1.2 之后)**:同步 `authenticate` 命令(绕过锁定)改为**仅开发态**、安装态拒绝,生产管道只剩 `ping` + `auth_start`/`auth_poll`;被动反欺骗**多帧采样**取代单帧,回放无法靠单帧漏检溜过;安全状态机(锁定 / margin / 反欺骗门 / `authenticate` 门控)补了 **pytest** 并接进 CI。
@@ -235,7 +235,7 @@ C:\ProgramData\FaceHello\           (可写,运行期数据;SYSTEM 与提权 GUI
 - [x] 干净 VM(快照)端到端:装 → 录入 → 锁屏解锁 → 卸载干净、LogonUI 正常。
 - [x] 真机端到端(本地 + 微软账户)。
 - [ ] Authenticode 签名 `setup.exe` + `FaceHelloCP.dll`:脚手架已就位(见 SIGNING.md);嵌入式 `python.exe` 由 python.org 已签、不重签;真实 EV/Azure 证书免 SmartScreen 待接。
-- [ ] 5-4 加固收尾(管道 ACL、失败兜底、日志)建议先于更大范围公开分发完成。
+- [x] **5-4 加固已完成**:管道 ACL、首实例保护、CP 侧 LocalSystem 服务端验证、失败兜底 / 锁定、生产态 `authenticate` 门控和滚动日志均已落地;最后一项 CP 校验随 `v1.0.5` 发布并通过 VM 验收。
 
 ### 10.7 安装路径策略(已实现)
 

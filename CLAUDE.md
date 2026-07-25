@@ -47,7 +47,7 @@ C++ Credential Provider(VS2022 + “使用 C++ 的桌面开发”;**用 PowerShe
 
 ## 架构
 
-两层设计(路线 A)。阶段 1~4(Python 原型)完成;阶段 5(C++ Credential Provider 锁屏集成)主体打通——CP 磁贴 → 命名管道 → LocalSystem 服务 → InsightFace 识别 → 读 LSA → 打包 KERB 真解锁,本地账户与微软账户(MSA-backed 本地登录)均已在 VM 与真机端到端验证(里程碑 d)。5-4 加固(管道 ACL 限 SYSTEM+Administrators、失败兜底/锁定、日志、`authenticate` 开发态门控)与 C 档分发(Inno 安装器、`/MT` 静态 CRT 编 DLL、GitHub Release 放模型)均已落地;锁屏新增「3 次刷脸重试后退回密码」(CP 侧),且刷脸只由「→」或用户配置热键启动,避免锁屏封面预选磁贴时提前开摄像头。识别侧加同名多模板录入(「补录角度」追加,解锁取最高相似度,`max_templates_per_name` FIFO 封顶)。代码签名脚手架已落地(自签名管道:`build_release` 按 `FACEHELLO_SIGN_PFX` 签 DLL、Inno `/DSign` 签 setup.exe,见 `SIGNING.md`);剩真实证书(Azure/EV)与可选增强(GPU/进一步瘦身)。
+两层设计(路线 A)。阶段 1~4(Python 原型)完成;阶段 5(C++ Credential Provider 锁屏集成)主体打通——CP 磁贴 → 命名管道 → LocalSystem 服务 → InsightFace 识别 → 读 LSA → 打包 KERB 真解锁,本地账户与微软账户(MSA-backed 本地登录)均已在 VM 与真机端到端验证(里程碑 d)。5-4 加固(管道 ACL 限 SYSTEM+Administrators、CP 连接后校验服务端 TokenUser 为 LocalSystem、失败兜底/锁定、日志、`authenticate` 开发态门控)与 C 档分发(Inno 安装器、`/MT` 静态 CRT 编 DLL、GitHub Release 放模型)均已落地;锁屏新增「3 次刷脸重试后退回密码」(CP 侧),且刷脸只由「→」或用户配置热键启动,避免锁屏封面预选磁贴时提前开摄像头。识别侧加同名多模板录入(「补录角度」追加,解锁取最高相似度,`max_templates_per_name` FIFO 封顶)。代码签名脚手架已落地(自签名管道:`build_release` 按 `FACEHELLO_SIGN_PFX` 签 DLL、Inno `/DSign` 签 setup.exe,见 `SIGNING.md`);剩真实证书(Azure/EV)与可选增强(GPU/进一步瘦身)。
 
 **`face_hello/` 核心库**(无 Qt 依赖,可被 GUI、服务、脚本共用):
 - `config.py` — 集中路径/模型/阈值。`.installed` 标记或 `FACEHELLO_HOME` 决定安装态：安装态可写数据固定在 `C:\ProgramData\FaceHello\data`，开发态使用仓库内 `data/`；SCM 会缓存环境变量，所以安装器用标记文件保证刚安装的服务无需重启即可识别安装态。`DEFAULTS` 是阈值默认值，被 store 里持久化的 `settings` 覆盖；不要在业务代码硬编码阈值。也定义 CP 可读的语言/热键镜像文件路径。
@@ -68,7 +68,7 @@ C++ Credential Provider(VS2022 + “使用 C++ 的桌面开发”;**用 PowerShe
 **`cp/` C++ Credential Provider**(COM in-proc DLL,锁屏「Face Unlock」磁贴;CLSID `{E071A7CE-5D7F-4063-9A10-AE39AEC64EE8}`):
 - `CFaceProvider.{h,cpp}` — `ICredentialProvider`,枚举出 1 个磁贴。`SignalAutoLogon()` 由扫描线程在识别通过后调用 → 置标志 + `CredentialsChanged` → `GetCredentialCount` 回 `pbAutoLogonWithDefault=TRUE` 让 LogonUI 自动提交。
 - `CFaceCredential.{h,cpp}` — `ICredentialProviderCredential`。`SetSelected` 只显示「按 → 开始刷脸」提示并启动可选热键监听;用户按「→」或配置热键后才调 `auth_start`,随后每 ~400ms `auth_poll`,用 `SetFieldString` 把活体提示刷到磁贴;成功缓存用户名并触发自动登录。**失败可按磁贴「→」或热键重试,共 `kMaxFaceAttempts`(=3)次(任何失败都计数),用尽则停刷脸、提示改用密码**(密码磁贴始终在)。`GetSerialization` 成功时消费缓存结果 → 读 LSA 密码 → 打包 `KERB_INTERACTIVE_UNLOCK_LOGON` 解锁;未成功时把「→」当重试入口(`_StartAuthThread`)。
-- `PipeClient.{h,cpp}` — 命名管道客户端(对应 `scripts/auth_client.py`)。`Call` 在 `ERROR_PIPE_BUSY` 与 `ERROR_FILE_NOT_FOUND`(单实例管道重建的空窗)上都重试,约 30 次/3s。
+- `PipeClient.{h,cpp}` — 命名管道客户端(对应 `scripts/auth_client.py`)。`Call` 在 `ERROR_PIPE_BUSY` 与 `ERROR_FILE_NOT_FOUND`(单实例管道重建的空窗)上都重试,约 30 次/3s;连接后用 `GetNamedPipeServerProcessId` 读取服务端进程并要求 TokenUser 为 LocalSystem(`S-1-5-18`),验证失败则在发送请求前关闭管道。
 - 绝不替换/过滤系统密码/PIN 提供程序;只在打了快照的 VM 里 `regsvr32` 注册测试。详见 `cp/README.md`。
 
 **`app/` PySide6 管理台**(页面:录入 / 测试解锁 / 服务、凭据与诊断 / 设置):
@@ -89,4 +89,4 @@ C++ Credential Provider(VS2022 + “使用 C++ 的桌面开发”;**用 PowerShe
 - **冷启动慢的两个来源**:① 摄像头未就绪——`Camera.open()` 带退避重试且确认能 `read()` 到一帧(冷启动/睡眠唤醒后 USB 摄像头要几秒枚举);② 模型磁盘 I/O——InsightFace 会先给 `buffalo_l` **每个** `.onnx` 建 session 再按 `allowed_modules` 丢弃,故已**删掉用不到的** `1k3d68.onnx`(144MB)/`2d106det.onnx`/`genderage.onnx`,只留 `det_10g.onnx`+`w600k_r50.onnx`,冷读 341MB→191MB。别让它们被重新下载(整个 `buffalo_l` 目录在才不会重下;删单个文件不触发重下)。识别精度无损。再进一步:`w600k_r50` 走 **FP16 量化**(`scripts/quantize_model.py`,174MB→87MB,识别实测无损),release CI 在下载+剪枝后就地量化(见 `release.yml`);量化会留 `w600k_r50.fp32.bak`(本地回退用,CI 跳过),**`build_release.py` 忽略 `*.bak`、绝不入包**。若仍太慢,最后一条路是换 `buffalo_s`(识别模型~13MB,需重录入 + 重标定、精度略降)。
 - **SYSTEM 服务专属的坑**:① 人脸库 DPAPI 必须用机器范围 `CRYPTPROTECT_LOCAL_MACHINE`(`platform_backend.py` 的 `_DPAPI_LOCAL_MACHINE=0x4`),否则 SYSTEM 服务解不开用户录入的库;② matplotlib(insightface 的传递依赖)在 SYSTEM 上下文首次建字体缓存会卡死/崩服务——`win_service.py` 在导入前设 `MPLBACKEND=Agg` + `MPLCONFIGDIR` 到 `data/`;③ **EcoQoS 降频**:后台/session-0 服务进程会被 Windows「执行速度节流」压低主频,纯 CPU 推理(InsightFace)实测慢约 4 倍(同一推理前台 ~700ms、服务里 ~2450ms),解锁体感拖慢约 1s。`service.py` 的 `_boost_cpu_scheduling()`(serve() 启动即调)用 `SetProcessInformation(ProcessPowerThrottling, StateMask=0)` 退出节流 + `SetPriorityClass(ABOVE_NORMAL)` 修复;注意这只发生在**真后台进程**,前台控制台测不出来(前台不被真节流)。识别耗时另有逐帧明细日志(`auth.py` 的 `t_detect`/`t_match`/`n_faces` → 「解锁明细」行)便于排查。
 - **身份契约**:profile 名 == `GetUserName()`(本地 SAM 名)== LSA 键 `L$FaceHello_<user>` == KERB 账户名,四者必须一致,解锁才成立(MSA-backed 本地登录也走这条)。LSA 键名不能含反斜杠。
-- **安全红线**:绝不移除系统的密码/PIN 提供程序(始终保留兜底登录);管道 ACL 已限 SYSTEM+Administrators(`service.py` 的 `_pipe_security`);CP 注册/真机测试先打快照、留个备用管理员账户与系统还原点。RGB 单目天然抗不住照片/视频攻击,活体检测是底线。
+- **安全红线**:绝不移除系统的密码/PIN 提供程序(始终保留兜底登录);服务端管道 ACL 已限 SYSTEM+Administrators(`service.py` 的 `_pipe_security`),CP 端也会拒绝非 LocalSystem 服务端;CP 注册/真机测试先打快照、留个备用管理员账户与系统还原点。RGB 单目天然抗不住照片/视频攻击,活体检测是底线。

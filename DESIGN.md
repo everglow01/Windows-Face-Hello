@@ -25,14 +25,14 @@ This is the **design & decision record**: why it's built this way, where it stan
 | One-click clean uninstall (stop/remove service, unregister CP, wipe LSA password + gallery) | ✅ done |
 | Size trimming: PySide6-Essentials + buffalo_l pruning → `setup.exe` ~322 MB | ✅ done |
 | GitHub Release automation (push a tag → CI builds setup.exe) | ✅ done |
-| **5-4 hardening: pipe ACL (SYSTEM+Admins), failure fallback / lockout, better logging, dev-only `authenticate`** | ✅ done (Python side; one CP-side pipe-PID check deferred) |
+| **5-4 hardening: pipe ACL (SYSTEM+Admins), CP server-identity verification, failure fallback / lockout, better logging, dev-only `authenticate`** | ✅ done (Python + CP, shipped in `v1.0.5`) |
 | **Code signing: pipeline in place (self-signed verification + env/`#ifdef` gating, see SIGNING.md); real EV/Azure cert tbd** | 🚧 scaffold done |
 | Further slimming: opencv-headless, drop scipy/onnx transitive deps | ⏳ to do |
 | Passive anti-spoofing (Silent-Face MiniFASNet, default-on + fail-open if model missing) | ✅ done |
 | Same-name multi-template enrollment ("Add angle" appends, unlock takes the max similarity, FIFO cap) | ✅ done |
 | pytest for security logic (lockout / margin / anti-spoof gate / `authenticate` gating), wired into CI | ✅ done |
 
-See [§7 Roadmap](#7-roadmap) for the full plan; remaining hardening is in [§9.2](#92-remaining-hardening-5-4) and [§10.5 Uninstall](#105-uninstall-completely-clean-red-line-no-broken-cp).
+See [§7 Roadmap](#7-roadmap) for the full plan; hardening details are in [§9.2](#92-hardening-5-4-all-landed), and uninstall safety is in [§10.5](#105-uninstall-completely-clean-red-line-no-broken-cp).
 
 ---
 
@@ -130,7 +130,7 @@ Passive anti-spoofing is enabled (toggle in Settings): during recognition MiniFA
 - [x] **Stage 4 — Auth orchestration + console**: `auth` state machine + PySide6 console (`app/`), including the refreshed wide UI and readiness diagnostics.
 - [x] **Stage 5 — Credential Provider**: C++ COM lock-screen integration + LSA credential + KERB unlock. **Main path done, verified on real hardware** (see §9).
 - [x] **Distribution — setup.exe**: portable package + Inno Chinese wizard + clean uninstall + Release automation shipped in the formal `v1.0.0` line; later releases added in-app updates, recoverable upgrades, and automatic installed-state acceptance (see §10).
-- [x] **Hardening (5-4)**: pipe ACL (SYSTEM+Admins), failure fallback / lockout, better logging, dev-only `authenticate` (Python side; one CP-side pipe-PID check deferred).
+- [x] **Hardening (5-4)**: pipe ACL (SYSTEM+Admins), CP-side LocalSystem server verification, failure fallback / lockout, better logging, and dev-only `authenticate`; completed and released in `v1.0.5`.
 - [ ] **Pre-release: code signing** — pipeline wired up (`build_release` signs the CP DLL when `FACEHELLO_SIGN_PFX` is set; Inno `/DSign` signs setup.exe; self-signed verified end-to-end, see SIGNING.md); real EV/Azure cert tbd.
 - [x] **Passive anti-spoofing**: Silent-Face MiniFASNet (`2.7_80x80`) + RetinaFace crop, multi-frame sampling during recognition to detect replays; default-on, can disable, fail-open if model missing.
 - [ ] **Optional enhancements**: GPU inference, further slimming (security-logic pytest already landed + in CI).
@@ -162,10 +162,10 @@ Passive anti-spoofing is enabled (toggle in Settings): during recognition MiniFA
 - [x] **Lock-screen retry (post-d)**: on a failed scan the tile keeps the "→" submit button as a retry entry — up to 3 attempts (`kMaxFaceAttempts`, any failure counts), then it stops scanning and prompts the user to use their password. The Python service is unchanged (its own lockout, 5 fails / 30s, stays the brute-force gate; 3 < 5).
 - [x] **End-to-end verification**: VM (snapshotted) + real hardware, **both local and Microsoft accounts** unlock by face successfully. A SYSTEM/session-0 process can open the camera at the lock screen (the service can run as LocalSystem). The 3-attempt retry is verified on real hardware.
 
-### 9.2 Hardening (5-4, all landed, Python-side only)
+### 9.2 Hardening (5-4, all landed)
 
 - [x] **Pipe ACL + anti-squatting**: `CreateNamedPipe` in `service.py` now carries an explicit DACL allowing only **SYSTEM + Administrators** (the CP is SYSTEM so it can connect; admin-context GUI / `auth_client.py` testing still works, while local non-privileged processes can no longer impersonate the CP and invoke auth). It also sets `FILE_FLAG_FIRST_PIPE_INSTANCE`: if an instance of the name already exists, creation fails → we log a security warning + back off, never silently.
-  - **Residual risk (known, deferred)**: the service is a single-instance serial loop ("create pipe → answer → close → recreate"), so there's a microsecond gap on `close → recreate`; the DACL can't stop "another process creating the same pipe name first" (that's its own kernel object). Fully closing squatting needs the **CP to verify, after connecting, that the server process is SYSTEM via `GetNamedPipeServerProcessId`** — that's a C++ DLL change, not done in this (Python-only) round. The main mitigation is that the **LocalSystem service auto-starts at boot before any user-mode code runs and owns the name from the first instance**, leaving a tiny squatting window.
+  - [x] **CP-side server identity verification (`v1.0.5`)**: after connecting, `PipeClient::Call` uses `GetNamedPipeServerProcessId`, opens the server process token, and requires its `TokenUser` to be LocalSystem (`S-1-5-18`). If the PID or token can't be verified, or the SID differs, the CP closes the pipe before sending any request and falls back to password / PIN. Snapshot-VM acceptance covered both the real LocalSystem service and a non-SYSTEM process squatting on the same pipe name.
 - [x] **Failure fallback / lockout**: in-memory counting in `_AuthRunner` — **only genuine biometric rejections count** (mismatch / ambiguous identity / liveness failure / no face seen); infrastructure errors (not enrolled / camera unavailable / exception) don't. After `lockout_max_fails` (default 5) consecutive fails it cools down for `lockout_seconds` (default 30); during the cooldown `auth_start` returns "locked, use password" without opening the camera; a success or cooldown expiry resets it. Thresholds are tunable on the Settings tab (0 = off). The camera path's open timeout is cut from 30s to 8s (`authenticate_blocking(camera_timeout_s=8)`) so a missing/busy camera falls back to the password fast instead of stalling. The system password / PIN provider always remains as the inherent fallback.
 - [x] **Better logging**: `service.py` adopts `logging` + `RotatingFileHandler` (`service.log`, ~1MB×3, with timestamps / levels), replacing bare `print`; in service mode a `_StreamToLogger` shim routes `sys.stdout/stderr` (native-lib prints and uncaught tracebacks) into the same rotating log (purely C-level stderr noise may not land — those are just startup banners, not audit content). **Passwords are never logged**; the username + similarity are (a local log, readable by SYSTEM / admins).
 - [x] **Further hardening (post-v0.1.2)**: the sync `authenticate` command (which bypasses lockout) is now **dev-only**, rejected in installed mode, so the production pipe only exposes `ping` + `auth_start`/`auth_poll`; passive anti-spoofing **samples multiple frames** instead of one, so a replay can't slip through on a single detection-miss frame; the security state machines (lockout / margin / anti-spoof gate / `authenticate` gating) got **pytest** coverage wired into CI.
@@ -234,7 +234,7 @@ The `[UninstallRun]` + `[UninstallDelete]` in `installer\FaceHello.iss` are impl
 - [x] Clean VM (snapshot) end-to-end: install → enroll → lock-screen unlock → uninstall clean, LogonUI normal.
 - [x] Real-hardware end-to-end (local + Microsoft accounts).
 - [ ] Authenticode-sign `setup.exe` + `FaceHelloCP.dll`: scaffold in place (see SIGNING.md); the embedded `python.exe` is already signed by python.org and is not re-signed; real EV/Azure cert to clear SmartScreen tbd.
-- [ ] Finishing the 5-4 hardening (pipe ACL, failure fallback, logging) is recommended before wider public distribution.
+- [x] **5-4 hardening complete**: pipe ACL, first-instance protection, CP-side LocalSystem server verification, failure fallback / lockout, production `authenticate` gating, and rotating logs are all landed; the final CP check shipped and passed VM acceptance in `v1.0.5`.
 
 ### 10.7 Install-path strategy (implemented)
 
