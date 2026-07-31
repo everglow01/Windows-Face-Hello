@@ -990,6 +990,8 @@ class SettingsTab(QWidget):
         self.liveness_check.setChecked(s["liveness_enabled"])
         self.antispoof_check = QCheckBox(tr("antispoof_check"))
         self.antispoof_check.setChecked(s.get("antispoof_enabled", True))
+        self.multi_face_check = QCheckBox(tr("multi_face_protection"))
+        self.multi_face_check.setChecked(s.get("multi_face_protection_enabled", False))
 
         save_btn = QPushButton(tr("save_settings"))
         save_btn.setObjectName("accent")
@@ -1020,7 +1022,8 @@ class SettingsTab(QWidget):
         common_grid.addWidget(scope_w, 1, 1, 1, 2)
         common_grid.addWidget(self.liveness_check, 2, 0, 1, 3)
         common_grid.addWidget(self.antispoof_check, 3, 0, 1, 3)
-        common_grid.addWidget(QLabel(tr("camera_index_label")), 4, 0)
+        common_grid.addWidget(self.multi_face_check, 4, 0, 1, 3)
+        common_grid.addWidget(QLabel(tr("camera_index_label")), 5, 0)
         cam_row = QHBoxLayout()
         cam_row.setContentsMargins(0, 0, 0, 0)
         cam_row.setSpacing(8)
@@ -1029,8 +1032,8 @@ class SettingsTab(QWidget):
         cam_row.addStretch(1)
         cam_w = QWidget()
         cam_w.setLayout(cam_row)
-        common_grid.addWidget(cam_w, 4, 1, 1, 2)
-        common_grid.addWidget(QLabel(tr("unlock_hotkey_label")), 5, 0)
+        common_grid.addWidget(cam_w, 5, 1, 1, 2)
+        common_grid.addWidget(QLabel(tr("unlock_hotkey_label")), 6, 0)
         hotkey_row = QHBoxLayout()
         hotkey_row.setContentsMargins(0, 0, 0, 0)
         hotkey_row.setSpacing(8)
@@ -1040,7 +1043,7 @@ class SettingsTab(QWidget):
         hotkey_row.addStretch(1)
         hotkey_w = QWidget()
         hotkey_w.setLayout(hotkey_row)
-        common_grid.addWidget(hotkey_w, 5, 1, 1, 2)
+        common_grid.addWidget(hotkey_w, 6, 1, 1, 2)
         self._update_auth_scope_controls(self.face_unlock_check.isChecked())
 
         self.advanced_params_btn = QPushButton(tr("advanced_params_show"))
@@ -1273,6 +1276,7 @@ class SettingsTab(QWidget):
         self.store.update_settings(
             liveness_enabled=self.liveness_check.isChecked(),
             antispoof_enabled=self.antispoof_check.isChecked(),
+            multi_face_protection_enabled=self.multi_face_check.isChecked(),
             match_threshold=self.match_spin.value(),
             match_margin=self.margin_spin.value(),
             yaw_threshold_deg=self.yaw_spin.value(),

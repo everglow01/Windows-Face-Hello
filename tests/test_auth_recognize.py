@@ -26,6 +26,16 @@ def _session(tmp_path, detector, profiles, **settings):
     return AuthSession(detector, store)
 
 
+class _MultiFaceDetector:
+    def __init__(self, faces):
+        self.faces = faces
+        self.calls = 0
+
+    def detect(self, _frame_bgr):
+        self.calls += 1
+        return self.faces
+
+
 class _FakeAntispoof:
     def __init__(self, value):
         self._value = value
@@ -57,6 +67,65 @@ def test_no_face_rejected_biometric(tmp_path):
     assert s.done and s.result.success is False
     assert s.result.biometric is True
     assert s.result.reason == t("no_face", "zh")
+
+
+def test_multiple_faces_default_off_keeps_largest_face_behavior(tmp_path):
+    smaller = FakeFace(embedding=unit_vec(0, 1), bbox=(0, 0, 10, 10))
+    larger = FakeFace(embedding=unit_vec(1, 0), bbox=(0, 0, 20, 20))
+    det = _MultiFaceDetector([smaller, larger])
+    s = _session(tmp_path, det, [("alice", unit_vec(1, 0))], antispoof_enabled=False)
+
+    s.feed(FRAME)
+
+    assert s.result.success is True
+    assert s.result.name == "alice"
+    assert s.n_faces == 2
+
+
+def test_multiple_faces_protection_rejects_before_match(tmp_path, monkeypatch):
+    calls = {"n": 0}
+
+    def unexpected_match(*_args, **_kwargs):
+        calls["n"] += 1
+        raise AssertionError("多人保护拒绝后不应进入身份匹配")
+
+    monkeypatch.setattr("face_hello.auth.best_match_with_margin", unexpected_match)
+    faces = [
+        FakeFace(embedding=unit_vec(1, 0)),
+        FakeFace(embedding=unit_vec(0, 1)),
+    ]
+    s = _session(
+        tmp_path,
+        _MultiFaceDetector(faces),
+        [("alice", unit_vec(1, 0))],
+        antispoof_enabled=False,
+        multi_face_protection_enabled=True,
+    )
+
+    s.feed(FRAME)
+
+    assert s.done and s.result.success is False
+    assert s.result.biometric is True
+    assert s.result.reason == t("multiple_faces", "zh")
+    assert s.n_faces == 2
+    assert calls["n"] == 0
+
+
+def test_multiple_faces_protection_allows_one_face(tmp_path):
+    face = FakeFace(embedding=unit_vec(1, 0))
+    s = _session(
+        tmp_path,
+        _MultiFaceDetector([face]),
+        [("alice", unit_vec(1, 0))],
+        antispoof_enabled=False,
+        multi_face_protection_enabled=True,
+    )
+
+    s.feed(FRAME)
+
+    assert s.result.success is True
+    assert s.result.name == "alice"
+    assert s.n_faces == 1
 
 
 def test_match_success(tmp_path):

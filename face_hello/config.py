@@ -114,6 +114,8 @@ DEFAULTS = {
     # 被动反欺骗(RGB 活体):识别帧上跑一次 MiniFASNet 判屏幕翻拍/视频回放。
     # 模型缺失/加载失败则 fail-open(跳过,照常解锁)。默认开,安全优先。
     "antispoof_enabled": True,
+    # 多人保护:最终识别帧检测到 >=2 张脸时拒绝。默认关,避免升级后家庭场景误拒。
+    "multi_face_protection_enabled": False,
     # real 概率阈值,低于判翻拍而拒绝(可被 settings 覆盖;UI 暂不暴露,留作后续标定)。
     "antispoof_threshold": 0.55,
     # 反欺骗最多采样帧数:某帧 RetinaFace 没检到脸(score=None)不立刻放行,继续采样直到

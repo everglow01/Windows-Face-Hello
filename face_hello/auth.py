@@ -89,6 +89,17 @@ class AuthSession:
             self._recognize(frame_bgr)
 
     def _recognize(self, frame_bgr) -> None:
+        faces = None
+        if self.settings.get("multi_face_protection_enabled", False):
+            _t = time.perf_counter()
+            faces = self.detector.detect(frame_bgr)
+            self.t_detect += time.perf_counter() - _t
+            self.n_faces = len(faces)
+            if len(faces) >= 2:
+                self._finish(
+                    AuthResult(False, t("multiple_faces", self._lang), biometric=True)
+                )
+                return
         # 反欺骗门先行:翻拍/假体在比对前就拒掉。模型在则需逐帧采样到判定才放行
         # (避免单帧没检到脸就 fail-open);判假直接 _finish,本帧不进识别。
         if self._antispoof_on and not self._spoof_cleared:
@@ -97,10 +108,11 @@ class AuthSession:
             self.t_antispoof += time.perf_counter() - _t
             if not gate:
                 return
-        _t = time.perf_counter()
-        faces = self.detector.detect(frame_bgr)
-        self.t_detect += time.perf_counter() - _t
-        self.n_faces = len(faces)
+        if faces is None:
+            _t = time.perf_counter()
+            faces = self.detector.detect(frame_bgr)
+            self.t_detect += time.perf_counter() - _t
+            self.n_faces = len(faces)
         if not faces:
             self._finish(AuthResult(False, t("no_face", self._lang), biometric=True))
             return
