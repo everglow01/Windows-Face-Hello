@@ -70,7 +70,13 @@ from face_hello.diagnostics import DiagnosticReport, status_label
 from face_hello import config, cred_vault, probes
 from face_hello.auth import AuthResult
 from face_hello.detector import FaceDetector
-from face_hello.i18n import save_hotkey_mirror, save_lang_mirror, set_lang, tr
+from face_hello.i18n import (
+    save_auth_scope_mirror,
+    save_hotkey_mirror,
+    save_lang_mirror,
+    set_lang,
+    tr,
+)
 from face_hello.store import FaceStore
 from face_hello.updater import UpdateCandidate, UpdateError, UpdateErrorCode, verify_installer
 from face_hello.version import display_version, get_build_info
@@ -937,6 +943,15 @@ class SettingsTab(QWidget):
         self.camera_spin = QSpinBox()
         self.camera_spin.setRange(0, 10)
         self.camera_spin.setValue(int(s.get("camera_index", 0)))
+        self.face_unlock_check = QCheckBox(tr("face_unlock_enabled"))
+        self.face_unlock_check.setChecked(s.get("face_unlock_enabled", True))
+        self.face_unlock_logon_check = QCheckBox(tr("face_unlock_logon"))
+        self.face_unlock_logon_check.setChecked(s.get("face_unlock_logon_enabled", True))
+        self.face_unlock_workstation_check = QCheckBox(tr("face_unlock_workstation"))
+        self.face_unlock_workstation_check.setChecked(
+            s.get("face_unlock_workstation_enabled", True)
+        )
+        self.face_unlock_check.toggled.connect(self._update_auth_scope_controls)
         self.unlock_hotkey = str(s.get("unlock_hotkey", "") or "").upper()
         self.hotkey_value = QLineEdit(_hotkey_text(self.unlock_hotkey))
         self.hotkey_value.setReadOnly(True)
@@ -973,9 +988,20 @@ class SettingsTab(QWidget):
         common_grid.setHorizontalSpacing(16)
         common_grid.setVerticalSpacing(8)
         common_grid.setColumnStretch(2, 1)
-        common_grid.addWidget(self.liveness_check, 0, 0, 1, 3)
-        common_grid.addWidget(self.antispoof_check, 1, 0, 1, 3)
-        common_grid.addWidget(QLabel(tr("camera_index_label")), 2, 0)
+        common_grid.addWidget(self.face_unlock_check, 0, 0, 1, 3)
+        common_grid.addWidget(QLabel(tr("face_unlock_scope_label")), 1, 0)
+        scope_row = QHBoxLayout()
+        scope_row.setContentsMargins(0, 0, 0, 0)
+        scope_row.setSpacing(16)
+        scope_row.addWidget(self.face_unlock_logon_check)
+        scope_row.addWidget(self.face_unlock_workstation_check)
+        scope_row.addStretch(1)
+        scope_w = QWidget()
+        scope_w.setLayout(scope_row)
+        common_grid.addWidget(scope_w, 1, 1, 1, 2)
+        common_grid.addWidget(self.liveness_check, 2, 0, 1, 3)
+        common_grid.addWidget(self.antispoof_check, 3, 0, 1, 3)
+        common_grid.addWidget(QLabel(tr("camera_index_label")), 4, 0)
         cam_row = QHBoxLayout()
         cam_row.setContentsMargins(0, 0, 0, 0)
         cam_row.setSpacing(8)
@@ -984,8 +1010,8 @@ class SettingsTab(QWidget):
         cam_row.addStretch(1)
         cam_w = QWidget()
         cam_w.setLayout(cam_row)
-        common_grid.addWidget(cam_w, 2, 1, 1, 2)
-        common_grid.addWidget(QLabel(tr("unlock_hotkey_label")), 3, 0)
+        common_grid.addWidget(cam_w, 4, 1, 1, 2)
+        common_grid.addWidget(QLabel(tr("unlock_hotkey_label")), 5, 0)
         hotkey_row = QHBoxLayout()
         hotkey_row.setContentsMargins(0, 0, 0, 0)
         hotkey_row.setSpacing(8)
@@ -995,7 +1021,8 @@ class SettingsTab(QWidget):
         hotkey_row.addStretch(1)
         hotkey_w = QWidget()
         hotkey_w.setLayout(hotkey_row)
-        common_grid.addWidget(hotkey_w, 3, 1, 1, 2)
+        common_grid.addWidget(hotkey_w, 5, 1, 1, 2)
+        self._update_auth_scope_controls(self.face_unlock_check.isChecked())
 
         self.advanced_params_btn = QPushButton(tr("advanced_params_show"))
         self.advanced_params_btn.setCheckable(True)
@@ -1101,6 +1128,10 @@ class SettingsTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(_scrollable_page(content))
+
+    def _update_auth_scope_controls(self, enabled: bool) -> None:
+        self.face_unlock_logon_check.setEnabled(enabled)
+        self.face_unlock_workstation_check.setEnabled(enabled)
 
     def _toggle_advanced_params(self, checked: bool) -> None:
         self.advanced_params_panel.setVisible(checked)
@@ -1234,9 +1265,17 @@ class SettingsTab(QWidget):
             lockout_seconds=self.lockout_secs_spin.value(),
             camera_index=self.camera_spin.value(),
             unlock_hotkey=self.unlock_hotkey,
+            face_unlock_enabled=self.face_unlock_check.isChecked(),
+            face_unlock_logon_enabled=self.face_unlock_logon_check.isChecked(),
+            face_unlock_workstation_enabled=self.face_unlock_workstation_check.isChecked(),
         )
         self.store.save()
         save_hotkey_mirror(self.unlock_hotkey)
+        save_auth_scope_mirror(
+            self.face_unlock_check.isChecked(),
+            self.face_unlock_logon_check.isChecked(),
+            self.face_unlock_workstation_check.isChecked(),
+        )
         QMessageBox.information(self, tr("saved_title"), tr("settings_saved"))
 
     def _set_hotkey(self) -> None:

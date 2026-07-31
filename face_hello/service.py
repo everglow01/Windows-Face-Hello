@@ -31,7 +31,7 @@ import win32security
 from . import config
 from .auth import AuthResult, authenticate_blocking
 from .detector import FaceDetector
-from .i18n import save_lang_mirror, t
+from .i18n import save_auth_scope_mirror, save_lang_mirror, t
 from .store import FaceStore
 
 _BUF = 65536
@@ -359,9 +359,15 @@ def serve(should_continue=None) -> None:
         _t_anti - _t, _t_det - _t, _t_liv - _t_det, _t_anti - _t_liv,
     )
     store = FaceStore().load()
-    # 以 SYSTEM 身份把语言镜像同步成 settings 的值,保证重启后锁屏磁贴语言与控制台一致
+    # 以 SYSTEM 身份把 CP 明文镜像同步成 settings 的值,保证重启后锁屏磁贴与控制台一致
     # (控制台非管理员时可能写不进 ProgramData,这里兜底)。
-    save_lang_mirror(store.get_settings().get("language", "zh"))
+    settings = store.get_settings()
+    save_lang_mirror(settings.get("language", "zh"))
+    save_auth_scope_mirror(
+        settings.get("face_unlock_enabled", True),
+        settings.get("face_unlock_logon_enabled", True),
+        settings.get("face_unlock_workstation_enabled", True),
+    )
     _log.info("FaceHello 服务:就绪,监听 %s", config.PIPE_NAME)
     try:
         while should_continue():

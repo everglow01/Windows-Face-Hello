@@ -1,8 +1,96 @@
 #include <new>
 #include <shlwapi.h>
 #include "CFaceProvider.h"
+#include <wtsapi32.h>
 #include "common.h"
 #include "helpers.h"
+
+namespace
+{
+constexpr DWORD kAuthScopeLogon = 0x1;
+constexpr DWORD kAuthScopeUnlock = 0x2;
+constexpr DWORD kAuthScopeDefault = kAuthScopeLogon | kAuthScopeUnlock;
+
+DWORD ReadAuthScope()
+{
+    HANDLE file = CreateFileW(
+        L"C:\\ProgramData\\FaceHello\\auth_scope.txt", GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        return kAuthScopeDefault;
+    }
+
+    LARGE_INTEGER size = {};
+    if (!GetFileSizeEx(file, &size) || size.QuadPart != 1)
+    {
+        CloseHandle(file);
+        return kAuthScopeDefault;
+    }
+
+    char value = '\0';
+    DWORD read = 0;
+    const BOOL ok = ReadFile(file, &value, 1, &read, nullptr);
+    CloseHandle(file);
+    if (!ok || read != 1 || value < '0' || value > '3')
+    {
+        return kAuthScopeDefault;
+    }
+    return static_cast<DWORD>(value - '0');
+}
+
+enum class SessionUserState
+{
+    Unknown,
+    Absent,
+    Present,
+};
+
+SessionUserState CurrentSessionUserState()
+{
+    LPWSTR user = nullptr;
+    DWORD bytes = 0;
+    const BOOL ok = WTSQuerySessionInformationW(
+        WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION,
+        WTSUserName, &user, &bytes);
+    if (!ok)
+    {
+        return SessionUserState::Unknown;
+    }
+    const bool hasUser = user != nullptr && bytes > sizeof(wchar_t) && user[0] != L'\0';
+    if (user)
+    {
+        WTSFreeMemory(user);
+    }
+    return hasUser ? SessionUserState::Present : SessionUserState::Absent;
+}
+
+bool IsUsageScenarioEnabled(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus)
+{
+    const DWORD scope = ReadAuthScope();
+    if (cpus == CPUS_LOGON)
+    {
+        // Windows 10+ 通常把登录与解锁都作为 CPUS_LOGON。已有会话用户表示
+        // Win+L 恢复;没有会话用户才是开机 / 注销后的登录。
+        const SessionUserState state = CurrentSessionUserState();
+        if (state == SessionUserState::Unknown)
+        {
+            // 无法区分时只接受两个场景都启用,避免违反用户明确关闭的范围。
+            return (scope & kAuthScopeDefault) == kAuthScopeDefault;
+        }
+        const DWORD required = state == SessionUserState::Present
+            ? kAuthScopeUnlock : kAuthScopeLogon;
+        return (scope & required) != 0;
+    }
+    if (cpus == CPUS_UNLOCK_WORKSTATION)
+    {
+        // 旧系统或特定组策略仍可能显式发送解锁场景。
+        return (scope & kAuthScopeUnlock) != 0;
+    }
+    return false;
+}
+}
 
 // 字段定义,Provider 与 Credential 共用(声明在 common.h)。
 static wchar_t g_imageLabel[] = L"Image";
@@ -177,6 +265,11 @@ IFACEMETHODIMP CFaceProvider::SetUsageScenario(
     {
     case CPUS_LOGON:
     case CPUS_UNLOCK_WORKSTATION:
+        if (!IsUsageScenarioEnabled(cpus))
+        {
+            _ReleaseEnumeratedCredentials();
+            return E_NOTIMPL;
+        }
         if (!_pCredential)
         {
             _CreateEnumeratedCredential(cpus);

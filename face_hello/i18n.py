@@ -3,7 +3,7 @@
 语言来源是 store 的 settings['language'](DEFAULTS 给 "zh")。约定:
 - 库代码(liveness/auth/service)显式传 lang:`t(key, settings.get("language"))`;
 - GUI 启动时 set_lang() 一次,之后用 tr(key)(走模块全局),故"重启控制台生效";
-- C++ Credential Provider 读不了 DPAPI 人脸库,改读明文镜像 lang.txt(save_lang_mirror)。
+- C++ Credential Provider 读不了 DPAPI 人脸库,改读明文镜像 lang.txt / auth_scope.txt。
 """
 from __future__ import annotations
 
@@ -131,6 +131,10 @@ _CATALOG: dict[str, dict[str, str]] = {
         "camera_test_title": "摄像头预览",
         "camera_test_fail": "打不开摄像头 index={idx},换个索引再试。",
         "unlock_hotkey_label": "刷脸启动热键:",
+        "face_unlock_enabled": "启用刷脸解锁",
+        "face_unlock_scope_label": "启用范围:",
+        "face_unlock_logon": "Windows 登录（开机/注销）",
+        "face_unlock_workstation": "工作站解锁（Win+L）",
         "hotkey_none": "未设置",
         "hotkey_space": "空格",
         "hotkey_enter": "回车",
@@ -447,6 +451,10 @@ _CATALOG: dict[str, dict[str, str]] = {
         "camera_test_title": "Camera preview",
         "camera_test_fail": "Can't open camera index={idx}; try another.",
         "unlock_hotkey_label": "Face unlock hotkey:",
+        "face_unlock_enabled": "Enable face unlock",
+        "face_unlock_scope_label": "Enabled for:",
+        "face_unlock_logon": "Windows sign-in (startup/sign-out)",
+        "face_unlock_workstation": "Workstation unlock (Win+L)",
         "hotkey_none": "Not set",
         "hotkey_space": "Space",
         "hotkey_enter": "Enter",
@@ -694,3 +702,15 @@ def save_hotkey_mirror(hotkey: str) -> None:
 
     text = str(hotkey or "").strip().upper()
     _save_mirror(config.HOTKEY_FILE, text)
+
+
+def save_auth_scope_mirror(enabled: bool, logon: bool, workstation: bool) -> None:
+    """写 CP 场景位掩码:bit 0=Windows 登录,bit 1=工作站解锁。"""
+    from . import config
+
+    mask = 0
+    if enabled and logon:
+        mask |= 1
+    if enabled and workstation:
+        mask |= 2
+    _save_mirror(config.AUTH_SCOPE_FILE, str(mask))

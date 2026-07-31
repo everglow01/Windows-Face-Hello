@@ -44,6 +44,9 @@ AVATAR_DIR = _PROGRAMDATA
 # (CP 读不了 DPAPI 加密的人脸库)。控制台改语言时写,服务启动时按 settings 同步。
 LANG_FILE = _PROGRAMDATA / "lang.txt"
 HOTKEY_FILE = _PROGRAMDATA / "hotkey.txt"
+# 刷脸启用范围镜像:十进制位掩码供 C++ CP 读取(bit 0=登录,bit 1=工作站解锁)。
+# 文件缺失或内容无效时 CP 默认两项都启用,保证旧版本升级行为不变。
+AUTH_SCOPE_FILE = _PROGRAMDATA / "auth_scope.txt"
 
 # 认证服务的命名管道(Credential Provider 通过它请求认证)
 PIPE_NAME = r"\\.\pipe\FaceHello"
@@ -104,6 +107,10 @@ DEFAULTS = {
     # 摄像头索引(0=默认/第一个)。多摄像头(内置+USB+虚拟)时改这里;控制台「测试」按钮可预览确认。
     "camera_index": 0,
     "unlock_hotkey": "",
+    # CP 磁贴启用范围。总开关关闭时两个场景设置保留,重新开启后恢复原选择。
+    "face_unlock_enabled": True,
+    "face_unlock_logon_enabled": True,
+    "face_unlock_workstation_enabled": True,
     # 被动反欺骗(RGB 活体):识别帧上跑一次 MiniFASNet 判屏幕翻拍/视频回放。
     # 模型缺失/加载失败则 fail-open(跳过,照常解锁)。默认开,安全优先。
     "antispoof_enabled": True,
