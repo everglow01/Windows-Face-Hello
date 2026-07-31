@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import types
 import sys
+import zipfile
 from datetime import datetime
+
+import pytest
 
 from face_hello import diagnostics
 from face_hello.diagnostics import DiagnosticItem, DiagnosticReport
@@ -140,6 +143,117 @@ def test_pipe_health_reports_not_ready(monkeypatch) -> None:
     assert report.items[0].status == diagnostics.STATUS_FAIL
     assert "warm-up" in report.items[0].detail
     assert "Wait for model warm-up" in report.items[0].advice
+
+
+def test_run_diagnostics_includes_service_log_step(monkeypatch) -> None:
+    steps = []
+    monkeypatch.setattr(diagnostics.cred_vault, "current_user", lambda: "owen")
+    monkeypatch.setattr(diagnostics, "_is_admin", lambda: True)
+    monkeypatch.setattr(
+        diagnostics,
+        "_run_check",
+        lambda _report, _lang, _progress, key, _func, *args: steps.append(key),
+    )
+
+    diagnostics.run_diagnostics("en")
+
+    assert steps[-1] == "diag_step_log"
+    assert steps.count("diag_step_log") == 1
+
+
+def test_service_log_snapshot_counts_and_tails_without_writing(tmp_path) -> None:
+    path = tmp_path / "service.log"
+    lines = [f"2026-07-31 10:00:00 INFO line {i}" for i in range(205)]
+    lines[3] = "2026-07-31 10:00:00 WARNING camera delayed"
+    lines[4] = "2026-07-31 10:00:00 ERROR pipe failed"
+    path.write_bytes(("\n".join(lines) + "\n").encode("utf-8") + b"bad:\xff\n")
+    before = path.read_bytes()
+
+    snapshot = diagnostics.read_service_log(path)
+
+    assert snapshot.warnings == 1
+    assert snapshot.errors == 1
+    assert len(snapshot.tail.splitlines()) == 200
+    assert "line 0" not in snapshot.tail
+    assert "bad:�" in snapshot.tail
+    assert path.read_bytes() == before
+
+
+def test_log_check_handles_missing_empty_and_read_error(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(diagnostics.config, "DATA_DIR", tmp_path)
+    report = _report()
+    diagnostics._check_log(report, "en")
+    assert report.items[0].status == diagnostics.STATUS_FAIL
+    assert "Log not found" in report.items[0].detail
+
+    path = tmp_path / "service.log"
+    path.write_text("", encoding="utf-8")
+    report = _report()
+    diagnostics._check_log(report, "en")
+    assert report.items[0].status == diagnostics.STATUS_OK
+    assert report.service_log is not None
+    assert report.service_log.tail == ""
+
+    monkeypatch.setattr(diagnostics, "read_service_log", lambda _path: (_ for _ in ()).throw(
+        PermissionError("denied")
+    ))
+    report = _report()
+    diagnostics._check_log(report, "en")
+    assert report.items[0].status == diagnostics.STATUS_FAIL
+    assert "denied" in report.items[0].detail
+
+
+def test_redact_diagnostics_text_hides_users_and_credentials() -> None:
+    text = "owen unlocked for Alice password=hunter2 pwd: 1234 secret = token normal text"
+
+    redacted = diagnostics.redact_diagnostics_text(text, ["owen", "Alice"])
+
+    assert "owen" not in redacted
+    assert "Alice" not in redacted
+    assert "hunter2" not in redacted
+    assert "1234" not in redacted
+    assert "token" not in redacted
+    assert "normal text" in redacted
+    assert redacted.count("<redacted>") == 3
+
+
+def test_export_bundle_uses_whitelist_and_redacts(tmp_path) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "service.log").write_text(
+        "2026 INFO user=owen password=hunter2\n", encoding="utf-8"
+    )
+    (data / "service.log.1").write_text("Alice secret: token\n", encoding="utf-8")
+    (data / "faces.dat").write_bytes(b"private-face-store")
+    (data / "avatar.png").write_bytes(b"private-image")
+    (data / "settings.txt").write_text("private-setting", encoding="utf-8")
+    report = _report()
+    report.items.append(DiagnosticItem("Store", diagnostics.STATUS_OK, "owen and Alice"))
+
+    target = diagnostics.export_diagnostic_bundle(
+        tmp_path / "bundle", report, "en", data, ["Alice"]
+    )
+
+    assert target.name == "bundle.zip"
+    with zipfile.ZipFile(target) as archive:
+        assert set(archive.namelist()) == {
+            "diagnostics.txt", "logs/service.log", "logs/service.log.1"
+        }
+        combined = "\n".join(
+            archive.read(name).decode("utf-8") for name in archive.namelist()
+        )
+    assert "owen" not in combined
+    assert "Alice" not in combined
+    assert "hunter2" not in combined
+    assert "token" not in combined
+    assert "private-face-store" not in combined
+    assert "private-image" not in combined
+    assert "private-setting" not in combined
+
+
+def test_export_bundle_requires_current_log(tmp_path) -> None:
+    with pytest.raises(FileNotFoundError):
+        diagnostics.export_diagnostic_bundle(tmp_path / "bundle.zip", _report(), data_dir=tmp_path)
 
 
 def test_cp_registry_error_becomes_diagnostic_item(monkeypatch, tmp_path) -> None:

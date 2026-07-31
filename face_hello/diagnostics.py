@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import re
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +19,20 @@ STATUS_FAIL = "fail"
 STATUS_INFO = "info"
 
 _CP_CLSID = "{E071A7CE-5D7F-4063-9A10-AE39AEC64EE8}"
+_LOG_TAIL_LINES = 200
+_LOG_NAMES = ("service.log", "service.log.1", "service.log.2", "service.log.3")
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(password|passwd|pwd|secret)\b(\s*[:=]\s*)([^\s,;]+)"
+)
+
+
+@dataclass
+class ServiceLogSnapshot:
+    path: Path
+    modified_at: datetime
+    warnings: int
+    errors: int
+    tail: str
 
 
 @dataclass
@@ -33,6 +50,7 @@ class DiagnosticReport:
     user: str
     is_admin: bool
     items: list[DiagnosticItem] = field(default_factory=list)
+    service_log: ServiceLogSnapshot | None = None
 
     @property
     def overall_status(self) -> str:
@@ -86,6 +104,7 @@ def run_diagnostics(lang: str = "zh", progress: Callable[[str], None] | None = N
     _run_check(report, lang, progress, "diag_step_cp", _check_cp)
     _run_check(report, lang, progress, "diag_step_models", _check_models)
     _run_check(report, lang, progress, "diag_step_camera", _check_camera)
+    _run_check(report, lang, progress, "diag_step_log", _check_log)
     return report
 
 
@@ -291,6 +310,94 @@ def _check_models(report: DiagnosticReport, lang: str) -> None:
         t("diag_models_ok", lang, seconds=f"{elapsed:.1f}",
           antispoof=_yes_no(antispoof_ready, lang)),
     )
+
+
+def _check_log(report: DiagnosticReport, lang: str) -> None:
+    path = config.DATA_DIR / "service.log"
+    try:
+        snapshot = read_service_log(path)
+    except FileNotFoundError:
+        _add(report, lang, "diag_item_log", STATUS_FAIL, t("diag_log_missing", lang, path=path))
+        return
+    except OSError as exc:
+        _add(report, lang, "diag_item_log", STATUS_FAIL, t("diag_log_read_fail", lang, e=exc))
+        return
+
+    report.service_log = snapshot
+    _add(
+        report, lang, "diag_item_log", STATUS_OK,
+        t(
+            "diag_log_summary", lang,
+            path=snapshot.path,
+            mtime=snapshot.modified_at.isoformat(sep=" ", timespec="seconds"),
+            warnings=snapshot.warnings,
+            errors=snapshot.errors,
+        ),
+    )
+
+
+def read_service_log(path: Path | None = None) -> ServiceLogSnapshot:
+    path = path or config.DATA_DIR / "service.log"
+    content = path.read_text(encoding="utf-8", errors="replace")
+    lines = content.splitlines()
+    return ServiceLogSnapshot(
+        path=path,
+        modified_at=datetime.fromtimestamp(path.stat().st_mtime),
+        warnings=sum(" WARNING " in f" {line} " for line in lines),
+        errors=sum(" ERROR " in f" {line} " for line in lines),
+        tail="\n".join(lines[-_LOG_TAIL_LINES:]),
+    )
+
+
+def redact_diagnostics_text(text: str, users: list[str]) -> str:
+    """对外导出前遮蔽用户名和意外出现的凭据赋值。"""
+    redacted = text
+    unique_users = sorted(
+        {str(user).strip() for user in users if str(user).strip()},
+        key=lambda value: (-len(value), value.casefold()),
+    )
+    for index, user in enumerate(unique_users, start=1):
+        redacted = re.sub(re.escape(user), f"<user-{index}>", redacted, flags=re.IGNORECASE)
+    return _SECRET_ASSIGNMENT.sub(r"\1\2<redacted>", redacted)
+
+
+def export_diagnostic_bundle(
+    target: Path,
+    report: DiagnosticReport,
+    lang: str = "zh",
+    data_dir: Path | None = None,
+    profile_names: list[str] | None = None,
+) -> Path:
+    """导出固定白名单诊断 ZIP；不扫描 data 目录，不包含人脸库或图片。"""
+    data_dir = data_dir or config.DATA_DIR
+    users = [report.user, *(profile_names or [])]
+    report_text = redact_diagnostics_text(report.to_text(lang), users)
+    entries: list[tuple[str, bytes]] = [
+        ("diagnostics.txt", report_text.encode("utf-8")),
+    ]
+    for name in _LOG_NAMES:
+        path = data_dir / name
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            if name == "service.log":
+                raise
+            continue
+        entries.append(
+            (f"logs/{name}", redact_diagnostics_text(content, users).encode("utf-8"))
+        )
+
+    target = target.with_suffix(".zip") if target.suffix.lower() != ".zip" else target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    try:
+        with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, content in entries:
+                archive.writestr(name, content)
+        os.replace(temp, target)
+    finally:
+        temp.unlink(missing_ok=True)
+    return target
 
 
 def _check_camera(report: DiagnosticReport, lang: str) -> None:

@@ -8,8 +8,19 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QSize, QTimer, Qt
-from PySide6.QtGui import QBrush, QColor, QIcon, QImage, QPainter, QPen, QPixmap, QPolygon
+from PySide6.QtCore import QEvent, QPoint, QSize, QTimer, QUrl, Qt
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QDesktopServices,
+    QFontDatabase,
+    QIcon,
+    QImage,
+    QPainter,
+    QPen,
+    QPixmap,
+    QPolygon,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -17,6 +28,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDoubleSpinBox,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -24,6 +36,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -66,7 +79,13 @@ from app.widgets import (
     preview_label as _preview_label,
     show_frame as _show_frame,
 )
-from face_hello.diagnostics import DiagnosticReport, status_label
+from face_hello.diagnostics import (
+    DiagnosticReport,
+    ServiceLogSnapshot,
+    export_diagnostic_bundle,
+    read_service_log,
+    status_label,
+)
 from face_hello import config, cred_vault, probes
 from face_hello.auth import AuthResult
 from face_hello.detector import FaceDetector
@@ -1406,6 +1425,22 @@ class ServiceTab(QWidget):
         self.diag_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.diag_table.setWordWrap(False)
         self.diag_table.setMinimumHeight(190)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(200)
+        self.log_view.setMinimumHeight(180)
+        self.log_view.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        self.log_view.setPlainText(tr("diag_log_empty_tail"))
+        self.log_summary = QLabel(tr("diag_log_pending"))
+        self.log_summary.setObjectName("hint")
+        self.log_summary.setWordWrap(True)
+        self.log_refresh_btn = QPushButton(tr("diag_log_refresh"))
+        self.log_refresh_btn.clicked.connect(self._refresh_log)
+        self.log_open_btn = QPushButton(tr("diag_log_open_dir"))
+        self.log_open_btn.clicked.connect(self._open_log_directory)
+        self.diag_export_btn = QPushButton(tr("diag_export"))
+        self.diag_export_btn.setEnabled(False)
+        self.diag_export_btn.clicked.connect(self._export_diagnostics)
 
         # 这些动作都需管理员,非管理员时禁用
         self._admin_widgets = [
@@ -1429,6 +1464,8 @@ class ServiceTab(QWidget):
 
         diag_title = QLabel(tr("diag_title"))
         diag_title.setObjectName("h2")
+        log_title = QLabel(tr("diag_log_title"))
+        log_title.setObjectName("h2")
 
         self.advanced_btn = QPushButton(tr("advanced_show"))
         self.advanced_btn.setCheckable(True)
@@ -1493,6 +1530,17 @@ class ServiceTab(QWidget):
         content_layout.addSpacing(12)
         content_layout.addWidget(diag_title)
         content_layout.addWidget(self.diag_table)
+
+        content_layout.addSpacing(12)
+        content_layout.addWidget(log_title)
+        content_layout.addWidget(self.log_summary)
+        log_actions = QHBoxLayout()
+        log_actions.addWidget(self.log_refresh_btn)
+        log_actions.addWidget(self.log_open_btn)
+        log_actions.addWidget(self.diag_export_btn)
+        log_actions.addStretch(1)
+        content_layout.addLayout(log_actions)
+        content_layout.addWidget(self.log_view)
 
         content_layout.addSpacing(12)
         content_layout.addWidget(
@@ -1575,6 +1623,8 @@ class ServiceTab(QWidget):
     def _run_diagnostics(self) -> None:
         self.diag_run_btn.setEnabled(False)
         self.diag_copy_btn.setEnabled(False)
+        self.diag_export_btn.setEnabled(False)
+        self.diag_report = None
         self.diag_table.setRowCount(0)
         lang = self.store.get_settings().get("language", "zh")
         self.diag_worker = DiagnosticsWorker(lang)
@@ -1595,11 +1645,14 @@ class ServiceTab(QWidget):
         self.diag_summary.setStyleSheet(f"color:{color};font-weight:600;")
         self.diag_summary.setText(tr("readiness_result", status=status))
         self._load_diag_table(report)
+        self._show_log_snapshot(report.service_log)
 
     def _on_diag_finished(self) -> None:
         self.diag_worker = None
         self.diag_run_btn.setEnabled(True)
-        self.diag_copy_btn.setEnabled(self.diag_report is not None)
+        ready = self.diag_report is not None
+        self.diag_copy_btn.setEnabled(ready)
+        self.diag_export_btn.setEnabled(ready and self.diag_report.service_log is not None)
 
     def _load_diag_table(self, report: DiagnosticReport) -> None:
         lang = self.store.get_settings().get("language", "zh")
@@ -1619,6 +1672,76 @@ class ServiceTab(QWidget):
                     cell.setForeground(QBrush(QColor(colors.get(item.status, TEXT_MUTED))))
                 self.diag_table.setItem(row, col, cell)
         self.diag_table.resizeRowsToContents()
+
+    def _show_log_snapshot(self, snapshot: ServiceLogSnapshot | None) -> None:
+        if snapshot is None:
+            self.log_summary.setText(tr("diag_log_pending"))
+            self.log_view.setPlainText(tr("diag_log_empty_tail"))
+            return
+        self.log_summary.setText(
+            tr(
+                "diag_log_summary",
+                path=snapshot.path,
+                mtime=snapshot.modified_at.isoformat(sep=" ", timespec="seconds"),
+                warnings=snapshot.warnings,
+                errors=snapshot.errors,
+            )
+        )
+        text = snapshot.tail or tr("diag_log_empty_tail")
+        self.log_view.setPlainText(text)
+        scrollbar = self.log_view.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _refresh_log(self) -> None:
+        try:
+            snapshot = read_service_log()
+        except FileNotFoundError:
+            self.log_summary.setText(tr("diag_log_missing", path=config.DATA_DIR / "service.log"))
+            self.log_view.setPlainText(tr("diag_log_empty_tail"))
+            self.diag_export_btn.setEnabled(False)
+        except OSError as exc:
+            self.log_summary.setText(tr("diag_log_read_fail", e=exc))
+            self.log_view.setPlainText(tr("diag_log_empty_tail"))
+            self.diag_export_btn.setEnabled(False)
+        else:
+            self._show_log_snapshot(snapshot)
+            if self.diag_report is not None:
+                self.diag_report.service_log = snapshot
+                self.diag_export_btn.setEnabled(True)
+
+    def _open_log_directory(self) -> None:
+        path = config.DATA_DIR
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            QMessageBox.warning(
+                self, tr("diag_log_title"), tr("diag_log_open_fail", path=path)
+            )
+
+    def _export_diagnostics(self) -> None:
+        if self.diag_report is None:
+            return
+        stamp = self.diag_report.started_at.strftime("%Y%m%d-%H%M%S")
+        default = str(Path.home() / "Desktop" / tr("diag_export_default", time=stamp))
+        selected, _ = QFileDialog.getSaveFileName(
+            self, tr("diag_export"), default, tr("diag_export_filter")
+        )
+        if not selected:
+            return
+        try:
+            profiles = [profile.name for profile in self.store.list_profiles()]
+            path = export_diagnostic_bundle(
+                Path(selected),
+                self.diag_report,
+                self.store.get_settings().get("language", "zh"),
+                profile_names=profiles,
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self, tr("diag_export"), tr("diag_export_fail", e=exc)
+            )
+            return
+        QMessageBox.information(
+            self, tr("diag_export"), tr("diag_export_ok", path=path)
+        )
 
     def _copy_diagnostics(self) -> None:
         if self.diag_report is None:
