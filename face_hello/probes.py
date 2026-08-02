@@ -17,6 +17,8 @@ class ServiceInfo:
     start_type: int
     account: str
     image_path: str
+    recovery_actions: dict | None = None
+    non_crash_failures: bool | None = None
 
 
 class PipeConnectError(RuntimeError):
@@ -155,11 +157,28 @@ def query_service() -> ServiceInfo:
     svc = None
     try:
         scm = win32service.OpenSCManager(None, None, win32con.GENERIC_READ)
-        svc = win32service.OpenService(scm, config.SERVICE_NAME, win32service.SERVICE_QUERY_CONFIG)
+        svc = win32service.OpenService(
+            scm,
+            config.SERVICE_NAME,
+            win32service.SERVICE_QUERY_CONFIG,
+        )
         cfg = win32service.QueryServiceConfig(svc)
+        recovery_actions = win32service.QueryServiceConfig2(
+            svc, win32service.SERVICE_CONFIG_FAILURE_ACTIONS
+        )
+        non_crash_failures = win32service.QueryServiceConfig2(
+            svc, win32service.SERVICE_CONFIG_FAILURE_ACTIONS_FLAG
+        )
     finally:
         if svc is not None:
             win32service.CloseServiceHandle(svc)
         if scm is not None:
             win32service.CloseServiceHandle(scm)
-    return ServiceInfo(status, cfg[1], cfg[7], cfg[3])
+    return ServiceInfo(
+        status,
+        cfg[1],
+        cfg[7],
+        cfg[3],
+        recovery_actions,
+        non_crash_failures,
+    )

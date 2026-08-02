@@ -14,7 +14,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import servicemanager  # noqa: E402
 import win32serviceutil  # noqa: E402
 
-from face_hello.win_service import FaceHelloService  # noqa: E402
+from face_hello.win_service import (  # noqa: E402
+    FaceHelloService,
+    configure_service_recovery,
+)
+
+
+def _configure_recovery(*_options) -> None:
+    try:
+        configure_service_recovery()
+    except Exception as exc:
+        # install 路径会捕获 ValueError 并删除部分创建的服务；update 也会非零退出。
+        raise ValueError(f"failed to configure service recovery: {exc}") from exc
+
 
 if __name__ == "__main__":
     if len(sys.argv) == 1:
@@ -29,4 +41,8 @@ if __name__ == "__main__":
             from face_hello import config
 
             config.AVATAR_DIR.mkdir(parents=True, exist_ok=True)
-        win32serviceutil.HandleCommandLine(FaceHelloService)
+        rc = win32serviceutil.HandleCommandLine(
+            FaceHelloService,
+            customOptionHandler=_configure_recovery,
+        )
+        raise SystemExit(rc)

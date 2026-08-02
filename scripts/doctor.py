@@ -155,6 +155,7 @@ def _same_path(left: str | Path, right: str | Path) -> bool:
 
 def check_service_deployment() -> bool:
     from face_hello import config, probes
+    from face_hello.win_service import service_recovery_matches
 
     try:
         info = probes.query_service()
@@ -174,14 +175,26 @@ def check_service_deployment() -> bool:
         and args[1] == "-u"
         and _same_path(args[2], expected_launcher)
     )
-    ok = info.status == 4 and info.start_type == 2 and path_ok
+    recovery_ok = (
+        info.recovery_actions is not None
+        and info.non_crash_failures is not None
+        and service_recovery_matches(
+            info.recovery_actions, info.non_crash_failures
+        )
+    )
+    ok = info.status == 4 and info.start_type == 2 and path_ok and recovery_ok
     if ok:
-        _print(OK, f"Windows 服务:运行中,自动启动,ImagePath 指向当前安装目录（账户 {info.account}）")
+        _print(
+            OK,
+            "Windows 服务:运行中,自动启动,ImagePath 指向当前安装目录,"
+            f"有限异常恢复已配置（账户 {info.account}）",
+        )
     else:
         _print(
             FAIL,
             "Windows 服务配置异常:"
-            f"状态={info.status},启动类型={info.start_type},ImagePath匹配={path_ok}",
+            f"状态={info.status},启动类型={info.start_type},"
+            f"ImagePath匹配={path_ok},异常恢复匹配={recovery_ok}",
         )
     return ok
 

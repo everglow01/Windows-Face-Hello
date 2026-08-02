@@ -46,6 +46,9 @@ def test_check_service_deployment_requires_running_auto_and_exact_command(
     monkeypatch, installed_config
 ):
     from face_hello import probes
+    from face_hello.win_service import expected_service_recovery
+
+    recovery_actions, non_crash_failures = expected_service_recovery()
 
     python = installed_config.INSTALL_ROOT / "python" / "python.exe"
     launcher = installed_config.INSTALL_ROOT / "winservice_main.py"
@@ -57,10 +60,31 @@ def test_check_service_deployment_requires_running_auto_and_exact_command(
             start_type=2,
             account="LocalSystem",
             image_path=f'"{python}" -u "{launcher}"',
+            recovery_actions=recovery_actions,
+            non_crash_failures=non_crash_failures,
         ),
     )
 
     assert doctor.check_service_deployment() is True
+
+    bad_recovery = dict(recovery_actions)
+    bad_recovery["Actions"] = (
+        (1, 60_000),
+        (1, 120_000),
+    )
+    monkeypatch.setattr(
+        probes,
+        "query_service",
+        lambda: probes.ServiceInfo(
+            status=4,
+            start_type=2,
+            account="LocalSystem",
+            image_path=f'"{python}" -u "{launcher}"',
+            recovery_actions=bad_recovery,
+            non_crash_failures=non_crash_failures,
+        ),
+    )
+    assert doctor.check_service_deployment() is False
 
     monkeypatch.setattr(
         probes,
@@ -70,6 +94,8 @@ def test_check_service_deployment_requires_running_auto_and_exact_command(
             start_type=3,
             account="LocalSystem",
             image_path=f'"{python}" -u "{launcher}"',
+            recovery_actions=recovery_actions,
+            non_crash_failures=non_crash_failures,
         ),
     )
     assert doctor.check_service_deployment() is False

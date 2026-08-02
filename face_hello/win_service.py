@@ -24,6 +24,58 @@ import win32serviceutil
 from . import config
 from .service import serve, setup_logging
 
+_RECOVERY_ACTIONS = (
+    (win32service.SC_ACTION_RESTART, 60_000),
+    (win32service.SC_ACTION_RESTART, 120_000),
+    (win32service.SC_ACTION_NONE, 0),
+)
+_RECOVERY_RESET_SECONDS = 24 * 60 * 60
+
+
+def expected_service_recovery() -> tuple[dict, bool]:
+    return (
+        {
+            "ResetPeriod": _RECOVERY_RESET_SECONDS,
+            "RebootMsg": None,
+            "Command": None,
+            "Actions": _RECOVERY_ACTIONS,
+        },
+        True,
+    )
+
+
+def service_recovery_matches(actions: dict, non_crash_failures: bool) -> bool:
+    expected_actions, expected_flag = expected_service_recovery()
+    return actions == expected_actions and non_crash_failures is expected_flag
+
+
+def configure_service_recovery() -> None:
+    """异常退出后有限重启；正常的 SCM stop 不触发恢复。"""
+    scm = None
+    service = None
+    try:
+        scm = win32service.OpenSCManager(
+            None, None, win32service.SC_MANAGER_CONNECT
+        )
+        service = win32service.OpenService(
+            scm, config.SERVICE_NAME, win32service.SERVICE_CHANGE_CONFIG
+        )
+        actions, non_crash_failures = expected_service_recovery()
+        win32service.ChangeServiceConfig2(
+            service, win32service.SERVICE_CONFIG_FAILURE_ACTIONS, actions
+        )
+        # pywin32 会把 SvcDoRun 异常报告为非零 SERVICE_STOPPED，故需启用此项。
+        win32service.ChangeServiceConfig2(
+            service,
+            win32service.SERVICE_CONFIG_FAILURE_ACTIONS_FLAG,
+            non_crash_failures,
+        )
+    finally:
+        if service is not None:
+            win32service.CloseServiceHandle(service)
+        if scm is not None:
+            win32service.CloseServiceHandle(scm)
+
 
 class FaceHelloService(win32serviceutil.ServiceFramework):
     _svc_name_ = config.SERVICE_NAME
