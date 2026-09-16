@@ -23,10 +23,15 @@
 | 安装态 / 开发态路径分流(`.installed` 标记 + `FACEHELLO_HOME`) | ✅ 完成 |
 | 便携包(standalone CPython + 依赖)+ Inno 安装器 + 中文向导 | ✅ 完成 |
 | 一键干净卸载(停删服务、注销 CP、清 LSA 密码 + 人脸库) | ✅ 完成 |
-| 体积瘦身:PySide6-Essentials + buffalo_l 剪枝 → `setup.exe` ~322MB | ✅ 完成 |
+| 体积瘦身:PySide6-Essentials + buffalo_l 剪枝 / FP16 识别模型 | ✅ `v1.0.5` 安装包 260,924,312 字节(约 249 MiB) |
 | GitHub Release 自动化(打 tag → CI 出 setup.exe) | ✅ 完成 |
 | **5-4 加固:管道 ACL(SYSTEM+Administrators)、CP 服务端身份验证、失败兜底 / 锁定、日志完善、`authenticate` 开发态门控** | ✅ 完成(Python + CP,随 `v1.0.5` 发布) |
-| **代码签名:签名管道已落地(自签名验证 + env/`#ifdef` 门控,见 SIGNING.md);真实 EV/Azure 证书待接** | 🚧 脚手架完成 |
+| 刷脸总开关 + Windows 登录 / 工作站解锁独立范围 | ✅ 完成(`v1.0.6`) |
+| 管理台服务日志查看 + 脱敏诊断 ZIP 导出 | ✅ 完成(`v1.0.6`) |
+| 可选多人保护(默认关闭,身份比对前拒绝) | ✅ 完成(`v1.0.6`) |
+| SCM 有限异常恢复(60s、120s、之后不处理;24h 重置) | ✅ 完成(`v1.0.6`) |
+| 睡眠 / 恢复专项验收 | 🚧 短时与长时睡眠已通过,其余硬件场景继续记录 |
+| **代码签名:固定个人自签名证书、signer pin、DLL / 安装器 / 卸载器签名** | ✅ 完成;不计划申请官方 CA 证书 |
 | 进一步瘦身:opencv-headless、砍 scipy/onnx 传递依赖 | ⏳ 待做 |
 | 被动反欺骗(Silent-Face MiniFASNet,默认开 + 模型缺失 fail-open) | ✅ 完成 |
 | 同名多模板录入(「补录角度」追加、解锁取最高相似度、FIFO 封顶) | ✅ 完成 |
@@ -74,8 +79,10 @@ Windows Hello 人脸不支持普通摄像头,根本原因不是模型不够好,�
 │  人脸认证服务 (Python, LocalSystem, 常驻)            
 │   ├─ 摄像头采集 (OpenCV, CAP_DSHOW)                  
 │   ├─ 活体检测   (MediaPipe FaceLandmarker:眨眼/转头) 
-│   ├─ 人脸识别   (InsightFace ArcFace, 512 维)       
-│   └─ 比对注册库 → 返回 {ok, user, similarity}        
+│   ├─ 被动反欺骗 (Silent-Face MiniFASNet)
+│   ├─ 人脸识别   (InsightFace ArcFace, 512 维)
+│   └─ 可选多人门控 + 人脸库比对
+│      → 返回 {ok, user, similarity}
 │        │                                            
 │        ▼  ② 匹配成功                                
 │  CP 在 SYSTEM 上下文自读 LSA Secret 里的密码,        
@@ -108,6 +115,7 @@ Windows Hello 人脸不支持普通摄像头,根本原因不是模型不够好,�
 - 密码以 LSA Secret 存储,**永不经过 IPC**;人脸库存特征向量(非照片),DPAPI 机器范围加密落盘。
 - **绝不移除系统的密码 / PIN 提供程序**——兜底登录必须始终在。CP 注册 / 真机测试先打快照 + 留备用管理员账户 + 系统还原点。
 - **多账户防错配(margin)**:一台机器多人录入时,gallery 与单一阈值共用,`best_match` 取全库最相似者——若两人特征接近,可能把 A 判成 B 进而**解错账户**(单目 RGB 的固有弱点)。为此识别阶段加了 **margin 校验**:除了 `相似度 ≥ match_threshold`,还要求 `最佳 − 最相似的另一个人 ≥ match_margin`(默认 0.05);贴得太近则判为「身份不明确」直接拒绝,宁可让用户走密码兜底,也不冒险解错账户。只录一个人时无竞争者(margin=∞),不触发;阈值在设置页可调,`match_margin=0` 关闭。识别按 profile 名区分竞争者,同名多模板不互算对手。
+- **可选多人保护**:启用后，`AuthSession` 会在反欺骗和身份比对前统计检测到的人脸数。两张或更多人脸会立即按生物特征失败拒绝，占用 CP 磁贴三次机会之一。该功能默认关闭，避免背景中的旁人、屏幕、海报或远处人脸造成误拒；关闭时仍沿用面积最大人脸的原有行为。
 
 ---
 
@@ -131,9 +139,10 @@ Windows Hello 人脸不支持普通摄像头,根本原因不是模型不够好,�
 - [x] **阶段 5 — Credential Provider**:C++ COM 锁屏集成 + LSA 凭据 + KERB 解锁。**主体完成、真机验证**(详见 §9)。
 - [x] **分发 — setup.exe**:便携包 + Inno 中文向导 + 干净卸载 + Release 自动化,已进入正式 `v1.0.0` 版本线；后续补齐应用内更新、可恢复升级和自动安装态验收(详见 §10)。
 - [x] **加固(5-4)**:管道 ACL(SYSTEM+Administrators)、CP 侧 LocalSystem 服务端验证、失败兜底 / 锁定、日志完善和 `authenticate` 开发态门控均已完成,随 `v1.0.5` 发布。
-- [ ] **发布前置:代码签名**——签名管道已搭通(`build_release` 按 `FACEHELLO_SIGN_PFX` 签 CP DLL、Inno `/DSign` 签 setup.exe;自签名已端到端验证,见 SIGNING.md);真实 EV/Azure 证书待接。
+- [x] **运行控制与诊断(`v1.0.6`)**:刷脸总开关和分场景开关、管理台日志查看 / 脱敏导出、可选多人保护及 SCM 有限异常恢复。
+- [x] **代码签名**:正式 DLL、安装器和卸载器使用项目固定的个人自签名证书。构建会固定 DER SHA-256，PFX 只从本机或 GitHub Secrets 读取；不计划申请官方 CA 证书(见 SIGNING.md)。
 - [x] **被动反欺骗**:Silent-Face MiniFASNet(`2.7_80x80`)+ RetinaFace 裁剪,识别阶段多帧采样判翻拍;默认开、可关、模型缺失 fail-open。
-- [ ] **可选增强**:GPU 推理、进一步瘦身(安全逻辑 pytest 已落地 + 接进 CI)。
+- [ ] **可选增强**:完成剩余睡眠 / 恢复硬件矩阵、GPU/NPU 推理、低打扰被动活体和进一步瘦身。
 - [ ] **阶段 6 — 跨平台**:Linux(PAM)/ macOS。平台抽象层(`platform_backend.py`)已抽出;集成层待做(详见 §12)。
 
 ---
@@ -171,6 +180,13 @@ Windows Hello 人脸不支持普通摄像头,根本原因不是模型不够好,�
 - [x] **日志完善**:`service.py` 引入 `logging` + `RotatingFileHandler`(`service.log`,约 1MB×3,带时间戳 / 级别),替换裸 `print`;服务态用 `_StreamToLogger` 垫片把 `sys.stdout/stderr`(含原生库 print 与未捕获 traceback)转进同一滚动日志(纯 C 层 stderr 噪声可能不落盘,仅启动横幅、非审计内容)。**从不记密码**;记 user 名 + similarity(本地日志,SYSTEM / 管理员可读)。
 - [x] **后续加固(v0.1.2 之后)**:同步 `authenticate` 命令(绕过锁定)改为**仅开发态**、安装态拒绝,生产管道只剩 `ping` + `auth_start`/`auth_poll`;被动反欺骗**多帧采样**取代单帧,回放无法靠单帧漏检溜过;安全状态机(锁定 / margin / 反欺骗门 / `authenticate` 门控)补了 **pytest** 并接进 CI。
 
+### 9.3 运行控制与恢复(`v1.0.6`)
+
+- [x] **刷脸启用范围**:管理台把 `C:\ProgramData\FaceHello\auth_scope.txt` 写成一字节位掩码(`0`=全关、`1`=Windows 登录、`2`=工作站解锁、`3`=两者)。文件缺失或无效时默认两项都开，兼容旧版本升级。Windows 10 及更高版本通常把开机/注销和 `Win+L` 都报告为 `CPUS_LOGON`，CP 因此通过当前 WTS 会话用户名区分；查询失败且只启用一个场景时，FaceHello 会隐藏，不越过用户设置。仍不支持 `CPUS_CREDUI` 或 UAC。
+- [x] **服务日志诊断**:管理台显示最近 200 行、修改时间和 WARNING / ERROR 数量，可打开日志目录并导出固定白名单 ZIP。导出内容仅含诊断报告与滚动日志，会遮蔽用户名和疑似凭据赋值，不包含 `faces.dat`、LSA Secret、人脸模板或摄像头画面。
+- [x] **SCM 有限异常恢复**:安装 / 更新时写入第一次异常停止 60 秒后重启、第二次 120 秒后重启、最后显式 `SC_ACTION_NONE`，24 小时无新失败后重置计数。`SERVICE_CONFIG_FAILURE_ACTIONS_FLAG` 覆盖 Python 异常导致的非零服务停止；管理员正常停止不会触发恢复，安装态验收会检查完整策略。
+- [x] **睡眠恢复先取证**:短时和长时睡眠已通过真机验收。休眠、合盖、快速启动、摄像头占用及 Windows 更新后恢复继续记录在 `SLEEP_RESUME_ACCEPTANCE.md`；没有稳定复现前，不加入电源事件框架或无条件重建 tracker。
+
 ---
 
 ## 10. 分发与安装包(setup.exe)
@@ -180,13 +196,13 @@ Windows Hello 人脸不支持普通摄像头,根本原因不是模型不够好,�
 ### 10.1 关键决策(均已落地)
 
 - [x] **Python 运行时 = standalone CPython + 依赖随包**(非 PyInstaller)。带一份 python-build-standalone(uv 同源)+ 装好的 `site-packages`,服务 / GUI 用绝对路径调 `python.exe` 跑源码。理由:mediapipe / insightface / onnxruntime 的原生数据文件原样保留,避开冻结 hook 与 pywin32 服务冻结的坑。
-- [x] **模型打进安装器**:buffalo_l(det_10g + w600k_r50,~191MB)+ face_landmarker.task(~3.7MB)内置,**首解锁不依赖联网**。
+- [x] **模型打进安装器**:内置 buffalo_l 检测模型、FP16 量化后的 w600k_r50 识别模型和 face_landmarker.task，**首次解锁不依赖联网**。源码 / 开发态首次下载仍是剪枝后的 FP32 buffalo_l(约 191MB)。
 - [x] **安装态 / 开发态分流**:`config.py` 按安装根的 **`.installed` 标记文件**(或 `FACEHELLO_HOME`)切换。用标记文件而非只靠环境变量,是因为 SCM 把系统环境变量块缓存到下次重启,服务刚装好读不到新设的变量;标记文件随安装即落盘,服务 / GUI 立刻一致。
 - [x] **C++ DLL 用 `/MT` 静态 CRT 编**:免装 VC++ 运行库。
-- [x] **安装态自动验收**:`doctor.py` 既保留模型 / 摄像头 / 管道实机自检，也能保存仅含哈希、大小和计数的安装前基线。安装器在修复 ProgramData ACL 后、改服务 / CP 前抓取基线；新服务就绪后检查 release 版本、SCM 自动启动与 ImagePath、管道版本 / 协议、当前版本 CP DLL、`service.log`、人脸库和系统 Credential Provider / Filter。成功删除临时基线；失败保留它并进入旧 payload / CP 恢复。基线不含用户名、人脸特征、Windows 密码或 LSA Secret。
+- [x] **安装态自动验收**:`doctor.py` 既保留模型 / 摄像头 / 管道实机自检，也能保存仅含哈希、大小和计数的安装前基线。安装器在修复 ProgramData ACL 后、改服务 / CP 前抓取基线；新服务就绪后检查 release 版本、SCM 自动启动、ImagePath 与有限恢复策略、管道版本 / 协议、当前版本 CP DLL、`service.log`、人脸库和系统 Credential Provider / Filter。成功删除临时基线；失败保留它并进入旧 payload / CP 恢复。基线不含用户名、人脸特征、Windows 密码或 LSA Secret。
 - [x] **统一服务健康契约**:安装维护、管理台诊断和 `doctor.py` 共用 `probes.service_health`,明确区分未就绪、版本不一致、协议不兼容和响应格式异常；更新检查也按本地网络、GitHub 限流 / 故障、manifest、磁盘、下载响应及哈希 / 签名校验分别提示。
 - [x] **应用内更新与可恢复升级**:管理台只负责显式检查、断点下载和安装前二次校验，随后经 UAC 启动正常安装器；不引入 SYSTEM updater，不静默安装，也不自动重启 Windows。manifest 提供版本、协议、SHA-256 和签名约束。升级前备份旧 payload，后置配置或自动验收失败时先恢复旧文件和旧 CP，再按升级前状态恢复服务。
-- [ ] **代码签名**:签名管道已落地(env / `#ifdef Sign` 门控,无证书构建不变;自签名供 VM 验证,见 SIGNING.md);真实证书(Azure Trusted Signing / EV)待接。注:CP DLL 无强制签名门槛,未签也能加载,签名只为消 SmartScreen 警告 + 降杀软误报。
+- [x] **代码签名**:tagged release 必须从 GitHub Secrets 取得固定的个人自签名 PFX。流水线先把证书 DER SHA-256 与 `FACEHELLO_EXPECTED_SIGNER_SHA256` 比对，再签 CP DLL、安装器和卸载器，上传前逐一验证。安装器只携带公钥 CER，并在 UAC 批准后先与 build info 中的 signer pin 比对，再建立本机信任。不计划申请官方 CA / Azure / EV 证书；私钥只留在本机或 GitHub Secrets(见 SIGNING.md)。
 
 ### 10.2 安装布局
 
@@ -201,7 +217,7 @@ C:\Program Files\FaceHello\          (只读,程序文件)
 
 C:\ProgramData\FaceHello\           (可写,运行期数据;SYSTEM 与提权 GUI 共享)
   ├─ data\  faces.dat  service.log
-  ├─ lang.txt  hotkey.txt           CP 可读的控制台设置镜像
+  ├─ lang.txt  hotkey.txt  auth_scope.txt  CP 可读的管理台设置镜像
   └─ <avatar>.png                   锁屏磁贴头像(CP 在 SYSTEM 读)
 ```
 
@@ -218,8 +234,8 @@ C:\ProgramData\FaceHello\           (可写,运行期数据;SYSTEM 与提权 GUI
 - [x] **编 CP DLL**:`MSBuild cp\FaceHelloCP.sln /p:Configuration=Release /p:Platform=x64`(`/MT`)。
 - [x] **便携包**:`scripts/build_release.py` —— 取 standalone CPython 3.11 → 装 `dist` 依赖组 → 瘦身 → 拷源码 + 模型 + DLL + pywin32 运行 DLL。产物默认 `%LOCALAPPDATA%\FaceHello-build\FaceHello`。
 - [x] **Inno 编译**:`installer\FaceHello.iss` → `installer\Output\FaceHello-Setup-x.y.z.exe`。`.iss`/`.isl` 为 **UTF-8 with BOM**(否则中文 Windows 当 GBK 读 → 乱码)。中文向导随仓库带 `ChineseSimplified.isl`(Inno 不自带中文)。
-- [x] **CD 自动化**:`.github/workflows/release.yml` —— 打 `v*` tag 触发:备模型 → 编 DLL + 便携包 → Inno 打 setup.exe → 传 GitHub Release。版本号从 tag 注入,`installer`/`pyproject` 不必手改。
-- [ ] **签名(脚手架已落地)**:`build_release` 按 `FACEHELLO_SIGN_PFX` 签 CP DLL、Inno `/DSign` 签 setup.exe + 卸载器(见 SIGNING.md);自签名验证管道,真实证书待接。
+- [x] **CD 自动化**:`.github/workflows/release.yml` —— 打 `v*` tag 后准备 / 剪枝 / FP16 量化模型，验证固定 signer pin，构建并签 DLL、便携包、Inno 安装器和卸载器，复核后上传 GitHub Release。版本号从 tag 注入，`installer` / `pyproject` 不必手改。
+- [x] **签名**:`build_release` 按 `FACEHELLO_SIGN_PFX` 签 CP DLL，Inno `/DSign` 签 setup.exe + 卸载器。正式 tag 构建要求 PFX / 密码 secrets，构建前验证固定 signer pin，使用后删除临时 PFX，上传前逐个验证签名(见 SIGNING.md)。
 
 ### 10.5 卸载(完全干净;安全红线:不能留坏 CP)
 
@@ -234,7 +250,7 @@ C:\ProgramData\FaceHello\           (可写,运行期数据;SYSTEM 与提权 GUI
 
 - [x] 干净 VM(快照)端到端:装 → 录入 → 锁屏解锁 → 卸载干净、LogonUI 正常。
 - [x] 真机端到端(本地 + 微软账户)。
-- [ ] Authenticode 签名 `setup.exe` + `FaceHelloCP.dll`:脚手架已就位(见 SIGNING.md);嵌入式 `python.exe` 由 python.org 已签、不重签;真实 EV/Azure 证书免 SmartScreen 待接。
+- [x] 使用固定个人自签名证书为 `setup.exe`、卸载器和 `FaceHelloCP.dll` 做 Authenticode 签名；嵌入式 `python.exe` 保留 python.org 原签名，不重复签。首次安装在公钥证书建立本机信任前仍可能显示“未知发布者”。
 - [x] **5-4 加固已完成**:管道 ACL、首实例保护、CP 侧 LocalSystem 服务端验证、失败兜底 / 锁定、生产态 `authenticate` 门控和滚动日志均已落地;最后一项 CP 校验随 `v1.0.5` 发布并通过 VM 验收。
 
 ### 10.7 安装路径策略(已实现)
@@ -247,10 +263,10 @@ C:\ProgramData\FaceHello\           (可写,运行期数据;SYSTEM 与提权 GUI
 
 ### 10.8 体积:实测与瘦身
 
-`setup.exe` 实测 **~322MB**(`v0.1.x`),靠以下手段达成,无识别精度损失:
+已发布的 `v1.0.5` 安装包为 **260,924,312 字节(约 249 MiB)**，主要通过以下方式缩小：
 
 - [x] **PySide6 → PySide6-Essentials**(`dist` 依赖组):去掉 Addons,最大头是 `Qt6WebEngineCore.dll`(~196MB);再手删 `qml/`、非中英 `translations/`、`include/` 等。
-- [x] **buffalo_l 剪枝**:删 `1k3d68`(144MB)/`2d106`/`genderage`,只留 det_10g + w600k_r50。
+- [x] **buffalo_l 剪枝 + FP16 识别模型**:删 `1k3d68`(144MB)/`2d106`/`genderage`,保留 det_10g + w600k_r50；release CI 再把 `w600k_r50` 从 FP32(约 174MB)转成 FP16(约 87MB)。本地转换可保留 `w600k_r50.fp32.bak` 作回退，`build_release.py` 会排除所有 `*.bak`。
 - [x] **排除 `buffalo_l.zip`**:insightface 下载后残留的解压前原始包(~281MB),不进包(否则 setup.exe 直接翻倍到 ~597MB——CI 全新下载踩过这个坑)。
 - [x] **通用清理**:`__pycache__`、`tests/`。
 
@@ -261,7 +277,7 @@ C:\ProgramData\FaceHello\           (可写,运行期数据;SYSTEM 与提权 GUI
 ### 10.9 已消解的风险
 
 - [x] **standalone CPython 的 pywin32 服务可用性**:已验证。`build_release.py` 把 `pythoncomXX.dll`/`pywintypesXX.dll` 拷到 python 根,服务(SYSTEM)能正常 import `win32service`/`servicemanager` 并被 SCM 拉起。
-- [x] **GitHub Release 资产体验**:~322MB 单文件上传 / 下载正常,远低于 2GB 上限。
+- [x] **GitHub Release 资产体验**:当前约 249 MiB 的安装包上传 / 下载正常,远低于 2GB 上限。
 
 ---
 

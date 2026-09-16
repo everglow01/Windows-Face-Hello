@@ -23,10 +23,15 @@ This is the **design & decision record**: why it's built this way, where it stan
 | Installed-mode / dev-mode path split (`.installed` marker + `FACEHELLO_HOME`) | ✅ done |
 | Portable package (standalone CPython + deps) + Inno installer + Chinese wizard | ✅ done |
 | One-click clean uninstall (stop/remove service, unregister CP, wipe LSA password + gallery) | ✅ done |
-| Size trimming: PySide6-Essentials + buffalo_l pruning → `setup.exe` ~322 MB | ✅ done |
+| Size trimming: PySide6-Essentials + buffalo_l pruning / FP16 recognition | ✅ `v1.0.5` setup: 260,924,312 bytes (~249 MiB) |
 | GitHub Release automation (push a tag → CI builds setup.exe) | ✅ done |
 | **5-4 hardening: pipe ACL (SYSTEM+Admins), CP server-identity verification, failure fallback / lockout, better logging, dev-only `authenticate`** | ✅ done (Python + CP, shipped in `v1.0.5`) |
-| **Code signing: pipeline in place (self-signed verification + env/`#ifdef` gating, see SIGNING.md); real EV/Azure cert tbd** | 🚧 scaffold done |
+| Face-unlock global switch + separate sign-in / workstation-unlock scopes | ✅ done (`v1.0.6`) |
+| Console service-log view + redacted diagnostic ZIP export | ✅ done (`v1.0.6`) |
+| Optional multi-person protection (off by default; reject before matching) | ✅ done (`v1.0.6`) |
+| Bounded SCM service recovery (60s, 120s, then no action; 24h reset) | ✅ done (`v1.0.6`) |
+| Sleep/resume acceptance | 🚧 short + long sleep passed; remaining hardware scenarios tracked |
+| **Code signing: fixed personal self-signed certificate, signer pin, signed DLL / installer / uninstaller** | ✅ done; no official CA certificate planned |
 | Further slimming: opencv-headless, drop scipy/onnx transitive deps | ⏳ to do |
 | Passive anti-spoofing (Silent-Face MiniFASNet, default-on + fail-open if model missing) | ✅ done |
 | Same-name multi-template enrollment ("Add angle" appends, unlock takes the max similarity, FIFO cap) | ✅ done |
@@ -73,8 +78,10 @@ Windows Hello face doesn't support ordinary webcams — not because the models a
 │  Face auth service (Python, LocalSystem, resident)  │
 │   ├─ Camera capture (OpenCV, CAP_DSHOW)             │
 │   ├─ Liveness  (MediaPipe FaceLandmarker: blink/turn)│
+│   ├─ Passive anti-spoofing (MiniFASNet)             │
 │   ├─ Recognition (InsightFace ArcFace, 512-d)       │
-│   └─ Match vs gallery → return {ok, user, similarity}│
+│   └─ Optional multi-face gate + gallery match        │
+│      → return {ok, user, similarity}                 │
 │        │                                            │
 │        ▼  ② on match                               │
 │  The CP reads the password from the LSA Secret in   │
@@ -108,6 +115,7 @@ Passive anti-spoofing is enabled (toggle in Settings): during recognition MiniFA
 - The password is stored in an LSA Secret and **never travels over IPC**; the gallery stores feature vectors (not photos), encrypted on disk with machine-scoped DPAPI.
 - **Never remove the system's password / PIN provider** — a fallback sign-in must always remain. Register the CP / test on real hardware only after taking a snapshot + keeping a spare admin account + a system restore point.
 - **Multi-account anti-misrouting (margin)**: when several people enroll on one machine, they share a single gallery and threshold, and `best_match` returns the single most-similar template across the whole gallery — if two people's features are close, A can be matched as B and thus **unlock the wrong account** (an inherent monocular-RGB weakness). To guard against this, recognition adds a **margin check**: beyond `similarity ≥ match_threshold`, it also requires `best − most-similar-other-person ≥ match_margin` (default 0.05); if the two are too close it's judged "ambiguous identity" and rejected outright — better to fall back to the password than to risk unlocking the wrong account. With only one person enrolled there is no rival (margin = ∞) so it never triggers; the value is tunable on the Settings tab, and `match_margin = 0` disables it. Rivals are distinguished by profile name, so multiple templates of the same person don't compete with each other.
+- **Optional multi-person protection**: when enabled, `AuthSession` counts detected faces before anti-spoofing and identity matching. Two or more faces cause an immediate biometric rejection, which consumes one of the CP tile's three attempts. It is off by default because bystanders, screens, posters, or distant faces can cause false rejections; when off, the existing largest-face behavior is unchanged.
 
 ---
 
@@ -131,9 +139,10 @@ Passive anti-spoofing is enabled (toggle in Settings): during recognition MiniFA
 - [x] **Stage 5 — Credential Provider**: C++ COM lock-screen integration + LSA credential + KERB unlock. **Main path done, verified on real hardware** (see §9).
 - [x] **Distribution — setup.exe**: portable package + Inno Chinese wizard + clean uninstall + Release automation shipped in the formal `v1.0.0` line; later releases added in-app updates, recoverable upgrades, and automatic installed-state acceptance (see §10).
 - [x] **Hardening (5-4)**: pipe ACL (SYSTEM+Admins), CP-side LocalSystem server verification, failure fallback / lockout, better logging, and dev-only `authenticate`; completed and released in `v1.0.5`.
-- [ ] **Pre-release: code signing** — pipeline wired up (`build_release` signs the CP DLL when `FACEHELLO_SIGN_PFX` is set; Inno `/DSign` signs setup.exe; self-signed verified end-to-end, see SIGNING.md); real EV/Azure cert tbd.
+- [x] **Operational controls and diagnostics (`v1.0.6`)**: global + per-scenario face-unlock switches, console log view / redacted export, optional multi-person protection, and bounded SCM recovery.
+- [x] **Code signing**: release DLL, installer, and uninstaller use the project's fixed personal self-signed certificate. The build pins its DER SHA-256 and requires the PFX from local storage or GitHub Secrets; no official CA certificate is planned (see SIGNING.md).
 - [x] **Passive anti-spoofing**: Silent-Face MiniFASNet (`2.7_80x80`) + RetinaFace crop, multi-frame sampling during recognition to detect replays; default-on, can disable, fail-open if model missing.
-- [ ] **Optional enhancements**: GPU inference, further slimming (security-logic pytest already landed + in CI).
+- [ ] **Optional enhancements**: finish the remaining sleep/resume hardware matrix, GPU/NPU inference, lower-friction passive liveness, and further slimming.
 
 ---
 
@@ -170,6 +179,13 @@ Passive anti-spoofing is enabled (toggle in Settings): during recognition MiniFA
 - [x] **Better logging**: `service.py` adopts `logging` + `RotatingFileHandler` (`service.log`, ~1MB×3, with timestamps / levels), replacing bare `print`; in service mode a `_StreamToLogger` shim routes `sys.stdout/stderr` (native-lib prints and uncaught tracebacks) into the same rotating log (purely C-level stderr noise may not land — those are just startup banners, not audit content). **Passwords are never logged**; the username + similarity are (a local log, readable by SYSTEM / admins).
 - [x] **Further hardening (post-v0.1.2)**: the sync `authenticate` command (which bypasses lockout) is now **dev-only**, rejected in installed mode, so the production pipe only exposes `ping` + `auth_start`/`auth_poll`; passive anti-spoofing **samples multiple frames** instead of one, so a replay can't slip through on a single detection-miss frame; the security state machines (lockout / margin / anti-spoof gate / `authenticate` gating) got **pytest** coverage wired into CI.
 
+### 9.3 Operational controls and recovery (`v1.0.6`)
+
+- [x] **Face-unlock scopes**: the console writes `C:\ProgramData\FaceHello\auth_scope.txt` as a one-byte bitmask (`0` off, `1` sign-in, `2` workstation unlock, `3` both). Missing or malformed data defaults to both scopes for upgrade compatibility. Windows 10+ commonly reports both startup/sign-out and `Win+L` as `CPUS_LOGON`, so the CP uses the current WTS session username to distinguish them; if the query fails while only one scope is enabled, it hides FaceHello rather than violating the configured scope. `CPUS_CREDUI` and UAC remain unsupported.
+- [x] **Service-log diagnostics**: the console reads the latest 200 lines, reports modification time and WARNING / ERROR counts, opens the log directory, and exports a fixed-whitelist ZIP containing the report plus rotated logs. Export redacts usernames and credential-like assignments and never includes `faces.dat`, LSA Secrets, templates, or camera images.
+- [x] **Bounded SCM recovery**: install/update configures restart after 60 seconds for the first abnormal stop, 120 seconds for the second, and an explicit final `SC_ACTION_NONE`; failures reset after 24 hours. `SERVICE_CONFIG_FAILURE_ACTIONS_FLAG` covers non-zero service stops from Python exceptions. A normal Administrator stop does not restart the service, and installed acceptance checks the exact policy.
+- [x] **Sleep/resume evidence first**: short- and long-duration sleep passed hardware acceptance. Hibernation, lid-close, Fast Startup, camera contention, and post-Windows-Update recovery remain in `SLEEP_RESUME_ACCEPTANCE.md`; no power-event framework or unconditional tracker reset is added without a reproducible failure.
+
 ---
 
 ## 10. Distribution & Installer (setup.exe)
@@ -179,13 +195,13 @@ Goal: a single `setup.exe` (Inno Setup, admin privileges) that on a clean Win10/
 ### 10.1 Key decisions (all landed)
 
 - [x] **Python runtime = standalone CPython + deps shipped alongside** (not PyInstaller). Ship a python-build-standalone (same source as uv) + a pre-installed `site-packages`; the service / GUI run the source via an absolute path to `python.exe`. Rationale: the native data files of mediapipe / insightface / onnxruntime are preserved as-is, sidestepping freeze hooks and the pywin32-service freezing pitfalls.
-- [x] **Models baked into the installer**: buffalo_l (det_10g + w600k_r50, ~191 MB) + face_landmarker.task (~3.7 MB) bundled, so the **first unlock doesn't depend on a network download**.
+- [x] **Models baked into the installer**: buffalo_l detection + the FP16-quantized w600k_r50 recognition model + face_landmarker.task are bundled, so the **first unlock doesn't depend on a network download**. Source/dev first-run download remains the pruned FP32 buffalo_l (~191 MB).
 - [x] **Installed-mode / dev-mode split**: `config.py` switches on the **`.installed` marker file** at the install root (or `FACEHELLO_HOME`). A marker file rather than just an env var, because the SCM caches the system env block until the next reboot, so a freshly-installed service can't see a newly-set variable; a marker file lands on disk with the install, so the service / GUI are immediately consistent.
 - [x] **Build the C++ DLL with `/MT` static CRT**: avoids a VC++ runtime dependency.
-- [x] **Automatic installed-state acceptance**: `doctor.py` keeps its model / camera / pipe hardware check and can also capture a pre-install baseline containing only hashes, sizes, and counts. After repairing ProgramData ACLs but before changing the service or CP, the installer captures that baseline. Once the new service is ready, it verifies the release build, SCM auto-start and ImagePath, pipe version / protocol, current-version CP DLL, `service.log`, face gallery, and system Credential Provider / Filter registration. Success deletes the temporary baseline; failure retains it and enters the old-payload / CP recovery path. The baseline contains no usernames, face embeddings, Windows passwords, or LSA Secrets.
+- [x] **Automatic installed-state acceptance**: `doctor.py` keeps its model / camera / pipe hardware check and can also capture a pre-install baseline containing only hashes, sizes, and counts. After repairing ProgramData ACLs but before changing the service or CP, the installer captures that baseline. Once the new service is ready, it verifies the release build, SCM auto-start, ImagePath and bounded recovery policy, pipe version / protocol, current-version CP DLL, `service.log`, face gallery, and system Credential Provider / Filter registration. Success deletes the temporary baseline; failure retains it and enters the old-payload / CP recovery path. The baseline contains no usernames, face embeddings, Windows passwords, or LSA Secrets.
 - [x] **Shared service-health contract**: installer maintenance, console diagnostics, and `doctor.py` all use `probes.service_health` to distinguish not-ready, version mismatch, protocol mismatch, and malformed response states. Update checking likewise reports local-network, GitHub rate-limit / remote, manifest, disk, download-response, and hash / signature failures separately.
 - [x] **In-app updates with recoverable upgrades**: the console handles explicit update checks, resumable downloads, and a second verification pass before launching the normal installer through UAC. There is no SYSTEM updater, silent installation, or automatic Windows restart. The manifest carries version, protocol, SHA-256, and signer constraints. Before an upgrade, Inno backs up the old payload; if post-install configuration or automatic acceptance fails, it restores the old files and CP before returning the service to its pre-upgrade state.
-- [ ] **Code signing**: pipeline in place (env / `#ifdef Sign` gated, no-cert builds unchanged; self-signed for VM verification, see SIGNING.md); real cert (Azure Trusted Signing / EV) tbd. Note: the CP DLL has no mandatory signing gate — it loads unsigned; signing only clears the SmartScreen warning + reduces AV false positives.
+- [x] **Code signing**: tagged releases require the fixed personal self-signed PFX from GitHub Secrets. The workflow verifies the certificate's DER SHA-256 against `FACEHELLO_EXPECTED_SIGNER_SHA256`, signs the CP DLL, installer, and uninstaller, and verifies them before upload. The installer bundles only the public CER, checks it against the build-info signer pin, and establishes local trust after UAC approval. No official CA / Azure / EV certificate is planned; the private key remains local or in GitHub Secrets only (see SIGNING.md).
 
 ### 10.2 Install Layout
 
@@ -200,7 +216,7 @@ C:\Program Files\FaceHello\          (read-only, program files)
 
 C:\ProgramData\FaceHello\           (writable, runtime data; shared by SYSTEM and the elevated GUI)
   ├─ data\  faces.dat  service.log
-  ├─ lang.txt  hotkey.txt           CP-readable console settings mirror
+  ├─ lang.txt  hotkey.txt  auth_scope.txt  CP-readable console setting mirrors
   └─ <avatar>.png                   lock-screen tile avatar (read by the CP as SYSTEM)
 ```
 
@@ -217,8 +233,8 @@ Why data goes to ProgramData: Program Files is read-only for normal users, while
 - [x] **Build the CP DLL**: `MSBuild cp\FaceHelloCP.sln /p:Configuration=Release /p:Platform=x64` (`/MT`).
 - [x] **Portable package**: `scripts/build_release.py` — grab standalone CPython 3.11 → install the `dist` dependency group → slim → copy source + models + DLL + pywin32 runtime DLLs. Output defaults to `%LOCALAPPDATA%\FaceHello-build\FaceHello`.
 - [x] **Inno compile**: `installer\FaceHello.iss` → `installer\Output\FaceHello-Setup-x.y.z.exe`. The `.iss`/`.isl` are **UTF-8 with BOM** (otherwise Chinese Windows reads them as GBK → mojibake). The Chinese wizard ships `ChineseSimplified.isl` in the repo (Inno has no built-in Chinese).
-- [x] **CD automation**: `.github/workflows/release.yml` — pushing a `v*` tag triggers: prep models → build DLL + portable package → Inno builds setup.exe → upload to the GitHub Release. The version is injected from the tag, so `installer`/`pyproject` don't need manual edits.
-- [ ] **Signing (scaffold done)**: `build_release` signs the CP DLL via `FACEHELLO_SIGN_PFX`, Inno `/DSign` signs setup.exe + uninstaller (see SIGNING.md); self-signed verifies the pipeline, real cert tbd.
+- [x] **CD automation**: `.github/workflows/release.yml` — pushing a `v*` tag prepares / prunes / FP16-quantizes models, verifies the fixed signer pin, builds and signs the DLL + portable package + Inno installer / uninstaller, verifies them, then uploads the GitHub Release. The version is injected from the tag, so `installer`/`pyproject` don't need manual edits.
+- [x] **Signing**: `build_release` signs the CP DLL via `FACEHELLO_SIGN_PFX`; Inno `/DSign` signs setup.exe + the uninstaller. Tagged CI releases require the PFX/password secrets, verify the fixed signer pin before building, delete the temporary PFX, and verify every signature before upload (see SIGNING.md).
 
 ### 10.5 Uninstall (completely clean; red line: no broken CP)
 
@@ -233,7 +249,7 @@ The `[UninstallRun]` + `[UninstallDelete]` in `installer\FaceHello.iss` are impl
 
 - [x] Clean VM (snapshot) end-to-end: install → enroll → lock-screen unlock → uninstall clean, LogonUI normal.
 - [x] Real-hardware end-to-end (local + Microsoft accounts).
-- [ ] Authenticode-sign `setup.exe` + `FaceHelloCP.dll`: scaffold in place (see SIGNING.md); the embedded `python.exe` is already signed by python.org and is not re-signed; real EV/Azure cert to clear SmartScreen tbd.
+- [x] Authenticode-sign `setup.exe`, uninstaller, and `FaceHelloCP.dll` with the fixed personal self-signed certificate; the embedded `python.exe` remains signed by python.org and is not re-signed. First install can still show an unknown-publisher warning until the pinned public certificate is trusted locally.
 - [x] **5-4 hardening complete**: pipe ACL, first-instance protection, CP-side LocalSystem server verification, failure fallback / lockout, production `authenticate` gating, and rotating logs are all landed; the final CP check shipped and passed VM acceptance in `v1.0.5`.
 
 ### 10.7 Install-path strategy (implemented)
@@ -246,10 +262,10 @@ The `[UninstallRun]` + `[UninstallDelete]` in `installer\FaceHello.iss` are impl
 
 ### 10.8 Size: measurements & slimming
 
-`setup.exe` measures **~322 MB** (`v0.1.x`), achieved by the following with no loss in recognition accuracy:
+The published `v1.0.5` installer is **260,924,312 bytes (~249 MiB)**. The main reductions are:
 
 - [x] **PySide6 → PySide6-Essentials** (the `dist` dependency group): drops Addons, the biggest being `Qt6WebEngineCore.dll` (~196 MB); then manually delete `qml/`, non-zh/en `translations/`, `include/`, etc.
-- [x] **buffalo_l pruning**: delete `1k3d68` (144 MB) / `2d106` / `genderage`, keep only det_10g + w600k_r50.
+- [x] **buffalo_l pruning + FP16 recognition**: delete `1k3d68` (144 MB) / `2d106` / `genderage`, keep det_10g + w600k_r50, then convert `w600k_r50` from FP32 (~174 MB) to FP16 (~87 MB) in release CI. Local conversion may retain `w600k_r50.fp32.bak` for rollback; `build_release.py` excludes `*.bak` from packages.
 - [x] **Exclude `buffalo_l.zip`**: the pre-extraction raw archive (~281 MB) left over after insightface downloads; kept out of the package (otherwise setup.exe doubles to ~597 MB — a pitfall hit by CI's fresh download).
 - [x] **General cleanup**: `__pycache__`, `tests/`.
 
@@ -260,7 +276,7 @@ The `[UninstallRun]` + `[UninstallDelete]` in `installer\FaceHello.iss` are impl
 ### 10.9 Risks now resolved
 
 - [x] **pywin32 service viability on standalone CPython**: verified. `build_release.py` copies `pythoncomXX.dll`/`pywintypesXX.dll` to the python root, so the service (SYSTEM) can import `win32service`/`servicemanager` and be started by the SCM.
-- [x] **GitHub Release asset experience**: the ~322 MB single file uploads / downloads fine, well under the 2 GB limit.
+- [x] **GitHub Release asset experience**: the current ~249 MiB installer uploads / downloads normally, well under the 2 GB limit.
 
 ---
 
