@@ -1,7 +1,7 @@
 [project]
 name = "face-hello"
 version = "1.0.0"
-description = "普通 RGB 摄像头人脸解锁 Windows 原型"
+description = "使用普通 RGB 摄像头实现 Windows 人脸解锁"
 requires-python = ">=3.10,<3.12"
 dependencies = [
     "numpy<2.0",
