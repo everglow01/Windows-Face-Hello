@@ -17,7 +17,10 @@ Lock-screen "Face Unlock" tile (C++ CP, runs in LogonUI/SYSTEM)
 LocalSystem service (Python, resident)
         │  calls the core library
         ▼
-face_hello/ core library: camera → liveness → recognition → match → read LSA password → pack KERB unlock
+face_hello/ core library: camera → liveness / anti-spoofing → recognition → match
+        │  returns {ok, user, similarity}
+        ▼
+Credential Provider: read LSA password → pack KERB unlock
 ```
 
 The two layers are deliberate: the Python recognition stack can't be crammed into the LogonUI process, so it's split into "DLL handles UI / service handles the algorithm," coupled **only by the named-pipe protocol** — changing Python doesn't require recompiling the DLL, and vice versa.
@@ -41,7 +44,7 @@ uv run python -m app.main                 # launch the console GUI
 
 > On first run, models auto-download to `models/`: InsightFace `buffalo_l` (~191 MB), MediaPipe `face_landmarker.task` (~3.7 MB). Both `models/` and `data/` (the encrypted gallery) are gitignored — don't commit them.
 
-**Security logic has pytest coverage** (`uv run --group test pytest -q`: lockout / margin / anti-spoof gate / `authenticate` gating — pure logic, no camera or models, wired into CI). `scripts/offline_check.py` is an assertion-based smoke self-check — it needs no camera / display and verifies four core links: matcher, the DPAPI encrypt round-trip, FaceMesh, and InsightFace loading. **After changing anything in `face_hello/`, run both before committing.**
+Pytest covers matching / lockout, authentication and anti-spoof gates, enrollment and multi-template persistence, auth-scope mirrors, diagnostics / redaction, camera retry / exclusivity, tracker reuse, SCM recovery policy, and installed acceptance. Run `uv run --group test pytest -q`. `scripts/offline_check.py` remains the model-bearing smoke check for matcher, machine-scope DPAPI, FaceMesh, and InsightFace. **After changing `face_hello/`, run both before committing.**
 
 More test coverage is welcome — open an issue or PR to discuss.
 
@@ -53,7 +56,7 @@ More test coverage is welcome — open an issue or PR to discuss.
 
 | File | Responsibility |
 |------|----------------|
-| `config.py` | Central paths / models / thresholds. `DEFAULTS` are the threshold defaults, overridden by the persisted `settings` in the store. Also where **installed-mode / dev-mode is split** (see below), plus the CP-readable language / hotkey mirror paths |
+| `config.py` | Central paths / models / thresholds. `DEFAULTS` are the threshold defaults, overridden by persisted store settings. It also splits installed / dev mode and defines the CP-readable language, hotkey, and auth-scope mirror paths |
 | `platform_backend.py` | Phase-6 cross-platform shim: funnels the three OS-coupled bits (static encrypt `protect`/`unprotect`, camera backend `open_capture`, `current_user`) into one place; Windows behavior is byte-for-byte unchanged (machine-scope DPAPI / DSHOW / GetUserName). `store`/`camera`/`cred_vault` delegate to it |
 | `camera.py` | OpenCV capture, `CAP_DSHOW` backend on Windows, with cold-boot / wake backoff retries |
 | `detector.py` | InsightFace `FaceAnalysis` (CPU), outputs a 512-d `normed_embedding`. Lazy load + explicit `load()` warmup |
@@ -61,15 +64,18 @@ More test coverage is welcome — open an issue or PR to discuss.
 | `liveness.py` | MediaPipe Tasks `FaceLandmarker` gives 468 points → EAR for blink + solvePnP yaw for head turn. `LivenessSession` is a per-frame state machine: random challenge (blink / turn left / turn right) + dual timeouts |
 | `enroll.py` | `Enroller` accumulates qualifying frames (filtering low-score / too-small faces), averages the features, and re-normalizes into a template |
 | `store.py` | `FaceStore`: DPAPI-encrypted pickle to `data/faces.dat`, storing features (**not photos**) + metadata + settings. A same-named profile overwrites by default; with `replace=False` (Add angle) it appends multiple templates, FIFO-capped by `max_templates_per_name` |
-| `auth.py` | `AuthSession` orchestrates the `liveness → recognize → done` state machine, driven frame-by-frame via `feed()`; before matching it runs the anti-spoof gate `_antispoof_gate` (multi-frame: a spoof verdict rejects, no-face frames sample more, fail-open only after `antispoof_max_frames` misses). `authenticate_blocking()` is the Qt-free blocking version for the service to call |
+| `auth.py` | `AuthSession` drives `liveness → recognize → done`; optional multi-person protection rejects two or more detected faces before anti-spoofing / matching. `_antispoof_gate` samples several frames, and `authenticate_blocking()` is the Qt-free service path |
 | `cred_vault.py` | Stores the sign-in password in an LSA Secret (key `L$FaceHello_<user>`). The password **never travels over IPC**; the CP reads it itself as SYSTEM |
-| `service.py` | Named-pipe server, **single-instance serial**, JSON messages. Synchronous `ping`/`authenticate` (`authenticate` bypasses lockout, so it's **dev-only** — rejected in installed mode); the async pair `auth_start` (run one auth in the background) + `auth_poll` (fetch live liveness prompts and the result), letting the lock screen refresh prompts while recognizing |
-| `win_service.py` | Wraps `serve()` into a LocalSystem Windows service |
+| `service.py` | Single-instance serial named-pipe server. Installed mode exposes `ping` + async `auth_start`/`auth_poll`; synchronous `authenticate` is dev-only because it bypasses lockout |
+| `win_service.py` | Wraps `serve()` into a LocalSystem service and owns the exact bounded SCM recovery policy |
+| `probes.py` | Shared SCM / pipe / model / camera probes. `service_health()` is the common installer, console, and doctor contract |
+| `diagnostics.py` | Console diagnostics, latest-log snapshot, redaction, and fixed-whitelist diagnostic ZIP export |
+| `updater.py` | Update manifest validation, resumable download, SHA-256 / signature checks, and error categories consumed by the UI |
 
 ### Other directories
 
-- `app/` — the PySide6 console. `main.py` is the UI, settings, diagnostics, and enrollment/test flows; `workers.py` pushes all camera + inference work into `QThread`s, with signals back to the main thread to update the UI, avoiding freezes.
-- `cp/` — the C++ Credential Provider (in-proc COM DLL). `CFaceProvider` (enumerates the tile), `CFaceCredential` (starts scanning from "→" or the configured hotkey, 3-attempt retry then password fallback + submits the credential), `PipeClient` (pipe client). See [cp/README.md](./cp/README.md).
+- `app/` — the PySide6 console. `main.py` owns enrollment/test flows, global + per-scenario face-unlock settings, optional multi-person protection, service-log viewing, and redacted diagnostic export; `workers.py` pushes camera + inference work into `QThread`s.
+- `cp/` — the C++ Credential Provider (in-proc COM DLL). `CFaceProvider` reads the auth-scope mirror and enumerates the tile only for enabled sign-in / unlock scenarios; `CFaceCredential` starts scanning from "→" or the configured hotkey, allows three attempts, then falls back to password; `PipeClient` verifies the named-pipe server is LocalSystem. See [cp/README.md](./cp/README.md).
 - `scripts/` — `offline_check.py` (assertive offline self-check), `doctor.py` (hardware health check by default; safe baseline capture and full deployment acceptance in installed mode), `liveness_tune.py` (calibrate liveness thresholds), `auth_client.py` (simulate the CP calling the service), `cred_vault_cli.py` (LSA read/write test), `build_release.py` (build the portable package). The release installer invokes the baseline and acceptance modes from inside its maintenance transaction.
 - `winservice_main.py` / `uninstall_cleanup.py` — bootstrap scripts at the repo root (service host, uninstall cleanup).
 - `installer/` — the Inno Setup script + Chinese language file, builds setup.exe.
@@ -117,9 +123,9 @@ Writing / deleting in `cred_vault` needs an **Administrator** terminal; reading 
 
 ```
 CP tile selected → user presses "→" or the configured hotkey → service auth_start spawns a background thread → AuthSession.feed() per frame
-  → run liveness first (skipped if liveness is off) → on pass, detector extracts the 512-d feature
-  → matcher.best_match against the gallery → AuthResult
-  → CP auth_poll gets the user → read the LSA password → pack KERB_INTERACTIVE_UNLOCK_LOGON to unlock
+  → run liveness first (skipped if liveness is off)
+  → optional multi-person gate → passive anti-spoof gate → detector / matcher
+  → AuthResult → CP auth_poll gets the user → read the LSA password → pack KERB_INTERACTIVE_UNLOCK_LOGON
 ```
 
 **Identity contract** (all four must match for unlock to succeed): profile name == `GetUserName()` (local SAM name) == LSA key `L$FaceHello_<user>` == KERB account name. Microsoft accounts go through MSA-backed local login, the same chain. The LSA key name can't contain a backslash.
@@ -136,6 +142,8 @@ CP tile selected → user presses "→" or the configured hotkey → service aut
 > Why a marker file rather than just an env var? Because the SCM caches the system env block until the next reboot, so a freshly-installed service can't see a newly-set `FACEHELLO_HOME`; a marker file lands on disk with the install, so the service / GUI sync immediately, no reboot needed. When changing startup / path-related logic, keep both states in mind.
 
 The threshold defaults are all in `config.py`'s `DEFAULTS` (`match_threshold`, `ear_threshold`, `yaw_threshold_deg`, `required_blinks`, etc.), overridden at runtime by the persisted `settings` in the store. **Don't hard-code thresholds in code** — go through this override mechanism.
+
+The CP cannot decrypt the settings store, so the console/service mirror only three non-secret values under `C:\ProgramData\FaceHello`: `lang.txt`, `hotkey.txt`, and the one-byte `auth_scope.txt`. The auth scope is `0` off, `1` sign-in, `2` workstation unlock, `3` both; missing or malformed content defaults to `3` for upgrade compatibility.
 
 ---
 
@@ -161,9 +169,14 @@ The working directory often contains Chinese, and two C++ backend libraries can'
 - Model disk I/O is the big cold-start cost: **deleted the unused** `1k3d68.onnx` (144 MB) / `2d106det.onnx` / `genderage.onnx` from `buffalo_l`, keeping only `det_10g.onnx` + `w600k_r50.onnx`, cold read 341 MB→191 MB, no loss in recognition accuracy. **Don't let them be re-downloaded** (the whole `buffalo_l` directory being present prevents a re-download; deleting a single file doesn't trigger one).
 
 ### SYSTEM-service specific
-- The gallery's DPAPI must use **machine scope** `CRYPTPROTECT_LOCAL_MACHINE` (`_LOCAL_MACHINE=0x4` in `store.py`), otherwise the SYSTEM service can't decrypt a gallery enrolled by the user.
+- The gallery's DPAPI must use **machine scope** `CRYPTPROTECT_LOCAL_MACHINE` (`platform_backend.py`'s `_DPAPI_LOCAL_MACHINE=0x4`), otherwise the SYSTEM service can't decrypt a gallery enrolled by the user.
 - matplotlib (an insightface transitive dep) hangs / crashes the service when first building its font cache as SYSTEM — `win_service.py` sets `MPLBACKEND=Agg` + `MPLCONFIGDIR` to `data/` before importing.
 - The service ImagePath runs the `winservice_main.py` bootstrap script directly with the venv's python (adding the repo root to `sys.path`), **not** the default `PythonService.exe` — the latter can't import `face_hello` in the SCM context (`package=false`, not installed into the venv).
+- Service install/update also writes the bounded SCM failure policy: restart after 60s, then 120s, then explicit no-action; reset after 24h. Keep the final `SC_ACTION_NONE`, because SCM repeats the last action after the list is exhausted. Normal `SvcStop` must remain a successful administrator stop.
+
+### Sleep / resume validation
+- `Camera.open()` retries DSHOW and confirms a frame read; every authentication creates a new camera capture, while the service deliberately reuses its warmed tracker.
+- Short- and long-duration sleep passed hardware acceptance. Other power / camera-contention scenarios live in [SLEEP_RESUME_ACCEPTANCE.md](./SLEEP_RESUME_ACCEPTANCE.md). Do not add power-event listeners, unconditional service restarts, or tracker resets without a stable reproduction and timestamped diagnostic evidence.
 
 ---
 
@@ -173,18 +186,18 @@ The working directory often contains Chinese, and two C++ backend libraries can'
 Not a PyInstaller freeze, but a standalone CPython + distribution deps (the `dist` group, with PySide6 swapped for the slimmer `-Essentials`) + source copied as-is. Output defaults to `%LOCALAPPDATA%\FaceHello-build\FaceHello`; verify it runs free of uv with `pythonw.exe -m app.main`.
 
 ### Installer (`installer/FaceHello.iss`)
-Inno Setup packs the portable build into one `setup.exe`: Chinese wizard, automatic service and CP registration, and a clean one-click uninstall (stop/remove service, unregister CP, wipe the LSA password + gallery). `install_maintenance.py` runs setup finalization as one transaction: repair ProgramData ACLs → ask `doctor.py` for a safe baseline → configure the service and current-version CP → wait for the expected pipe version / protocol → run full installed-state acceptance. Success deletes the baseline; failure retains it and lets Inno restore the previous payload. If the service was stopped before an upgrade, it is started only for acceptance and stopped again afterward. The `.iss` / `.isl` are **UTF-8 with BOM**, otherwise they're read as ANSI/GBK on Chinese Windows → mojibake.
+Inno Setup packs the portable build into one `setup.exe`: Chinese wizard, automatic service and CP registration, and a clean one-click uninstall (stop/remove service, unregister CP, wipe the LSA password + gallery). `install_maintenance.py` runs setup finalization as one transaction: repair ProgramData ACLs → ask `doctor.py` for a safe baseline → configure the service, bounded SCM recovery, and current-version CP → wait for the expected pipe version / protocol → run full installed-state acceptance. Success deletes the baseline; failure retains it and lets Inno restore the previous payload. If the service was stopped before an upgrade, it is started only for acceptance and stopped again afterward. The `.iss` / `.isl` are **UTF-8 with BOM**, otherwise they're read as ANSI/GBK on Chinese Windows → mojibake.
 
 ### CI / CD
 - `ci.yml` — the "gatekeeper" on every push.
-- `release.yml` — triggered by a `v*` tag: load models → build DLL + portable package → Inno builds setup.exe → upload to the GitHub Release. Can also be run manually via `workflow_dispatch` to produce just an artifact for a trial build.
+- `release.yml` — triggered by a `v*` tag: load / prune / FP16-quantize models → verify the fixed self-signed certificate pin → sign the DLL → build the portable package and signed Inno installer / uninstaller → verify and upload release assets. Tagged builds require `FACEHELLO_SIGN_PFX_BASE64` and `FACEHELLO_SIGN_PASS` secrets. Manual `workflow_dispatch` can produce a trial artifact.
 - The runner's default encoding makes printing Chinese raise `UnicodeEncodeError`, so CI sets `PYTHONUTF8=1` everywhere; `package=false` means the repo root must be added to `PYTHONPATH`.
 
 Release by pushing a tag (the version is injected from the tag, no manual edits to `installer` or `pyproject`):
 
 ```powershell
-git tag v0.1.x
-git push origin v0.1.x
+git tag v1.0.6
+git push origin v1.0.6
 ```
 
 Release notes have to be rewritten by hand.
@@ -193,7 +206,7 @@ Release notes have to be rewritten by hand.
 
 ## Debugging Tips
 
-- **The service has no GUI console**; stdout/stderr/exceptions go to `data/service.log` (dev mode: repo `data/`; installed mode: `C:\ProgramData\FaceHello\data`). Check it first when troubleshooting the service.
+- **The service has no GUI console**; stdout/stderr/exceptions go to `data/service.log` (dev mode: repo `data/`; installed mode: `C:\ProgramData\FaceHello\data`). The console can show the latest 200 lines and export a redacted, fixed-whitelist diagnostic ZIP. Keep raw logs local if they contain usernames.
 - You can debug without installing the service: start `uv run python -m face_hello.service` in the foreground, then hit it with `scripts/auth_client.py`.
 - Lock-screen / CP changes **must be tested first in a snapshotted VM, or on real hardware with a system restore point + a spare admin account** — a broken CP can lock you out of the sign-in screen. This matters a lot for development.
 - If the liveness thresholds are off, run `uv run python -m scripts.liveness_tune` to watch EAR/yaw live; it prints suggested values on exit — put them back in the Settings tab.
