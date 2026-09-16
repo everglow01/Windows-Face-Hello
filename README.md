@@ -53,8 +53,10 @@ Extraction Code: afnw
 Regular users don't need Python / uv — just grab the installer from the Release page:
 
 1. Download the latest `FaceHello-Setup-x.y.z.exe` from [Releases](https://github.com/everglow01/Windows-Face-Hello/releases).
-2. Right-click **Run as administrator** and complete the wizard. The installer registers the background authentication service and lock-screen Credential Provider, then creates the data directory. Before finishing, it also checks the service, pipe, current-version DLL, log, and face gallery; a failed acceptance check does not silently complete the install.
+2. Right-click **Run as administrator** and complete the wizard. The installer registers the background authentication service and lock-screen Credential Provider, then creates the data directory. Before finishing, it also checks the service, its bounded SCM recovery policy, pipe, current-version DLL, log, and face gallery; a failed acceptance check does not silently complete the install.
 3. Once installed, open the "FaceHello Console" from the Start menu or desktop (use admin privileges the first time), enroll your face, set your sign-in password, and you can unlock by face at the lock screen.
+
+> Release builds use the project's personal self-signed certificate. On first install, Windows can still warn about an unknown publisher. After UAC approval, the installer verifies the bundled public certificate against the pinned signer hash before adding it to the local trust stores. The PFX private key is never included in the repository, installer, artifacts, or GitHub Release.
 
 > The recognition models are all bundled in the installer, so installation does not download them.
 >
@@ -97,8 +99,8 @@ Launch the installed app with admin privileges to enter the console desktop app.
    > Not sure of your account name? Press Win+L to see the name shown on the lock screen — it's usually the same.
    > 💡 **Tip: enroll more than one template per user.** After the first "Start enrolling", change the **angle, lighting, makeup / hairstyle, glasses on/off**, etc., and click **"Add angle"** to append another template (one username can hold several; unlock automatically takes the most similar one). Enrolling **2+ templates** noticeably improves the unlock success rate across scenarios and reduces occasional misses. The per-user cap is adjustable on the Settings tab.
 2. **Test unlock** — follow the random liveness prompt (blink N times / turn left / turn right), then recognition runs and shows the similarity and result.
-3. **Settings** — pick the camera (with a **Test** button that previews the selected one, handy on multi-camera machines); tune the match threshold, turn angle, blink count, and recommended re-enrollment interval; toggle **liveness** and **passive anti-spoofing**. Reaching that date only shows a reminder—the template still works for authentication.
-4. **Service, credentials & diagnostics** — set the sign-in password used for lock-screen unlock (written to an LSA Secret), install / start / stop the authentication service, and check its version, pipe protocol, and runtime state. **Requires Administrator**, otherwise the relevant buttons are disabled.
+3. **Settings** — pick the camera (with a **Test** button that previews the selected one, handy on multi-camera machines); tune the match threshold, turn angle, blink count, and recommended re-enrollment interval; toggle **liveness** and **passive anti-spoofing**. You can also pause FaceHello without deleting data, enable it separately for Windows sign-in and workstation unlock (`Win+L`), and optionally reject authentication when multiple faces are visible. Multi-person protection is off by default. Reaching the re-enrollment date only shows a reminder—the template still works for authentication.
+4. **Service, credentials & diagnostics** — set the sign-in password used for lock-screen unlock (written to an LSA Secret), install / start / stop the authentication service, and check its version, pipe protocol, and runtime state. The page can show the latest 200 service-log lines, open the log folder, and export a redacted diagnostic ZIP. **Requires Administrator**, otherwise the relevant buttons are disabled.
 
 *Some stutter on the first enrollment and test is normal.*
 
@@ -116,6 +118,8 @@ uv run python -m scripts.liveness_tune
 
 Full unlock chain: lock-screen "Face Unlock" tile → (named pipe) → LocalSystem service → InsightFace recognition → read the password saved in the LSA → pack a Kerberos credential to actually unlock. Both local accounts and Microsoft accounts (MSA local login) are verified end-to-end. **Fully validated and working on the author's physical machine.**
 
+The global face-unlock switch and the two scenario switches control whether the tile appears for startup/sign-out or workstation unlock. Closing a switch only hides FaceHello in that scope; it does not delete enrolled templates, settings, or the LSA credential. Windows 10 and later can report both situations as `CPUS_LOGON`, so the provider also checks whether the current WTS session already has a signed-in user. If that state cannot be determined while only one scope is enabled, FaceHello stays hidden rather than ignoring the user's choice.
+
 > If a face check fails, press the tile's **→** button to try again — you get **3 attempts**, after which Face Hello falls back to password sign-in (the system password / PIN is always available).
 
 Auth service commands (Administrator; `<venv>` = `.venv\Scripts\python.exe`):
@@ -125,7 +129,7 @@ Auth service commands (Administrator; `<venv>` = `.venv\Scripts\python.exe`):
 <venv> winservice_main.py start | stop | remove     # start / stop / remove
 ```
 
-You normally don't need to run these by hand — the GUI above can install and start everything in one click; these are for dev/debugging.
+You normally don't need to run these by hand — the GUI above can install and start everything in one click; these are for dev/debugging. The installer also configures bounded SCM recovery: restart 60 seconds after the first abnormal stop, 120 seconds after the second, then stop retrying. The count resets after 24 hours. A normal Administrator stop does not restart the service.
 
 If you're developing from source and want to build the C++ Credential Provider (CP) for the lock-screen tile yourself, you'll need VS2022 with "Desktop development with C++", and **build with PowerShell, not Bash** (MSYS mangles the `/p:` arguments):
 
@@ -169,6 +173,8 @@ You can drop your own avatar image into the default path `C:\ProgramData\FaceHel
 - The gallery stores **feature vectors, not photos**, encrypted on disk with Windows DPAPI in the local `data/` and never uploaded. Its versioned format is validated when loaded and written via atomic replacement to reduce corruption if a save is interrupted.
 - The sign-in password is kept in an **LSA Secret**, read by the Credential Provider itself in the SYSTEM context — it **never travels over IPC**.
 - **Passive anti-spoofing** (Silent-Face MiniFASNet) samples several frames during recognition to reject screen / photo / video replays — on by default, with a toggle in Settings. It meaningfully raises the bar, but being single-RGB it is **not** foolproof.
+- Optional **multi-person protection** rejects the attempt before identity matching when two or more faces are detected. It is off by default because people in the background, screens, posters, or distant faces can cause false rejections. When enabled, a multi-face rejection consumes one of the tile's three face attempts.
+- Diagnostic export uses a fixed whitelist: the diagnostic report and rotated service logs only. Usernames and credential-like assignments are redacted; `faces.dat`, passwords, LSA Secrets, templates, and raw camera images are excluded.
 - Even with active liveness + passive anti-spoofing, monocular RGB still can't match IR / depth. **Don't use this on a machine others might physically access.** Any data leak or loss is the result of the user's own operation and of not understanding this project's risks, and you bear the consequences yourself.
 - With **liveness** turned off, startup compresses to under 1s for an almost-instant experience — but for safety we still don't recommend turning it off.
 
@@ -187,7 +193,10 @@ face_hello/        core library (no Qt dependency)
   store.py           DPAPI-encrypted gallery + settings
   auth.py            auth orchestration (liveness → recognition) state machine
   service.py         named-pipe auth server
-  win_service.py     LocalSystem Windows service wrapper
+  win_service.py     LocalSystem service wrapper + bounded SCM recovery policy
+  diagnostics.py     service-log view + redacted diagnostic ZIP export
+  probes.py          shared service / pipe / model / camera health probes
+  updater.py         update manifest, resumable download, and verification
   cred_vault.py      LSA Secret read/write (sign-in password)
 app/               PySide6 console (main.py + background workers.py)
 cp/                C++ Credential Provider (lock-screen tile, needs VS to build)
@@ -201,7 +210,7 @@ models/            model weights (gitignored)
 ## 🚧 Known Limitations
 
 - Anti-spoofing: a passive model (MiniFASNet) now rejects most screen / photo / replay attacks, but being single-RGB it isn't foolproof and a determined attacker may still bypass it. Again: do not use this on a computer holding sensitive data.
-- The first cold start loads the ~191 MB recognition model from disk, taking a few seconds (about 2s on a modern CPU); after sleep the camera needs a couple of seconds to re-enumerate (retries are built in).
+- The first cold start loads the recognition models from disk, taking a few seconds. Camera opening uses DSHOW retries and confirms that a frame can be read before authentication starts. Short- and long-duration sleep recovery passed hardware acceptance for v1.0.6; hibernation, lid-close, Fast Startup, camera-contention recovery, and the first unlock after Windows Update remain hardware-dependent acceptance items.
 - When the working directory contains Chinese paths, OpenCV / MediaPipe are handled specially, but encoding glitches may still occur.
 - The installer and the app itself are fairly large, bounded by the Python-related dependencies.
 
@@ -209,21 +218,21 @@ models/            model weights (gitignored)
 
 ## ❓ FAQ
 
-**Q: In the console app the camera opens and recognizes faces accurately — why does the camera often fail to open after the PC locks or cold-boots, making Face Hello unusable?**      
+**Q: Why can face unlock take longer or fail after locking, cold boot, or resume?**
 
-A: 1. Some USB or built-in laptop cameras *aren't powered* on the lock screen, so OpenCV can't grab the camera — make sure your camera device is powered at the lock screen or on cold boot (just powered on, woken from sleep, etc.). 2. On some laptop brands the camera may be turned off when not on AC power or in power-saving mode — you may need to force it on. 3. Make sure you've enabled camera permission in Windows settings. 4. Make sure the camera isn't occupied by another app on the lock screen. 5. A very few external cameras refuse lock-screen access for security reasons — there's no fix for that but to switch cameras.
+A: Some cameras take several seconds to power up or re-enumerate outside the desktop session. FaceHello retries the DSHOW camera open and requires a successful frame read before continuing, but camera firmware, power-saving settings, privacy permissions, or another app holding the device can still delay or block it. Short- and long-duration sleep have passed current hardware acceptance. If the problem repeats, use password/PIN, then export a redacted diagnostic ZIP from the console; include the test time and camera/driver details when filing an issue.
 
-**Q: The lock screen shows "service not started" and face unlock doesn't work.**      
+**Q: The lock screen shows "service not started" and face unlock doesn't work.**
 
-A: Open the console as Administrator and check the service on the "Service, credentials & diagnostics" page. Start it if it is stopped. If it says "Running" but the lock screen still fails, run the diagnostics on that page first. They distinguish a service that is not ready from a version mismatch, incompatible protocol, or malformed response. When filing an issue, include the diagnostic result and machine details, but never upload a password, LSA Secret, or face-gallery file.
+A: Open the console as Administrator and check the service on the "Service, credentials & diagnostics" page. Start it if it is stopped. If it says "Running" but the lock screen still fails, run diagnostics and inspect the recent service log on that page. The health check distinguishes a service that is not ready from a version mismatch, incompatible protocol, or malformed response. Diagnostic ZIP export redacts usernames and credential-like values and excludes the face gallery. Attach that ZIP and machine details to an issue; never upload a password, LSA Secret, or `faces.dat`.
 
-**Q: Why is my face recognition unstable at the lock screen — Face Hello takes a long time to start and finally fails, yet sometimes it works fine?**     
+**Q: Why does the first face attempt sometimes fail but the second one works?**
 
-A: This is indeed a current bug. We've fixed and optimized the slow-start / sometimes-won't-start problems, and on the few machines the author tested the chance of hitting it is extremely low, near zero. If you run into it often, please file an issue so we can look into it. Such a bug can come from a daemon thread not running properly, an unstable camera index, and so on.     
+A: Check the recent service log for camera-open retries, frame-read failures, and unlock timing. The service reopens the camera for every authentication while reusing its warmed liveness tracker. Do not assume every resume failure has the same cause: record whether the camera became ready, whether a liveness prompt appeared, and whether the service stayed running. Use password/PIN if needed and export diagnostics before restarting the service.
 
-**Q: Why can't I use Face Hello after restarting my computer following a Windows update?**      
+**Q: What should I do if FaceHello fails after Windows Update?**
 
-A: This is normal. Windows updates typically refresh Windows services, which may cause the Face Hello service to hang. After unlocking the system with your password, the service will resume the next time you lock the screen. You don't need to run the service again in the console.
+A: Use password/PIN, open the console as Administrator, and run diagnostics. Confirm that the service is running, its ImagePath points to the current installation, the pipe version/protocol matches, and the current Credential Provider DLL is registered. Windows Update recovery is still tracked as a hardware/system acceptance scenario; a service hang is not treated as normal or assumed to fix itself on the next lock.
 
 **Q: Why does the update check show different failure messages?**
 
@@ -233,13 +242,12 @@ A: The console distinguishes an already-current installation from a local networ
 
 A: A normal upgrade preserves the gallery under `C:\ProgramData\FaceHello\data`. Before changing the service or lock-screen component, the installer writes a temporary baseline containing only hashes and counts, then compares it after the upgrade. It contains no usernames, face embeddings, Windows passwords, or LSA Secrets. The baseline is deleted after successful acceptance; on failure it is retained while the installer attempts to restore the previous version.
 
-## 📝 TODO
+## 📝 Possible future work
 
-1. Optimize startup speed, model-loading speed, service-startup speed (OpenCV DNN)
-2. Polish or refactor the PySide6 frontend
-3. Further improve security, including the login credential and single-RGB protection
-4. Detailed usage docs (?)
-5. GPU inference support
+- Complete hardware acceptance for hibernation, lid-close recovery, Fast Startup, camera contention, and the first unlock after Windows Update. Changes to camera or tracker lifetime require a reproducible failure first.
+- Evaluate optional GPU / NPU inference with a reliable CPU fallback and Session 0 compatibility.
+- Test further dependency trimming separately; every change must pass the offline check, release smoke, full pytest suite, and installed acceptance.
+- Research lower-friction passive liveness without replacing the current active challenge until replay-attack testing is complete.
 
 ## 📄 License
 
