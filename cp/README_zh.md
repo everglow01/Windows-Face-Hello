@@ -38,13 +38,15 @@
 **要点**：
 - **密码永不经过命名管道**。服务只回 `{ok, user, similarity}`；CP 自己在 SYSTEM 上下文读 LSA。
 - **身份契约**：磁贴提交的账户名 == 服务返回的 `user` == LSA 键 `L$FaceHello_<user>` == 录入的 profile 名，四者必须一致解锁才成立。
-- 只在 `CPUS_LOGON` 与 `CPUS_UNLOCK_WORKSTATION` 两个场景出磁贴，其余场景 `E_NOTIMPL` 不接管。
+- 磁贴只支持 Windows 登录与工作站解锁；仍不接入 `CPUS_CREDUI`、UAC 或应用认证。管理台把 `C:\ProgramData\FaceHello\auth_scope.txt` 写成 `0`(全关)、`1`(Windows 登录)、`2`(工作站解锁)或 `3`(两者)。文件缺失 / 无效时默认 `3`，兼容旧版本升级。
+- Windows 10 及更高版本通常把开机/注销和 `Win+L` 都报告为 `CPUS_LOGON`。`CFaceProvider` 因此检查当前 WTS 会话是否已有登录用户；如果查询失败且只开了一个场景，磁贴保持隐藏，不越过用户设置。
 
 ### 磁贴的可定制点
 
 - **自定义头像**：把一张 PNG/JPG/BMP 放进 `C:\ProgramData\FaceHello\`，`GetBitmapValue` 用 WIC 读**第一张**图、按短边居中裁成正方形再缩放到 128×128；读不到 / 解码失败回退纯蓝占位图。该路径是纯 ASCII、SYSTEM 可读（CP 读不了 OneDrive / 中文路径）。
 - **多语言**：CP 启动时读 `C:\ProgramData\FaceHello\lang.txt`（控制台改语言时写、服务以 SYSTEM 启动时同步），内容为 `en` 时磁贴标题 / 状态等**自有文案**走英文，否则中文。活体提示（「请向左转头」等）由 Python 服务**已按语言发来**，CP 原样显示。
 - **刷脸启动热键**：CP 启动时读 `C:\ProgramData\FaceHello\hotkey.txt`（控制台设置页写入）。支持 `SPACE`、`ENTER`、单个字母或数字；为空时只有「→」会启动刷脸。
+- **刷脸启用范围**：`auth_scope.txt` 镜像刷脸总开关和登录 / 工作站选择。关闭总开关只把镜像写为 `0`，不会删除持久化的两个场景选择；重新开启后恢复原选择。
 
 > 运行前提:FaceHello 服务在跑 + 已写好该用户的 LSA 登录密码（都可在管理台「服务、凭据与诊断」页完成）。
 
@@ -87,7 +89,7 @@ regsvr32 /u FaceHelloCP.dll     # 卸载
 | `guid.h` | 本 CP 的 CLSID 定义 |
 | `common.h` | 磁贴字段枚举（图标 / 标题 / 提交 / 状态）+ 共享声明 |
 | `helpers.h` | 字段描述符深拷贝（`FieldDescriptorCoAllocCopy`） |
-| `CFaceProvider.{h,cpp}` | `ICredentialProvider`：枚举出 1 个磁贴；`SignalAutoLogon` 触发自动提交 |
+| `CFaceProvider.{h,cpp}` | `ICredentialProvider`：读取 `auth_scope.txt`，通过 WTS 会话状态区分登录 / 解锁，启用时枚举一个磁贴，并用 `SignalAutoLogon` 触发自动提交 |
 | `CFaceCredential.{h,cpp}` | `ICredentialProviderCredential`：显式启动扫描、可选热键监听、状态刷新、头像 / 语言、`GetSerialization` 解锁 |
 | `PipeClient.{h,cpp}` | 命名管道客户端（`AuthStart` / `AuthPoll`），管道忙 / 重建空窗时重试 |
 | `CredVault.{h,cpp}` | 从 LSA Secret 读登录密码（`L$FaceHello_<user>`） |

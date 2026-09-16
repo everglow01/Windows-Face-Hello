@@ -38,13 +38,15 @@ Select the "Face Unlock" tile
 **Key points**:
 - **The password never travels over the named pipe.** The service only returns `{ok, user, similarity}`; the CP reads the LSA itself in the SYSTEM context.
 - **Identity contract**: the account name the tile submits == the `user` the service returns == the LSA key `L$FaceHello_<user>` == the enrolled profile name. All four must match for the unlock to succeed.
-- The tile is shown only in the `CPUS_LOGON` and `CPUS_UNLOCK_WORKSTATION` scenarios; for all others it returns `E_NOTIMPL` and does not take over.
+- The tile supports sign-in and workstation unlock only; `CPUS_CREDUI`, UAC, and application authentication remain unsupported. The console writes `C:\ProgramData\FaceHello\auth_scope.txt` as `0` (off), `1` (sign-in), `2` (workstation unlock), or `3` (both). Missing / malformed content defaults to `3` for upgrade compatibility.
+- Windows 10+ commonly reports both startup/sign-out and `Win+L` as `CPUS_LOGON`. `CFaceProvider` therefore checks whether the current WTS session already has a signed-in user. If that query fails while only one scope is enabled, the tile stays hidden rather than violating the configured scope.
 
 ### Customizable parts of the tile
 
 - **Custom avatar**: drop a PNG/JPG/BMP into `C:\ProgramData\FaceHello\`. `GetBitmapValue` uses WIC to read the **first** image, center-crops it to a square by the shorter side, then scales it to 128×128; if nothing is found or decoding fails, it falls back to a solid-blue placeholder. That path is pure ASCII and SYSTEM-readable (the CP can't read OneDrive / non-ASCII paths).
 - **Multi-language**: at startup the CP reads `C:\ProgramData\FaceHello\lang.txt` (written by the console when you change language, and synced by the service as SYSTEM on startup). When its content is `en`, the tile's **own text** (title, status, etc.) is English, otherwise Chinese. The liveness prompts ("Turn your head left", etc.) arrive **already localized from the Python service**, and the CP displays them as-is.
 - **Face unlock hotkey**: at startup the CP reads `C:\ProgramData\FaceHello\hotkey.txt` (written by the console Settings page). Supported values are `SPACE`, `ENTER`, one letter, or one digit; empty means only "→" starts scanning.
+- **Face-unlock scopes**: `auth_scope.txt` mirrors the global switch plus sign-in / workstation choices. The global switch writes `0` without deleting the persisted per-scenario choices, so re-enabling restores them.
 
 > Prerequisites: the FaceHello service is running, and the user's LSA sign-in password has been set (both can be done on the console's "Service, credentials & diagnostics" page).
 
@@ -87,7 +89,7 @@ After registering, lock with `Win+L` or sign out, and you should see the "Face U
 | `guid.h` | the CP's CLSID definition |
 | `common.h` | tile field enum (image / label / submit / status) + shared declarations |
 | `helpers.h` | deep-copy of field descriptors (`FieldDescriptorCoAllocCopy`) |
-| `CFaceProvider.{h,cpp}` | `ICredentialProvider`: enumerates one tile; `SignalAutoLogon` triggers auto-submit |
+| `CFaceProvider.{h,cpp}` | `ICredentialProvider`: reads `auth_scope.txt`, distinguishes sign-in from unlock with WTS session state, enumerates one tile when enabled, and triggers auto-submit through `SignalAutoLogon` |
 | `CFaceCredential.{h,cpp}` | `ICredentialProviderCredential`: explicit scan start, optional hotkey listener, status refresh, avatar / language, `GetSerialization` unlock |
 | `PipeClient.{h,cpp}` | named-pipe client (`AuthStart` / `AuthPoll`), retries when the pipe is busy / during the rebuild gap |
 | `CredVault.{h,cpp}` | reads the sign-in password from the LSA Secret (`L$FaceHello_<user>`) |
