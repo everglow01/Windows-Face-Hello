@@ -993,9 +993,24 @@ class SettingsTab(QWidget):
         self.multi_face_check = QCheckBox(tr("multi_face_protection"))
         self.multi_face_check.setChecked(s.get("multi_face_protection_enabled", False))
 
-        save_btn = QPushButton(tr("save_settings"))
-        save_btn.setObjectName("accent")
-        save_btn.clicked.connect(self._save)
+        # 修改即自动保存:控件变化后延迟一小段再写盘,拖动数值时不会每一格都写一次。
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(400)
+        self._autosave_timer.timeout.connect(self._save)
+        self._bindings = self._setting_bindings()
+        for _get, _set, changed in self._bindings.values():
+            changed.connect(self._schedule_save)
+        reset_btn = QPushButton(tr("reset_settings"))
+        reset_btn.clicked.connect(self._reset_settings)
+        self.autosave_status = QLabel(tr("settings_autosave_hint"))
+        self.autosave_status.setObjectName("hint")
+        save_row = QHBoxLayout()
+        save_row.setContentsMargins(0, 0, 0, 0)
+        save_row.setSpacing(12)
+        save_row.addWidget(reset_btn)
+        save_row.addWidget(self.autosave_status)
+        save_row.addStretch(1)
 
         params_title = QLabel(tr("params_security"))
         params_title.setObjectName("pageTitle")
@@ -1109,7 +1124,7 @@ class SettingsTab(QWidget):
             alignment=Qt.AlignmentFlag.AlignLeft,
         )
         panel_layout.addWidget(self.advanced_params_panel)
-        panel_layout.addWidget(save_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        panel_layout.addLayout(save_row)
 
         update_title = QLabel(tr("update_title"))
         update_title.setObjectName("h2")
@@ -1272,44 +1287,78 @@ class SettingsTab(QWidget):
         self.update_btn.setEnabled(True)
         self.update_download_btn.setEnabled(True)
 
+    def _setting_bindings(self) -> dict:
+        """设置键 -> (读值, 设值, 变更信号)。自动保存与重置都以此为准,新增设置加一行即可。
+        热键不是控件值,由 _save / _reset_settings 单独处理。"""
+        def spin(w):
+            return (w.value, w.setValue, w.valueChanged)
+
+        def check(w):
+            return (w.isChecked, w.setChecked, w.toggled)
+
+        return {
+            "liveness_enabled": check(self.liveness_check),
+            "antispoof_enabled": check(self.antispoof_check),
+            "multi_face_protection_enabled": check(self.multi_face_check),
+            "match_threshold": spin(self.match_spin),
+            "match_margin": spin(self.margin_spin),
+            "yaw_threshold_deg": spin(self.yaw_spin),
+            "required_blinks": spin(self.blink_spin),
+            "renew_days": spin(self.renewal_spin),
+            "enroll_samples": spin(self.samples_spin),
+            "max_templates_per_name": spin(self.max_templates_spin),
+            "lockout_max_fails": spin(self.lockout_fails_spin),
+            "lockout_seconds": spin(self.lockout_secs_spin),
+            "camera_index": spin(self.camera_spin),
+            "face_unlock_enabled": check(self.face_unlock_check),
+            "face_unlock_logon_enabled": check(self.face_unlock_logon_check),
+            "face_unlock_workstation_enabled": check(self.face_unlock_workstation_check),
+        }
+
+    def _schedule_save(self, *_args) -> None:
+        self._autosave_timer.start()  # 连续修改会重新计时,只在停下后写一次
+
     def _save(self) -> None:
-        self.store.update_settings(
-            liveness_enabled=self.liveness_check.isChecked(),
-            antispoof_enabled=self.antispoof_check.isChecked(),
-            multi_face_protection_enabled=self.multi_face_check.isChecked(),
-            match_threshold=self.match_spin.value(),
-            match_margin=self.margin_spin.value(),
-            yaw_threshold_deg=self.yaw_spin.value(),
-            required_blinks=self.blink_spin.value(),
-            renew_days=self.renewal_spin.value(),
-            enroll_samples=self.samples_spin.value(),
-            max_templates_per_name=self.max_templates_spin.value(),
-            lockout_max_fails=self.lockout_fails_spin.value(),
-            lockout_seconds=self.lockout_secs_spin.value(),
-            camera_index=self.camera_spin.value(),
-            unlock_hotkey=self.unlock_hotkey,
-            face_unlock_enabled=self.face_unlock_check.isChecked(),
-            face_unlock_logon_enabled=self.face_unlock_logon_check.isChecked(),
-            face_unlock_workstation_enabled=self.face_unlock_workstation_check.isChecked(),
-        )
-        self.store.save()
+        """把本页设置写回人脸库并同步给 CP 的镜像文件。由自动保存计时器或重置调用。"""
+        self._autosave_timer.stop()
+        values = {key: get() for key, (get, _set, _changed) in self._bindings.items()}
+        values["unlock_hotkey"] = self.unlock_hotkey
+        try:
+            self.store.update_settings(**values)
+            self.store.save()
+        except Exception as exc:  # noqa: BLE001 如非管理员写不进 ProgramData:就地提示,不弹窗打断
+            self.autosave_status.setText(tr("settings_save_failed", e=exc))
+            return
         save_hotkey_mirror(self.unlock_hotkey)
         save_auth_scope_mirror(
             self.face_unlock_check.isChecked(),
             self.face_unlock_logon_check.isChecked(),
             self.face_unlock_workstation_check.isChecked(),
         )
-        QMessageBox.information(self, tr("saved_title"), tr("settings_saved"))
+        self.autosave_status.setText(tr("settings_autosaved"))
+
+    def _reset_settings(self) -> None:
+        """确认后把本页所有设置恢复为 config.DEFAULTS 并立即保存;不动人脸库与 LSA 密码。"""
+        answer = QMessageBox.question(self, tr("reset_settings"), tr("reset_settings_confirm"))
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        for key, (_get, set_value, _changed) in self._bindings.items():
+            set_value(config.DEFAULTS[key])
+        self.unlock_hotkey = config.DEFAULTS["unlock_hotkey"]
+        self.hotkey_value.setText(_hotkey_text(self.unlock_hotkey))
+        self._save()
 
     def _set_hotkey(self) -> None:
         dlg = HotkeyDialog(self)
         if dlg.exec() == QDialog.Accepted:
             self.unlock_hotkey = dlg.value
             self.hotkey_value.setText(_hotkey_text(self.unlock_hotkey))
+            self._schedule_save()
 
     def _clear_hotkey(self) -> None:
         self.unlock_hotkey = ""
         self.hotkey_value.setText(_hotkey_text(self.unlock_hotkey))
+        self._schedule_save()
 
     def _test_camera(self) -> None:
         """用当前(未保存的)索引抓一帧弹窗预览,确认是不是想要的那台摄像头。"""
