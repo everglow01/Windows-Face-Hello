@@ -46,6 +46,9 @@ public:
     HRESULT Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, AutoLogonBridge* autoLogon);
     CFaceCredential();
 
+    // hotkey.txt 为 "ANY" 时的哨兵值:任意键盘/鼠标输入即开始刷脸(与单键热键互斥)。
+    static const int kAnyInputVk = -1;
+
 private:
     ~CFaceCredential();
 
@@ -53,13 +56,18 @@ private:
 
     // 锁屏刷脸最多尝试次数(第 1 次自动,其余靠按「→」重试);用尽退回密码。
     static const int kMaxFaceAttempts = 3;
+    // 任意输入模式:开始监听后这段时间内的输入不触发。Win+L 的输入通常早于监听开始,
+    // 另由「Win 键按住/刚松开」判断吸收,故只需很短的宽限,不吞掉用户锁屏后立刻按下的键。
+    static const DWORD kInputGraceMs = 300;
 
+    bool _AnyInputMode() const { return _hotkeyVk == kAnyInputVk; }
     void _StartAuthThread();
     void _StopAuthThread();
     void _StartHotkeyThread();
     void _StopHotkeyThread();
     void _AuthLoop();
     void _HotkeyLoop();
+    void _AnyInputLoop();
     static DWORD WINAPI _AuthThreadProc(LPVOID param);
     static DWORD WINAPI _HotkeyThreadProc(LPVOID param);
     void _SetStatus(PCWSTR text);  // 线程安全地更新状态字段并通知 LogonUI

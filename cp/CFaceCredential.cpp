@@ -1,4 +1,6 @@
 #include <new>
+#include <cstdarg>
+#include <cstdio>
 #include <string>
 #include <shlwapi.h>
 #include <ntsecapi.h>
@@ -188,6 +190,8 @@ static int _ReadHotkeyVk()
         if (c >= 'a' && c <= 'z')
             c = static_cast<char>(c - 'a' + 'A');
     }
+    if (s == "ANY")
+        return CFaceCredential::kAnyInputVk;
     if (s == "SPACE")
         return VK_SPACE;
     if (s == "ENTER")
@@ -197,8 +201,34 @@ static int _ReadHotkeyVk()
     return 0;
 }
 
+// 诊断追踪:仅当 C:\ProgramData\FaceHello\cp_trace.enabled 存在时,把锁屏选中/输入/扫描事件
+// 追加到同目录的 cp_trace.log,用于排查「熄屏按键唤醒」时 LogonUI 的实际时序。默认关闭。
+static void _Trace(PCWSTR fmt, ...)
+{
+    if (GetFileAttributesW(L"C:\\ProgramData\\FaceHello\\cp_trace.enabled") == INVALID_FILE_ATTRIBUTES)
+        return;
+    wchar_t msg[256];
+    va_list args;
+    va_start(args, fmt);
+    StringCchVPrintfW(msg, ARRAYSIZE(msg), fmt, args);
+    va_end(args);
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char line[400];
+    int n = _snprintf_s(line, sizeof(line), _TRUNCATE, "%02d:%02d:%02d.%03d tick=%lu %ls\r\n",
+                        st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, GetTickCount(), msg);
+    HANDLE h = CreateFileW(L"C:\\ProgramData\\FaceHello\\cp_trace.log", FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return;
+    DWORD written = 0;
+    WriteFile(h, line, n > 0 ? static_cast<DWORD>(n) : 0, &written, nullptr);
+    CloseHandle(h);
+}
+
 CFaceCredential::CFaceCredential()
-    : _cRef(1), _cpus(CPUS_INVALID), _autoLogon(nullptr),
+    :_cRef(1), _cpus(CPUS_INVALID), _autoLogon(nullptr),
       _pCredProvCredentialEvents(nullptr), _hAuthThread(nullptr), _hHotkeyThread(nullptr),
       _stopFlag(0), _hotkeyStopFlag(0), _authState(AuthState::Idle), _en(false),
       _failCount(0), _hotkeyVk(0)
@@ -314,14 +344,19 @@ IFACEMETHODIMP CFaceCredential::SetSelected(BOOL* pbAutoLogon)
     LeaveCriticalSection(&_cs);
     if (firstReady)
     {
-        _SetStatus(_L(L"按 → 开始刷脸", L"Press → to start face unlock"));
+        if (_AnyInputMode())
+            _SetStatus(_L(L"按任意键开始刷脸", L"Press any key to start face unlock"));
+        else
+            _SetStatus(_L(L"按 → 开始刷脸", L"Press → to start face unlock"));
     }
+    _Trace(L"SetSelected vk=%d state=%d fails=%d", _hotkeyVk, static_cast<int>(_authState), _failCount);
     _StartHotkeyThread();
     return S_OK;
 }
 
 IFACEMETHODIMP CFaceCredential::SetDeselected()
 {
+    _Trace(L"SetDeselected");
     _StopHotkeyThread();
     _StopAuthThread();
     return S_OK;
@@ -445,8 +480,54 @@ DWORD WINAPI CFaceCredential::_HotkeyThreadProc(LPVOID param)
     return 0;
 }
 
+// 任意输入模式:用会话级的最后输入时间(GetLastInputInfo)判断有人按键/动鼠标。
+// 与逐键轮询 GetAsyncKeyState 不同,它能覆盖任意键、鼠标,以及把熄屏唤醒的那一下输入,
+// 因此熄屏后按一次键即可开始刷脸。为避免 Win+L 本身就开扫(保留「锁定后有人操作才开摄像头」
+// 的本意),以下输入只刷新基线不触发:开始监听后 kInputGraceMs 内的输入,以及 Win 键仍按住或
+// 刚松开时的输入。宽限很短,用户锁屏后立刻按键唤出磁贴时,那一下就能直接开始刷脸。
+static bool _WinKeyDown()
+{
+    return (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
+}
+
+void CFaceCredential::_AnyInputLoop()
+{
+    const DWORD startTick = GetTickCount();
+    LASTINPUTINFO lii = { sizeof(lii) };
+    DWORD baseline = GetLastInputInfo(&lii) ? lii.dwTime : 0;
+    bool winWasDown = _WinKeyDown();
+    _Trace(L"any-input watch start baseline=%lu win=%d", baseline, winWasDown ? 1 : 0);
+    for (;;)
+    {
+        if (InterlockedCompareExchange(&_hotkeyStopFlag, 0, 0) == 1)
+            return;
+        const bool winDown = _WinKeyDown();
+        if (GetLastInputInfo(&lii) && lii.dwTime != baseline)
+        {
+            if (GetTickCount() - startTick < kInputGraceMs || winDown || winWasDown)
+            {
+                _Trace(L"input at=%lu absorbed (win=%d)", lii.dwTime, winDown || winWasDown ? 1 : 0);
+                baseline = lii.dwTime;
+            }
+            else
+            {
+                _Trace(L"input at=%lu -> start auth", lii.dwTime);
+                _StartAuthThread();
+                return;
+            }
+        }
+        winWasDown = winDown;
+        Sleep(30);
+    }
+}
+
 void CFaceCredential::_HotkeyLoop()
 {
+    if (_AnyInputMode())
+    {
+        _AnyInputLoop();
+        return;
+    }
     GetAsyncKeyState(_hotkeyVk);
     bool wasDown = (GetAsyncKeyState(_hotkeyVk) & 0x8000) != 0;
     for (;;)
@@ -555,7 +636,10 @@ void CFaceCredential::_OnScanFailed(const std::wstring& reason)
     {
         // 例:"刷脸未通过: 相似度低(按 → 重试,剩 2 次)"
         msg = reason;
-        msg += _L(L"(按 → 重试,剩 ", L" (press → to retry, ");
+        if (_AnyInputMode())
+            msg += _L(L"(按任意键重试,剩 ", L" (press any key to retry, ");
+        else
+            msg += _L(L"(按 → 重试,剩 ", L" (press → to retry, ");
         msg += std::to_wstring(remaining);
         msg += _L(L" 次)", L" left)");
     }
@@ -581,6 +665,10 @@ IFACEMETHODIMP CFaceCredential::GetFieldState(
     {
         *pcpfs = g_fieldStatePairs[dwFieldID].cpfs;
         *pcpfis = g_fieldStatePairs[dwFieldID].cpfis;
+        if (dwFieldID == FFI_SUBMIT && _AnyInputMode())
+        {
+            *pcpfs = CPFS_HIDDEN;  // 任意输入模式由按键/鼠标触发,不显示「→」
+        }
         return S_OK;
     }
     return E_INVALIDARG;

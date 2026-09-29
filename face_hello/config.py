@@ -107,6 +107,8 @@ DEFAULTS = {
     # 摄像头索引(0=默认/第一个)。多摄像头(内置+USB+虚拟)时改这里;控制台「测试」按钮可预览确认。
     "camera_index": 0,
     "unlock_hotkey": "",
+    # 锁屏任意键盘/鼠标输入即开始刷脸,并隐藏「→」。与 unlock_hotkey 互斥:开启时 hotkey.txt 写 "ANY"。
+    "unlock_on_any_input": False,
     # CP 磁贴启用范围。总开关关闭时两个场景设置保留,重新开启后恢复原选择。
     "face_unlock_enabled": True,
     "face_unlock_logon_enabled": True,
