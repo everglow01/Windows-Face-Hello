@@ -109,6 +109,10 @@ DEFAULTS = {
     # 网络串流摄像头 URL(如手机 IP Webcam 的 http://user:pass@192.168.x.x:8080/video)。
     # 非空时取代 camera_index;服务以 LocalSystem 直接拉流,锁屏时不依赖用户会话里的虚拟摄像头。
     "camera_url": "",
+    # 串流的 HTTP/RTSP 认证(选填)。与 camera_url 分开存,由 camera_source() 百分号编码后拼进 URL;
+    # 设置随人脸库一起经 DPAPI 加密落盘。URL 本身已带 user:pass@ 时以 URL 为准。
+    "camera_url_username": "",
+    "camera_url_password": "",
     "unlock_hotkey": "",
     # CP 磁贴启用范围。总开关关闭时两个场景设置保留,重新开启后恢复原选择。
     "face_unlock_enabled": True,

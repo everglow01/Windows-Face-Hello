@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import time
 import threading
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import cv2
 
@@ -13,15 +14,29 @@ _capture_lock = threading.Lock()
 
 CameraSource = int | str
 
-_URL_USERINFO = re.compile(r"(?<=://)[^/@]*@")
+_URL_USERINFO = re.compile(r"(?<=://)[^/]*@")
 
 
 def camera_source(settings: dict) -> CameraSource:
-    """settings 里填了 `camera_url` 就用网络串流,否则用 `camera_index` 的本机摄像头。"""
+    """settings 里填了 `camera_url` 就用网络串流,否则用 `camera_index` 的本机摄像头。
+
+    填了 `camera_url_username` 时,把账号密码百分号编码后拼进 URL(密码含 @ : / # 等也安全);
+    URL 本身已带 user:pass@ 则原样使用。
+    """
     url = str(settings.get("camera_url", "") or "").strip()
-    if url:
+    if not url:
+        return int(settings.get("camera_index", 0))
+    user = str(settings.get("camera_url_username", "") or "")
+    if not user:
         return url
-    return int(settings.get("camera_index", 0))
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc or "@" in parts.netloc:
+        return url
+    userinfo = quote(user, safe="")
+    password = str(settings.get("camera_url_password", "") or "")
+    if password:
+        userinfo += ":" + quote(password, safe="")
+    return urlunsplit(parts._replace(netloc=f"{userinfo}@{parts.netloc}"))
 
 
 def is_stream(source: CameraSource) -> bool:

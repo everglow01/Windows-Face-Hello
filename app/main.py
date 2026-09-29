@@ -965,8 +965,14 @@ class SettingsTab(QWidget):
         self.camera_spin.setValue(int(s.get("camera_index", 0)))
         self.camera_url_edit = QLineEdit(str(s.get("camera_url", "") or ""))
         self.camera_url_edit.setPlaceholderText(tr("camera_url_placeholder"))
-        # URL 可能带串流账号密码:非编辑时遮蔽,避免截图/旁人看到
-        self.camera_url_edit.setEchoMode(QLineEdit.PasswordEchoOnEdit)
+        if "@" in self.camera_url_edit.text():
+            # 旧设置把账号密码直接写在 URL 里:非编辑时遮蔽,避免截图/旁人看到
+            self.camera_url_edit.setEchoMode(QLineEdit.PasswordEchoOnEdit)
+        self.camera_user_edit = QLineEdit(str(s.get("camera_url_username", "") or ""))
+        self.camera_user_edit.setPlaceholderText(tr("camera_user_placeholder"))
+        self.camera_pass_edit = QLineEdit(str(s.get("camera_url_password", "") or ""))
+        self.camera_pass_edit.setPlaceholderText(tr("camera_pass_placeholder"))
+        self.camera_pass_edit.setEchoMode(QLineEdit.Password)
         self.face_unlock_check = QCheckBox(tr("face_unlock_enabled"))
         self.face_unlock_check.setChecked(s.get("face_unlock_enabled", True))
         self.face_unlock_logon_check = QCheckBox(tr("face_unlock_logon"))
@@ -1040,7 +1046,16 @@ class SettingsTab(QWidget):
         common_grid.addWidget(cam_w, 5, 1, 1, 2)
         common_grid.addWidget(QLabel(tr("camera_url_label")), 6, 0)
         common_grid.addWidget(self.camera_url_edit, 6, 1, 1, 2)
-        common_grid.addWidget(QLabel(tr("unlock_hotkey_label")), 7, 0)
+        common_grid.addWidget(QLabel(tr("camera_auth_label")), 7, 0)
+        auth_row = QHBoxLayout()
+        auth_row.setContentsMargins(0, 0, 0, 0)
+        auth_row.setSpacing(8)
+        auth_row.addWidget(self.camera_user_edit)
+        auth_row.addWidget(self.camera_pass_edit)
+        auth_w = QWidget()
+        auth_w.setLayout(auth_row)
+        common_grid.addWidget(auth_w, 7, 1, 1, 2)
+        common_grid.addWidget(QLabel(tr("unlock_hotkey_label")), 8, 0)
         hotkey_row = QHBoxLayout()
         hotkey_row.setContentsMargins(0, 0, 0, 0)
         hotkey_row.setSpacing(8)
@@ -1050,7 +1065,7 @@ class SettingsTab(QWidget):
         hotkey_row.addStretch(1)
         hotkey_w = QWidget()
         hotkey_w.setLayout(hotkey_row)
-        common_grid.addWidget(hotkey_w, 7, 1, 1, 2)
+        common_grid.addWidget(hotkey_w, 8, 1, 1, 2)
         self._update_auth_scope_controls(self.face_unlock_check.isChecked())
 
         self.advanced_params_btn = QPushButton(tr("advanced_params_show"))
@@ -1296,6 +1311,8 @@ class SettingsTab(QWidget):
             camera_index=self.camera_spin.value(),
             camera_url=self.camera_url_edit.text().strip(),
             unlock_hotkey=self.unlock_hotkey,
+            camera_url_username=self.camera_user_edit.text().strip(),
+            camera_url_password=self.camera_pass_edit.text(),
             face_unlock_enabled=self.face_unlock_check.isChecked(),
             face_unlock_logon_enabled=self.face_unlock_logon_check.isChecked(),
             face_unlock_workstation_enabled=self.face_unlock_workstation_check.isChecked(),
@@ -1322,6 +1339,8 @@ class SettingsTab(QWidget):
     def _test_camera(self) -> None:
         """用当前(未保存的)串流 URL 或索引抓一帧弹窗预览,确认是不是想要的那台摄像头。"""
         source = camera_source({"camera_url": self.camera_url_edit.text(),
+                                "camera_url_username": self.camera_user_edit.text(),
+                                "camera_url_password": self.camera_pass_edit.text(),
                                 "camera_index": self.camera_spin.value()})
         self.camera_test_btn.setEnabled(False)  # 防重入
         self._cam_test = CameraTestWorker(source)

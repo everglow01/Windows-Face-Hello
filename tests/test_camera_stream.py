@@ -18,12 +18,38 @@ def test_camera_source_prefers_url_over_index():
     )
 
 
+def test_camera_source_percent_encodes_separate_credentials():
+    settings = {
+        "camera_url": "http://10.0.0.5:8080/video",
+        "camera_url_username": "me@home",
+        "camera_url_password": "p@ss:w/rd#1",
+    }
+    assert camera_source(settings) == "http://me%40home:p%40ss%3Aw%2Frd%231@10.0.0.5:8080/video"
+    assert camera_source({**settings, "camera_url_password": ""}) == (
+        "http://me%40home@10.0.0.5:8080/video"
+    )
+
+
+def test_camera_source_keeps_credentials_already_in_url():
+    settings = {
+        "camera_url": "http://old:secret@10.0.0.5:8080/video",
+        "camera_url_username": "new",
+        "camera_url_password": "other",
+    }
+    assert camera_source(settings) == "http://old:secret@10.0.0.5:8080/video"
+    assert camera_source({"camera_url": "http://h/video", "camera_url_password": "x"}) == (
+        "http://h/video"
+    )
+
+
 def test_describe_source_masks_stream_credentials():
     assert describe_source(1) == "index=1"
     assert describe_source("http://user:secret@10.0.0.5:8080/video") == (
         "url=http://***@10.0.0.5:8080/video"
     )
     assert describe_source("rtsp://10.0.0.5/live") == "url=rtsp://10.0.0.5/live"
+    # 未编码的 @ 出现在密码里时也要整段遮蔽,不能只遮到第一个 @
+    assert describe_source("http://u:p@ss@10.0.0.5/video") == "url=http://***@10.0.0.5/video"
 
 
 class _StreamCapture:
