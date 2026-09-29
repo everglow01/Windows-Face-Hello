@@ -88,6 +88,7 @@ from face_hello.diagnostics import (
 )
 from face_hello import config, cred_vault, probes
 from face_hello.auth import AuthResult
+from face_hello.camera import camera_source, describe_source
 from face_hello.detector import FaceDetector
 from face_hello.i18n import (
     save_auth_scope_mirror,
@@ -636,7 +637,7 @@ class EnrollTab(QWidget):
         self.status.setText(tr("opening_camera"))
         self.progress_bar.setRange(0, samples)
         self.progress_bar.setValue(0)
-        self.worker = EnrollWorker(self.detector, samples, camera_index=s.get("camera_index", 0),
+        self.worker = EnrollWorker(self.detector, samples, camera_index=camera_source(s),
                                    append=append)
         self.worker.preview.connect(lambda img: _show_frame(self.preview, img))
         self.worker.guidance.connect(self._on_guidance)
@@ -866,7 +867,7 @@ class AuthTab(QWidget):
         self.instruction.setText(tr("preparing"))
         self.worker = AuthWorker(
             self.detector, self.store,
-            camera_index=self.store.get_settings().get("camera_index", 0),
+            camera_index=camera_source(self.store.get_settings()),
         )
         self.worker.preview.connect(lambda img: _show_frame(self.preview, img))
         self.worker.instruction.connect(self.instruction.setText)
@@ -905,7 +906,7 @@ class AuthTab(QWidget):
         self.histogram.clear()
         self.monitor = SimilarityMonitorWorker(
             self.detector, self.store,
-            camera_index=self.store.get_settings().get("camera_index", 0),
+            camera_index=camera_source(self.store.get_settings()),
             threshold=self.store.get_settings()["match_threshold"],
         )
         self.monitor.preview.connect(lambda img: _show_frame(self.preview, img))
@@ -962,6 +963,10 @@ class SettingsTab(QWidget):
         self.camera_spin = QSpinBox()
         self.camera_spin.setRange(0, 10)
         self.camera_spin.setValue(int(s.get("camera_index", 0)))
+        self.camera_url_edit = QLineEdit(str(s.get("camera_url", "") or ""))
+        self.camera_url_edit.setPlaceholderText(tr("camera_url_placeholder"))
+        # URL 可能带串流账号密码:非编辑时遮蔽,避免截图/旁人看到
+        self.camera_url_edit.setEchoMode(QLineEdit.PasswordEchoOnEdit)
         self.face_unlock_check = QCheckBox(tr("face_unlock_enabled"))
         self.face_unlock_check.setChecked(s.get("face_unlock_enabled", True))
         self.face_unlock_logon_check = QCheckBox(tr("face_unlock_logon"))
@@ -1033,7 +1038,9 @@ class SettingsTab(QWidget):
         cam_w = QWidget()
         cam_w.setLayout(cam_row)
         common_grid.addWidget(cam_w, 5, 1, 1, 2)
-        common_grid.addWidget(QLabel(tr("unlock_hotkey_label")), 6, 0)
+        common_grid.addWidget(QLabel(tr("camera_url_label")), 6, 0)
+        common_grid.addWidget(self.camera_url_edit, 6, 1, 1, 2)
+        common_grid.addWidget(QLabel(tr("unlock_hotkey_label")), 7, 0)
         hotkey_row = QHBoxLayout()
         hotkey_row.setContentsMargins(0, 0, 0, 0)
         hotkey_row.setSpacing(8)
@@ -1043,7 +1050,7 @@ class SettingsTab(QWidget):
         hotkey_row.addStretch(1)
         hotkey_w = QWidget()
         hotkey_w.setLayout(hotkey_row)
-        common_grid.addWidget(hotkey_w, 6, 1, 1, 2)
+        common_grid.addWidget(hotkey_w, 7, 1, 1, 2)
         self._update_auth_scope_controls(self.face_unlock_check.isChecked())
 
         self.advanced_params_btn = QPushButton(tr("advanced_params_show"))
@@ -1287,6 +1294,7 @@ class SettingsTab(QWidget):
             lockout_max_fails=self.lockout_fails_spin.value(),
             lockout_seconds=self.lockout_secs_spin.value(),
             camera_index=self.camera_spin.value(),
+            camera_url=self.camera_url_edit.text().strip(),
             unlock_hotkey=self.unlock_hotkey,
             face_unlock_enabled=self.face_unlock_check.isChecked(),
             face_unlock_logon_enabled=self.face_unlock_logon_check.isChecked(),
@@ -1312,12 +1320,13 @@ class SettingsTab(QWidget):
         self.hotkey_value.setText(_hotkey_text(self.unlock_hotkey))
 
     def _test_camera(self) -> None:
-        """用当前(未保存的)索引抓一帧弹窗预览,确认是不是想要的那台摄像头。"""
-        idx = self.camera_spin.value()
+        """用当前(未保存的)串流 URL 或索引抓一帧弹窗预览,确认是不是想要的那台摄像头。"""
+        source = camera_source({"camera_url": self.camera_url_edit.text(),
+                                "camera_index": self.camera_spin.value()})
         self.camera_test_btn.setEnabled(False)  # 防重入
-        self._cam_test = CameraTestWorker(idx)
+        self._cam_test = CameraTestWorker(source)
         self._cam_test.ok.connect(self._on_cam_test_ok)
-        self._cam_test.failed.connect(lambda _e: self._on_cam_test_fail(idx))
+        self._cam_test.failed.connect(lambda _e: self._on_cam_test_fail(describe_source(source)))
         self._cam_test.finished.connect(lambda: self.camera_test_btn.setEnabled(True))
         self._cam_test.start()
 
@@ -1332,7 +1341,7 @@ class SettingsTab(QWidget):
         lay.addWidget(lbl)
         dlg.exec()
 
-    def _on_cam_test_fail(self, idx: int) -> None:
+    def _on_cam_test_fail(self, idx: str) -> None:
         QMessageBox.warning(self, tr("camera_test_title"), tr("camera_test_fail", idx=idx))
 
 

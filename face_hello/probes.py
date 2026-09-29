@@ -109,14 +109,17 @@ def load_models() -> tuple[float, bool]:
     return time.perf_counter() - started, get_antispoof() is not None
 
 
-def configured_camera_index() -> int:
+def configured_camera_index() -> int | str:
+    """设置里实际使用的摄像头来源:`camera_url` 非空时为 URL,否则为 `camera_index`。"""
+    from .camera import camera_source
+
     try:
-        return int(FaceStore().load().get_settings().get("camera_index", 0))
+        return camera_source(FaceStore().load().get_settings())
     except Exception:
         return 0
 
 
-def capture_camera_frame(index: int, timeout_s: float = 8.0):
+def capture_camera_frame(index: int | str, timeout_s: float = 8.0):
     from .camera import Camera
 
     cam = Camera(index)

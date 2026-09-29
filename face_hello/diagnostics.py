@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import config, cred_vault, probes
+from .camera import describe_source
 from .i18n import t
 from .store import FaceStore
 from .version import display_version
@@ -401,13 +402,14 @@ def export_diagnostic_bundle(
 
 
 def _check_camera(report: DiagnosticReport, lang: str) -> None:
-    idx = probes.configured_camera_index()
+    source = probes.configured_camera_index()
     try:
-        frame = probes.capture_camera_frame(idx)
+        frame = probes.capture_camera_frame(source)
     except Exception as exc:
         _add(report, lang, "diag_item_camera", STATUS_FAIL,
-             t("diag_camera_fail", lang, idx=idx, e=exc), "diag_advice_camera_index")
+             t("diag_camera_fail", lang, idx=describe_source(source), e=exc),
+             "diag_advice_camera_index")
         return
     h, w = frame.shape[:2]
     _add(report, lang, "diag_item_camera", STATUS_OK,
-         t("diag_camera_ok", lang, idx=idx, w=w, h=h))
+         t("diag_camera_ok", lang, idx=describe_source(source), w=w, h=h))

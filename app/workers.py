@@ -10,7 +10,7 @@ from PySide6.QtGui import QImage
 from face_hello import config
 from face_hello.authenticode import verify_authenticode
 from face_hello.auth import AuthResult, AuthSession
-from face_hello.camera import Camera
+from face_hello.camera import Camera, is_stream
 from face_hello.diagnostics import DiagnosticReport, run_diagnostics
 from face_hello.detector import FaceDetector
 from face_hello.enroll import Enroller
@@ -159,7 +159,7 @@ class EnrollWorker(QThread):
     _TIMEOUT_S = 60.0  # 总时长上限:迟迟采不到足够人脸就放弃,不无限等
 
     def __init__(self, detector: FaceDetector, samples: int, capture_interval: float = 0.4,
-                 camera_index: int = 0, append: bool = False):
+                 camera_index: int | str = 0, append: bool = False):
         super().__init__()
         self.detector = detector
         self.samples = samples
@@ -223,7 +223,7 @@ class SimilarityMonitorWorker(QThread):
     sample = Signal(float)            # 当前帧最佳相似度;无脸发 -1.0
     failed = Signal(str)
 
-    def __init__(self, detector: FaceDetector, store: FaceStore, camera_index: int = 0,
+    def __init__(self, detector: FaceDetector, store: FaceStore, camera_index: int | str = 0,
                  threshold: float = 0.0):
         super().__init__()
         self.detector = detector
@@ -269,7 +269,7 @@ class AuthWorker(QThread):
     finished_result = Signal(object)  # AuthResult
     failed = Signal(str)
 
-    def __init__(self, detector: FaceDetector, store: FaceStore, camera_index: int = 0):
+    def __init__(self, detector: FaceDetector, store: FaceStore, camera_index: int | str = 0):
         super().__init__()
         self.detector = detector
         self.store = store
@@ -306,14 +306,15 @@ class CameraTestWorker(QThread):
     ok = Signal(QImage)
     failed = Signal(str)
 
-    def __init__(self, index: int):
+    def __init__(self, index: int | str):
         super().__init__()
         self.index = index
 
     def run(self) -> None:
         cam = Camera(self.index)
         try:
-            cam.open(timeout_s=3.0)
+            # 网络串流在手机端释放相机后冷启动约 2~3s,给足时间
+            cam.open(timeout_s=8.0 if is_stream(self.index) else 3.0)
             self.ok.emit(bgr_to_qimage(_mirror(cam.read())))
         except Exception as e:  # noqa: BLE001 打不开就回失败,UI 提示换索引
             self.failed.emit(str(e))

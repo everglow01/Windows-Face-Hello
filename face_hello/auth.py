@@ -196,13 +196,12 @@ def authenticate_blocking(
     """
     import logging
 
-    from .camera import Camera
+    from .camera import Camera, camera_source
 
     log = logging.getLogger("facehello")
     session = AuthSession(detector, store, tracker=tracker)
     last = None
-    idx = int(store.get_settings().get("camera_index", 0))
-    cam = Camera(idx)
+    cam = Camera(camera_source(store.get_settings()))
     _t0 = time.perf_counter()
     cam.open(timeout_s=camera_timeout_s)
     _t_cam = time.perf_counter()
