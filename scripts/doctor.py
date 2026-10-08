@@ -80,17 +80,18 @@ def check_models() -> bool:
 
 
 def check_camera() -> bool:
-    """按 settings 的 camera_index 打开摄像头并取一帧（短超时,不长时间阻塞）。"""
+    """按 settings 的 camera_url / camera_index 打开摄像头并取一帧（短超时,不长时间阻塞）。"""
     from face_hello import probes
+    from face_hello.camera import describe_source
 
-    idx = probes.configured_camera_index()
+    source = probes.configured_camera_index()
     try:
-        frame = probes.capture_camera_frame(idx)
+        frame = probes.capture_camera_frame(source)
         h, w = frame.shape[:2]
-        _print(OK, f"摄像头可用:index={idx},取到一帧 {w}x{h}")
+        _print(OK, f"摄像头可用:{describe_source(source)},取到一帧 {w}x{h}")
         return True
     except Exception as e:  # noqa: BLE001
-        _print(FAIL, f"摄像头不可用:index={idx} — {e}")
+        _print(FAIL, f"摄像头不可用:{describe_source(source)} — {e}")
         return False
 
 
