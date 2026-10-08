@@ -57,8 +57,12 @@ def configure_service_recovery() -> None:
         scm = win32service.OpenSCManager(
             None, None, win32service.SC_MANAGER_CONNECT
         )
+        # 恢复动作含 SC_ACTION_RESTART 时，ChangeServiceConfig2 要求句柄额外具备
+        # SERVICE_START，否则部分 Windows 版本返回 ERROR_ACCESS_DENIED(5)。
         service = win32service.OpenService(
-            scm, config.SERVICE_NAME, win32service.SERVICE_CHANGE_CONFIG
+            scm,
+            config.SERVICE_NAME,
+            win32service.SERVICE_CHANGE_CONFIG | win32service.SERVICE_START,
         )
         actions, non_crash_failures = expected_service_recovery()
         win32service.ChangeServiceConfig2(
