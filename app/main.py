@@ -979,6 +979,9 @@ class SettingsTab(QWidget):
         self.hotkey_set_btn.clicked.connect(self._set_hotkey)
         self.hotkey_clear_btn = QPushButton(tr("hotkey_clear_btn"))
         self.hotkey_clear_btn.clicked.connect(self._clear_hotkey)
+        self.any_input_check = QCheckBox(tr("unlock_any_input"))
+        self.any_input_check.setChecked(s.get("unlock_on_any_input", False))
+        self.any_input_check.toggled.connect(self._update_hotkey_controls)
         for sp in (self.match_spin, self.margin_spin, self.yaw_spin, self.blink_spin,
                    self.renewal_spin, self.samples_spin, self.max_templates_spin,
                    self.lockout_fails_spin, self.lockout_secs_spin, self.camera_spin):
@@ -1044,6 +1047,8 @@ class SettingsTab(QWidget):
         hotkey_w = QWidget()
         hotkey_w.setLayout(hotkey_row)
         common_grid.addWidget(hotkey_w, 6, 1, 1, 2)
+        common_grid.addWidget(self.any_input_check, 7, 0, 1, 3)
+        self._update_hotkey_controls(self.any_input_check.isChecked())
         self._update_auth_scope_controls(self.face_unlock_check.isChecked())
 
         self.advanced_params_btn = QPushButton(tr("advanced_params_show"))
@@ -1288,12 +1293,13 @@ class SettingsTab(QWidget):
             lockout_seconds=self.lockout_secs_spin.value(),
             camera_index=self.camera_spin.value(),
             unlock_hotkey=self.unlock_hotkey,
+            unlock_on_any_input=self.any_input_check.isChecked(),
             face_unlock_enabled=self.face_unlock_check.isChecked(),
             face_unlock_logon_enabled=self.face_unlock_logon_check.isChecked(),
             face_unlock_workstation_enabled=self.face_unlock_workstation_check.isChecked(),
         )
         self.store.save()
-        save_hotkey_mirror(self.unlock_hotkey)
+        save_hotkey_mirror(self.unlock_hotkey, self.any_input_check.isChecked())
         save_auth_scope_mirror(
             self.face_unlock_check.isChecked(),
             self.face_unlock_logon_check.isChecked(),
@@ -1306,6 +1312,11 @@ class SettingsTab(QWidget):
         if dlg.exec() == QDialog.Accepted:
             self.unlock_hotkey = dlg.value
             self.hotkey_value.setText(_hotkey_text(self.unlock_hotkey))
+
+    def _update_hotkey_controls(self, any_input: bool) -> None:
+        """任意输入模式与单键热键互斥:开启时停用热键的设置/清除。"""
+        for w in (self.hotkey_value, self.hotkey_set_btn, self.hotkey_clear_btn):
+            w.setEnabled(not any_input)
 
     def _clear_hotkey(self) -> None:
         self.unlock_hotkey = ""

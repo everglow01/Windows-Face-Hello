@@ -145,6 +145,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         "hotkey_capture_title": "设置刷脸启动热键",
         "hotkey_capture_prompt": "按下要用于启动刷脸的单个按键",
         "hotkey_capture_invalid": "仅支持空格、回车、字母或数字",
+        "unlock_any_input": "锁屏时按任意键或移动鼠标即开始刷脸(与热键互斥,并隐藏「→」按钮)",
         "match_margin_label": "多账户安全间隔(0=关):",
         "lockout_fails_label": "失败锁定次数(0=关):",
         "lockout_secs_label": "锁定冷却(秒):",
@@ -478,6 +479,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         "hotkey_capture_title": "Set face unlock hotkey",
         "hotkey_capture_prompt": "Press one key to start face unlock",
         "hotkey_capture_invalid": "Only Space, Enter, letters, or digits are supported",
+        "unlock_any_input": "Start face unlock on any key or mouse input at the lock screen (replaces the hotkey and hides the → button)",
         "match_margin_label": "Multi-account safety margin (0 = off):",
         "lockout_fails_label": "Lockout after N fails (0 = off):",
         "lockout_secs_label": "Lockout cooldown (seconds):",
@@ -723,11 +725,17 @@ def save_lang_mirror(lang: str) -> None:
     _save_mirror(config.LANG_FILE, lang if lang in _CATALOG else DEFAULT_LANG)
 
 
-def save_hotkey_mirror(hotkey: str) -> None:
+def hotkey_mirror_text(hotkey: str, any_input: bool = False) -> str:
+    """hotkey.txt 的内容:任意输入模式写 "ANY"(与单键热键互斥),否则为大写的热键名。"""
+    if any_input:
+        return "ANY"
+    return str(hotkey or "").strip().upper()
+
+
+def save_hotkey_mirror(hotkey: str, any_input: bool = False) -> None:
     from . import config
 
-    text = str(hotkey or "").strip().upper()
-    _save_mirror(config.HOTKEY_FILE, text)
+    _save_mirror(config.HOTKEY_FILE, hotkey_mirror_text(hotkey, any_input))
 
 
 def save_auth_scope_mirror(enabled: bool, logon: bool, workstation: bool) -> None:
