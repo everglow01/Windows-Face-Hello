@@ -82,9 +82,13 @@ def check_models() -> bool:
 def check_camera() -> bool:
     """按 settings 的 camera_url / camera_index 打开摄像头并取一帧（短超时,不长时间阻塞）。"""
     from face_hello import probes
-    from face_hello.camera import describe_source
+    from face_hello.camera import CameraSourceError, describe_source
 
-    source = probes.configured_camera_index()
+    try:
+        source = probes.configured_camera_index()
+    except CameraSourceError as e:  # 网址配置错误:直接报错,不回退测 USB 摄像头
+        _print(FAIL, f"摄像头配置无效:{e}")
+        return False
     try:
         frame = probes.capture_camera_frame(source)
         h, w = frame.shape[:2]

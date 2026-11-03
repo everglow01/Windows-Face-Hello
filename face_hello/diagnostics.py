@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import config, cred_vault, probes
-from .camera import describe_source
+from .camera import CameraSourceError, describe_source, mask_url
 from .i18n import t
 from .store import FaceStore
 from .version import display_version
@@ -23,8 +23,10 @@ _CP_CLSID = "{E071A7CE-5D7F-4063-9A10-AE39AEC64EE8}"
 _LOG_TAIL_LINES = 200
 _LOG_NAMES = ("service.log", "service.log.1", "service.log.2", "service.log.3")
 _SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b(password|passwd|pwd|secret)\b(\s*[:=]\s*)([^\s,;]+)"
+    r"(?i)\b(password|passwd|pwd|secret|access_token|api[_-]?key|token)\b(\s*[:=]\s*)([^\s,;&]+)"
 )
+# 文本里出现的任意 URL(含格式错误的),导出前遮蔽 userinfo / 查询参数值 / fragment
+_URL_IN_TEXT = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://\S+")
 
 
 @dataclass
@@ -351,8 +353,8 @@ def read_service_log(path: Path | None = None) -> ServiceLogSnapshot:
 
 
 def redact_diagnostics_text(text: str, users: list[str]) -> str:
-    """对外导出前遮蔽用户名和意外出现的凭据赋值。"""
-    redacted = text
+    """对外导出前遮蔽 URL 内凭据、用户名和意外出现的凭据赋值。"""
+    redacted = _URL_IN_TEXT.sub(lambda m: mask_url(m.group(0)), text)
     unique_users = sorted(
         {str(user).strip() for user in users if str(user).strip()},
         key=lambda value: (-len(value), value.casefold()),
@@ -402,7 +404,12 @@ def export_diagnostic_bundle(
 
 
 def _check_camera(report: DiagnosticReport, lang: str) -> None:
-    source = probes.configured_camera_index()
+    try:
+        source = probes.configured_camera_index()
+    except CameraSourceError:
+        _add(report, lang, "diag_item_camera", STATUS_FAIL,
+             t("diag_camera_url_invalid", lang), "diag_advice_camera_url")
+        return
     try:
         frame = probes.capture_camera_frame(source)
     except Exception as exc:

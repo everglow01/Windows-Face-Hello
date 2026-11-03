@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import threading
 import time
+import zipfile
+from datetime import datetime
 
 import numpy as np
 import pytest
 
-from face_hello import platform_backend
-from face_hello.camera import Camera, camera_source, describe_source
+from face_hello import diagnostics, platform_backend, probes
+from face_hello.camera import (
+    Camera,
+    CameraSourceError,
+    camera_source,
+    describe_source,
+    mask_url,
+)
 
 
 def test_camera_source_prefers_url_over_index():
@@ -50,6 +58,48 @@ def test_describe_source_masks_stream_credentials():
     assert describe_source("rtsp://10.0.0.5/live") == "url=rtsp://10.0.0.5/live"
     # 未编码的 @ 出现在密码里时也要整段遮蔽,不能只遮到第一个 @
     assert describe_source("http://u:p@ss@10.0.0.5/video") == "url=http://***@10.0.0.5/video"
+
+
+def test_describe_source_masks_query_tokens_and_fragment():
+    assert describe_source("http://10.0.0.5:8080/video?token=abc123&apiKey=k9&fps=30") == (
+        "url=http://10.0.0.5:8080/video?token=***&apiKey=***&fps=***"
+    )
+    assert describe_source("rtsp://10.0.0.5/live?SECRETVALUE#frag") == (
+        "url=rtsp://10.0.0.5/live?***#***"
+    )
+    # 格式错误的 URL 也能安全显示,不抛错
+    assert "secret" not in mask_url("http://[broken:secret@host／x/video?token=secret")
+    assert mask_url("") == ""
+
+
+@pytest.mark.parametrize("url", [
+    "http://host／x:8080/video",   # 主机名误含全角斜杠:urlsplit 的错误信息会带出 netloc
+    "http://[broken/video",             # 未闭合的 IPv6:urlsplit 抛错
+    "http://10.0.0.5:99999/video",      # 端口越界:.port 抛错
+    "http://10.0.0.5:0/video",
+    "file:///C:/Windows/win.ini",       # 非网络协议
+    "ftp://10.0.0.5/video",
+    "10.0.0.5:8080/video",              # 漏写 scheme
+    "http:///video",                    # 没有主机名
+])
+def test_camera_source_rejects_malformed_url_without_leaking_it(url):
+    settings = {"camera_url": url, "camera_url_username": "me",
+                "camera_url_password": "hunter2-secret", "camera_index": 0}
+    with pytest.raises(CameraSourceError) as exc:
+        camera_source(settings)
+    message = str(exc.value)
+    assert "hunter2" not in message and "10.0.0.5" not in message and "host" not in message
+    # 不留异常链:logging.exception 会把 __context__ 里的原始 ValueError(含 URL)一起打出来
+    assert exc.value.__cause__ is None and exc.value.__context__ is None
+    # 不填独立帐号时同样要校验,不能原样交给 FFmpeg
+    with pytest.raises(CameraSourceError):
+        camera_source({"camera_url": url})
+
+
+def test_camera_source_accepts_supported_stream_schemes():
+    for url in ("https://h/video", "rtsp://10.0.0.5:554/live", "RTSPS://h/x", "rtmp://h/app",
+                "http://[::1]:8080/video"):
+        assert camera_source({"camera_url": url}) == url
 
 
 class _StreamCapture:
@@ -95,6 +145,26 @@ def test_stream_read_returns_latest_frame_and_drops_backlog(monkeypatch):
     assert cap.released is True
 
 
+def test_stream_read_fails_fast_after_disconnect_even_with_unconsumed_frame(monkeypatch):
+    cap = _StreamCapture(limit=3)
+    monkeypatch.setattr(platform_backend, "open_capture", lambda _src: cap)
+    cam = Camera("http://h/video")
+    cam.open(timeout_s=1)
+    try:
+        deadline = time.monotonic() + 2
+        while cam._reader._seq < 3 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        cap.more.set()  # 断流:读线程标记 _error,但第 3 帧还没被取走
+        deadline = time.monotonic() + 2
+        while not cam._reader._error and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert cam._reader._seq > cam._reader._consumed  # 确有未提交的缓存帧
+        with pytest.raises(RuntimeError, match="中断"):
+            cam.read()
+    finally:
+        cam.release()
+
+
 def test_stream_open_failure_message_hides_credentials(monkeypatch):
     class _Dead:
         def isOpened(self):
@@ -111,3 +181,58 @@ def test_stream_open_failure_message_hides_credentials(monkeypatch):
         cam.open(timeout_s=0.5)
     assert "secret" not in str(exc.value)
     assert "***@10.0.0.5" in str(exc.value)
+
+
+def _patch_store_settings(monkeypatch, settings: dict) -> None:
+    class _Store:
+        def load(self):
+            return self
+
+        def get_settings(self):
+            return settings
+
+    monkeypatch.setattr(probes, "FaceStore", _Store)
+
+
+def test_configured_camera_reports_invalid_url_instead_of_falling_back(monkeypatch):
+    _patch_store_settings(monkeypatch, {"camera_url": "http://[broken/video", "camera_index": 0})
+    with pytest.raises(CameraSourceError):
+        probes.configured_camera_index()
+
+
+def test_configured_camera_without_url_uses_index(monkeypatch):
+    _patch_store_settings(monkeypatch, {"camera_url": "", "camera_index": 2})
+    assert probes.configured_camera_index() == 2
+
+
+def test_camera_diagnostic_fails_on_invalid_url_without_testing_usb(monkeypatch):
+    _patch_store_settings(monkeypatch, {"camera_url": "http://[broken:pw@x/video",
+                                        "camera_url_username": "me", "camera_index": 0})
+    captured = []
+    monkeypatch.setattr(probes, "capture_camera_frame", lambda src, **_kw: captured.append(src))
+    report = diagnostics.DiagnosticReport(datetime(2026, 10, 8), "development", "me", False)
+    diagnostics._check_camera(report, "en")
+    assert captured == []  # 没有静默改测 USB 摄像头 0
+    assert report.items[0].status == diagnostics.STATUS_FAIL
+    assert "pw" not in report.items[0].detail
+
+
+def test_export_bundle_redacts_stream_url_credentials(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "service.log").write_text(
+        "ERROR open failed http://cam:hunter2@10.0.0.5:8080/video?token=tok-123&apiKey=key-456\n"
+        "WARNING raw rtsp://10.0.0.5/live?sig=sig-789#frag-000 api_key=key-999\n",
+        encoding="utf-8",
+    )
+    report = diagnostics.DiagnosticReport(datetime(2026, 10, 8), "development", "me", False)
+    report.items.append(diagnostics.DiagnosticItem(
+        "Camera", diagnostics.STATUS_FAIL,
+        "Camera url=http://***@10.0.0.5/video?access_token=tok-abc is unavailable",
+    ))
+    target = diagnostics.export_diagnostic_bundle(tmp_path / "bundle", report, "en", data)
+    with zipfile.ZipFile(target) as archive:
+        combined = "\n".join(archive.read(n).decode("utf-8") for n in archive.namelist())
+    for secret in ("hunter2", "tok-123", "key-456", "sig-789", "frag-000", "key-999", "tok-abc"):
+        assert secret not in combined
+    assert "10.0.0.5:8080/video" in combined  # 主机与路径仍保留,便于排错

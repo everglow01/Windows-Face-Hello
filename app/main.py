@@ -88,7 +88,7 @@ from face_hello.diagnostics import (
 )
 from face_hello import config, cred_vault, probes
 from face_hello.auth import AuthResult
-from face_hello.camera import camera_source, describe_source
+from face_hello.camera import CameraSource, CameraSourceError, camera_source, describe_source
 from face_hello.detector import FaceDetector
 from face_hello.i18n import (
     save_auth_scope_mirror,
@@ -478,6 +478,24 @@ def _themed_qss() -> str:
     )
 
 
+def _resolve_camera_source(parent: QWidget, settings: dict) -> CameraSource | None:
+    """在进入忙碌状态(禁用按钮)之前解析摄像头来源。
+
+    URL 无效时弹出不含 URL 的提示并返回 None,调用方直接 return,按钮保持可用;
+    否则异常会在 worker 创建前抛出,没有 failed 信号能把已禁用的按钮恢复。
+    """
+    try:
+        return camera_source(settings)
+    except CameraSourceError:
+        QMessageBox.warning(parent, tr("tip"), tr("camera_url_invalid"))
+        return None
+
+
+def _url_may_contain_secret(url: str) -> bool:
+    """URL 内嵌 user:pass@ 或查询参数(?token=...)时视为可能含凭据,需遮蔽显示。"""
+    return "@" in url or "?" in url
+
+
 def _renewal_days_text(profile) -> str:
     days = profile.days_until_renewal
     if days < 0:
@@ -630,6 +648,9 @@ class EnrollTab(QWidget):
             QMessageBox.warning(self, tr("tip"), tr("enter_username"))
             return
         s = self.store.get_settings()
+        source = _resolve_camera_source(self, s)
+        if source is None:
+            return
         samples = s["enroll_samples"]
         self._append = append
         self.start_btn.setEnabled(False)
@@ -637,8 +658,7 @@ class EnrollTab(QWidget):
         self.status.setText(tr("opening_camera"))
         self.progress_bar.setRange(0, samples)
         self.progress_bar.setValue(0)
-        self.worker = EnrollWorker(self.detector, samples, camera_index=camera_source(s),
-                                   append=append)
+        self.worker = EnrollWorker(self.detector, samples, camera_index=source, append=append)
         self.worker.preview.connect(lambda img: _show_frame(self.preview, img))
         self.worker.guidance.connect(self._on_guidance)
         self.worker.finished_ok.connect(self._on_done)
@@ -861,14 +881,14 @@ class AuthTab(QWidget):
         if self.store.is_empty():
             QMessageBox.warning(self, tr("tip"), tr("no_enroll_warn"))
             return
+        source = _resolve_camera_source(self, self.store.get_settings())
+        if source is None:
+            return
         self.start_btn.setEnabled(False)
         self.monitor_btn.setEnabled(False)
         self.instruction.setStyleSheet(_INSTR_BASE)
         self.instruction.setText(tr("preparing"))
-        self.worker = AuthWorker(
-            self.detector, self.store,
-            camera_index=camera_source(self.store.get_settings()),
-        )
+        self.worker = AuthWorker(self.detector, self.store, camera_index=source)
         self.worker.preview.connect(lambda img: _show_frame(self.preview, img))
         self.worker.instruction.connect(self.instruction.setText)
         self.worker.finished_result.connect(self._on_result)
@@ -898,6 +918,9 @@ class AuthTab(QWidget):
         if self.store.is_empty():
             QMessageBox.warning(self, tr("tip"), tr("no_enroll_warn"))
             return
+        source = _resolve_camera_source(self, self.store.get_settings())
+        if source is None:
+            return
         self.start_btn.setEnabled(False)
         self.monitor_btn.setText(tr("stop_compare"))
         self.instruction.setStyleSheet(_INSTR_BASE)
@@ -906,7 +929,7 @@ class AuthTab(QWidget):
         self.histogram.clear()
         self.monitor = SimilarityMonitorWorker(
             self.detector, self.store,
-            camera_index=camera_source(self.store.get_settings()),
+            camera_index=source,
             threshold=self.store.get_settings()["match_threshold"],
         )
         self.monitor.preview.connect(lambda img: _show_frame(self.preview, img))
@@ -965,9 +988,10 @@ class SettingsTab(QWidget):
         self.camera_spin.setValue(int(s.get("camera_index", 0)))
         self.camera_url_edit = QLineEdit(str(s.get("camera_url", "") or ""))
         self.camera_url_edit.setPlaceholderText(tr("camera_url_placeholder"))
-        if "@" in self.camera_url_edit.text():
-            # 旧设置把账号密码直接写在 URL 里:非编辑时遮蔽,避免截图/旁人看到
-            self.camera_url_edit.setEchoMode(QLineEdit.PasswordEchoOnEdit)
+        # URL 内嵌账号密码或 token 时非编辑态遮蔽,避免截图/旁人看到;
+        # 跟随内容变化更新(首次为空、之后才粘贴含密码的 URL 也要遮蔽)
+        self.camera_url_edit.textChanged.connect(self._sync_camera_url_echo)
+        self._sync_camera_url_echo(self.camera_url_edit.text())
         self.camera_user_edit = QLineEdit(str(s.get("camera_url_username", "") or ""))
         self.camera_user_edit.setPlaceholderText(tr("camera_user_placeholder"))
         self.camera_pass_edit = QLineEdit(str(s.get("camera_url_password", "") or ""))
@@ -1295,6 +1319,12 @@ class SettingsTab(QWidget):
         self.update_download_btn.setEnabled(True)
 
     def _save(self) -> None:
+        # 无效 URL 不落盘:否则服务每次解锁都会因来源无法解析而失败
+        if _resolve_camera_source(self, {
+            "camera_url": self.camera_url_edit.text(),
+            "camera_url_username": self.camera_user_edit.text(),
+        }) is None:
+            return
         self.store.update_settings(
             liveness_enabled=self.liveness_check.isChecked(),
             antispoof_enabled=self.antispoof_check.isChecked(),
@@ -1336,12 +1366,22 @@ class SettingsTab(QWidget):
         self.unlock_hotkey = ""
         self.hotkey_value.setText(_hotkey_text(self.unlock_hotkey))
 
+    def _sync_camera_url_echo(self, text: str) -> None:
+        mode = (QLineEdit.PasswordEchoOnEdit if _url_may_contain_secret(text)
+                else QLineEdit.Normal)
+        if self.camera_url_edit.echoMode() != mode:
+            self.camera_url_edit.setEchoMode(mode)
+
     def _test_camera(self) -> None:
         """用当前(未保存的)串流 URL 或索引抓一帧弹窗预览,确认是不是想要的那台摄像头。"""
-        source = camera_source({"camera_url": self.camera_url_edit.text(),
-                                "camera_url_username": self.camera_user_edit.text(),
-                                "camera_url_password": self.camera_pass_edit.text(),
-                                "camera_index": self.camera_spin.value()})
+        source = _resolve_camera_source(self, {
+            "camera_url": self.camera_url_edit.text(),
+            "camera_url_username": self.camera_user_edit.text(),
+            "camera_url_password": self.camera_pass_edit.text(),
+            "camera_index": self.camera_spin.value(),
+        })
+        if source is None:
+            return
         self.camera_test_btn.setEnabled(False)  # 防重入
         self._cam_test = CameraTestWorker(source)
         self._cam_test.ok.connect(self._on_cam_test_ok)

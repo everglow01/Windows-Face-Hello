@@ -1,7 +1,6 @@
 """摄像头采集封装(OpenCV)。"""
 from __future__ import annotations
 
-import re
 import time
 import threading
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -14,23 +13,36 @@ _capture_lock = threading.Lock()
 
 CameraSource = int | str
 
-_URL_USERINFO = re.compile(r"(?<=://)[^/]*@")
+# FFmpeg 支持的网络串流协议。file:// 等本地协议一律拒绝,LocalSystem 服务不该按设置去读任意文件。
+STREAM_SCHEMES = ("http", "https", "rtsp", "rtsps", "rtmp")
+
+
+class CameraSourceError(ValueError):
+    """`camera_url` 已填写但无法解析。
+
+    消息是固定文案,**绝不**包含原始 URL:URL 可能内嵌账号密码或 token,而这个异常会进
+    service.log、认证失败响应和诊断报告。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "串流 URL 格式无效(需以 " + "/".join(STREAM_SCHEMES) + ":// 开头并包含主机名)"
+        )
 
 
 def camera_source(settings: dict) -> CameraSource:
     """settings 里填了 `camera_url` 就用网络串流,否则用 `camera_index` 的本机摄像头。
 
     填了 `camera_url_username` 时,把账号密码百分号编码后拼进 URL(密码含 @ : / # 等也安全);
-    URL 本身已带 user:pass@ 则原样使用。
+    URL 本身已带 user:pass@ 则原样使用。URL 无法解析时抛 `CameraSourceError`(不含 URL),
+    绝不静默回退到本机摄像头。
     """
     url = str(settings.get("camera_url", "") or "").strip()
     if not url:
         return int(settings.get("camera_index", 0))
+    parts = _parse_stream_url(url)
     user = str(settings.get("camera_url_username", "") or "")
-    if not user:
-        return url
-    parts = urlsplit(url)
-    if not parts.scheme or not parts.netloc or "@" in parts.netloc:
+    if not user or "@" in parts.netloc:
         return url
     userinfo = quote(user, safe="")
     password = str(settings.get("camera_url_password", "") or "")
@@ -39,14 +51,50 @@ def camera_source(settings: dict) -> CameraSource:
     return urlunsplit(parts._replace(netloc=f"{userinfo}@{parts.netloc}"))
 
 
+def _parse_stream_url(url: str):
+    """解析并校验串流 URL。urlsplit / .port / .hostname 的 ValueError 消息会带出原始地址
+    (含密码),所以只在 except 外抛不含 URL 的 `CameraSourceError`,连异常链也不留。"""
+    try:
+        parts = urlsplit(url)
+        valid = (parts.scheme.lower() in STREAM_SCHEMES and bool(parts.hostname)
+                 and (parts.port is None or parts.port > 0))
+    except ValueError:
+        valid = False
+    if not valid:
+        raise CameraSourceError()
+    return parts
+
+
 def is_stream(source: CameraSource) -> bool:
     return isinstance(source, str)
 
 
+def mask_url(url: str) -> str:
+    """遮蔽 URL 里可能的凭据:userinfo、查询参数值与 fragment。
+
+    纯字符串处理、永不抛错(格式错误的 URL 也要能安全显示)。未编码的密码可能含 @ / ? #,
+    故 userinfo 取到**最后一个** @ 为止,宁可多遮也不漏。
+    """
+    scheme, sep, rest = url.partition("://")
+    if not sep:
+        scheme, rest = "", url
+    if "@" in rest:
+        rest = "***@" + rest.rsplit("@", 1)[1]
+    rest, hash_sep, _fragment = rest.partition("#")
+    path, query_sep, query = rest.partition("?")
+    if query_sep:
+        params = (p.split("=", 1)[0] + "=***" if "=" in p else "***"
+                  for p in query.split("&") if p)
+        path += "?" + "&".join(params)
+    if hash_sep:
+        path += "#***"
+    return f"{scheme}{sep}{path}"
+
+
 def describe_source(source: CameraSource) -> str:
-    """供日志/报错/诊断显示的来源描述;URL 里的账号密码一律遮蔽,不得落进 service.log。"""
+    """供日志/报错/诊断显示的来源描述;URL 里的凭据一律遮蔽,不得落进 service.log。"""
     if is_stream(source):
-        return f"url={_URL_USERINFO.sub('***@', source)}"
+        return f"url={mask_url(source)}"
     return f"index={source}"
 
 
@@ -81,13 +129,17 @@ class _LatestFrameReader:
                 self._cond.notify_all()
 
     def read(self, timeout_s: float = 5.0):
-        """返回比上次更新的一帧;串流断开或超时则抛错。"""
+        """返回比上次更新的一帧;串流断开或超时则抛错。
+
+        已确认断流时立即报错,即使还有一张未取走的缓存帧也不再返回:那是断流前的旧画面,
+        不能再拿去做活体/识别。
+        """
         with self._cond:
             if not self._cond.wait_for(lambda: self._seq > self._consumed or self._error,
                                        timeout=timeout_s):
                 raise RuntimeError("读取摄像头帧超时")
-            if self._seq <= self._consumed:
-                raise RuntimeError("读取摄像头帧失败")
+            if self._error:
+                raise RuntimeError("读取摄像头帧失败(串流已中断)")
             self._consumed = self._seq
             return self._frame
 
