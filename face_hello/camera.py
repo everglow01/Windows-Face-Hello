@@ -70,25 +70,23 @@ def is_stream(source: CameraSource) -> bool:
 
 
 def mask_url(url: str) -> str:
-    """遮蔽 URL 里可能的凭据:userinfo、查询参数值与 fragment。
-
-    纯字符串处理、永不抛错(格式错误的 URL 也要能安全显示)。未编码的密码可能含 @ / ? #,
-    故 userinfo 取到**最后一个** @ 为止,宁可多遮也不漏。
-    """
-    scheme, sep, rest = url.partition("://")
-    if not sep:
-        scheme, rest = "", url
-    if "@" in rest:
-        rest = "***@" + rest.rsplit("@", 1)[1]
-    rest, hash_sep, _fragment = rest.partition("#")
-    path, query_sep, query = rest.partition("?")
-    if query_sep:
-        params = (p.split("=", 1)[0] + "=***" if "=" in p else "***"
-                  for p in query.split("&") if p)
-        path += "?" + "&".join(params)
-    if hash_sep:
-        path += "#***"
-    return f"{scheme}{sep}{path}"
+    """遮蔽 userinfo、查询参数值与 fragment;无效地址整体省略。"""
+    if not url:
+        return ""
+    try:
+        parts = _parse_stream_url(url)
+    except CameraSourceError:
+        return "<redacted-url>"
+    netloc = parts.netloc
+    if "@" in netloc:
+        netloc = "***@" + netloc.rsplit("@", 1)[1]
+    params = (p.split("=", 1)[0] + "=***" if "=" in p else "***"
+              for p in parts.query.split("&") if p)
+    return urlunsplit(parts._replace(
+        netloc=netloc,
+        query="&".join(params),
+        fragment="***" if parts.fragment else "",
+    ))
 
 
 def describe_source(source: CameraSource) -> str:

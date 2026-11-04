@@ -222,7 +222,10 @@ def test_export_bundle_redacts_stream_url_credentials(tmp_path):
     data.mkdir()
     (data / "service.log").write_text(
         "ERROR open failed http://cam:hunter2@10.0.0.5:8080/video?token=tok-123&apiKey=key-456\n"
-        "WARNING raw rtsp://10.0.0.5/live?sig=sig-789#frag-000 api_key=key-999\n",
+        "WARNING raw rtsp://10.0.0.5/live?sig=sig-789#frag-000 api_key=key-999\n"
+        "ERROR http://cam/video?token=prefix@query-tail\n"
+        "ERROR rtsp://cam/live#prefix@frag-tail\n"
+        "ERROR password=prefix&password-tail\n",
         encoding="utf-8",
     )
     report = diagnostics.DiagnosticReport(datetime(2026, 10, 8), "development", "me", False)
@@ -233,6 +236,27 @@ def test_export_bundle_redacts_stream_url_credentials(tmp_path):
     target = diagnostics.export_diagnostic_bundle(tmp_path / "bundle", report, "en", data)
     with zipfile.ZipFile(target) as archive:
         combined = "\n".join(archive.read(n).decode("utf-8") for n in archive.namelist())
-    for secret in ("hunter2", "tok-123", "key-456", "sig-789", "frag-000", "key-999", "tok-abc"):
+    for secret in ("hunter2", "tok-123", "key-456", "sig-789", "frag-000", "key-999", "tok-abc",
+                   "query-tail", "frag-tail", "password-tail"):
         assert secret not in combined
     assert "10.0.0.5:8080/video" in combined  # 主机与路径仍保留,便于排错
+
+
+@pytest.mark.parametrize(("url", "masked"), [
+    ("http://cam/video?token=prefix@QUERY_TAIL", "http://cam/video?token=***"),
+    ("http://user:secret@cam/video?token=prefix@COMBINED_TAIL",
+     "http://***@cam/video?token=***"),
+    ("rtsp://cam/live#prefix@FRAGMENT_TAIL", "rtsp://cam/live#***"),
+    ("http://cam/video?token=prefix@QUERY_TAIL#prefix@FRAGMENT_TAIL",
+     "http://cam/video?token=***#***"),
+])
+def test_mask_url_keeps_query_and_fragment_out_of_userinfo(url, masked):
+    assert mask_url(url) == masked
+    assert describe_source(url) == "url=" + masked
+
+
+@pytest.mark.parametrize("key", ["password", "token", "api_key"])
+def test_redact_assignment_includes_ampersand(key):
+    assert diagnostics.redact_diagnostics_text(f"{key}=prefix&SECRET_TAIL", []) == (
+        f"{key}=<redacted>"
+    )

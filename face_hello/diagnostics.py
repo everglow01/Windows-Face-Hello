@@ -23,7 +23,7 @@ _CP_CLSID = "{E071A7CE-5D7F-4063-9A10-AE39AEC64EE8}"
 _LOG_TAIL_LINES = 200
 _LOG_NAMES = ("service.log", "service.log.1", "service.log.2", "service.log.3")
 _SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b(password|passwd|pwd|secret|access_token|api[_-]?key|token)\b(\s*[:=]\s*)([^\s,;&]+)"
+    r"(?i)\b(password|passwd|pwd|secret|access_token|api[_-]?key|token)\b(\s*[:=]\s*)([^\s,;]+)"
 )
 # 文本里出现的任意 URL(含格式错误的),导出前遮蔽 userinfo / 查询参数值 / fragment
 _URL_IN_TEXT = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://\S+")

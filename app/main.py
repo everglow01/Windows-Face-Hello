@@ -492,8 +492,8 @@ def _resolve_camera_source(parent: QWidget, settings: dict) -> CameraSource | No
 
 
 def _url_may_contain_secret(url: str) -> bool:
-    """URL 内嵌 user:pass@ 或查询参数(?token=...)时视为可能含凭据,需遮蔽显示。"""
-    return "@" in url or "?" in url
+    """URL 内嵌 userinfo、查询参数或 fragment 时视为可能含凭据,需遮蔽显示。"""
+    return "@" in url or "?" in url or "#" in url
 
 
 def _renewal_days_text(profile) -> str:
@@ -988,7 +988,7 @@ class SettingsTab(QWidget):
         self.camera_spin.setValue(int(s.get("camera_index", 0)))
         self.camera_url_edit = QLineEdit(str(s.get("camera_url", "") or ""))
         self.camera_url_edit.setPlaceholderText(tr("camera_url_placeholder"))
-        # URL 内嵌账号密码或 token 时非编辑态遮蔽,避免截图/旁人看到;
+        # URL 内嵌账号密码、查询参数或 fragment 时遮蔽显示,避免截图/旁人看到;
         # 跟随内容变化更新(首次为空、之后才粘贴含密码的 URL 也要遮蔽)
         self.camera_url_edit.textChanged.connect(self._sync_camera_url_echo)
         self._sync_camera_url_echo(self.camera_url_edit.text())
@@ -1367,7 +1367,7 @@ class SettingsTab(QWidget):
         self.hotkey_value.setText(_hotkey_text(self.unlock_hotkey))
 
     def _sync_camera_url_echo(self, text: str) -> None:
-        mode = (QLineEdit.PasswordEchoOnEdit if _url_may_contain_secret(text)
+        mode = (QLineEdit.Password if _url_may_contain_secret(text)
                 else QLineEdit.Normal)
         if self.camera_url_edit.echoMode() != mode:
             self.camera_url_edit.setEchoMode(mode)
