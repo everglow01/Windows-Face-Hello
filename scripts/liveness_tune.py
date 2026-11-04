@@ -9,7 +9,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from face_hello.camera import Camera
+from face_hello.camera import Camera, camera_source
 from face_hello.liveness import FaceMeshTracker
 from face_hello.store import FaceStore
 
@@ -20,9 +20,9 @@ def main() -> None:
     tracker = FaceMeshTracker()
     ears: list[float] = []
     yaws: list[float] = []
-    idx = int(FaceStore().load().get_settings().get("camera_index", 0))  # 与解锁用同一台摄像头
+    source = camera_source(FaceStore().load().get_settings())  # 与解锁用同一台摄像头
     try:
-        with Camera(idx) as cam:
+        with Camera(source) as cam:
             while True:
                 frame = cam.read()
                 m = tracker.process(frame)
