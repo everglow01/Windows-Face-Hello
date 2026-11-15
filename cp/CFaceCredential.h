@@ -7,8 +7,9 @@
 
 class AutoLogonBridge;
 
-// 单个「刷脸」磁贴。
-class CFaceCredential : public ICredentialProviderCredential
+// 单个「刷脸」磁贴。给了用户 SID 时挂在该用户的账户下(ICredentialProviderCredential2:
+// 用用户自己的头像,图标出现在其「登录选项」里);没给则是原来的独立磁贴。
+class CFaceCredential : public ICredentialProviderCredential2
 {
 public:
     // IUnknown
@@ -43,7 +44,13 @@ public:
         PWSTR* ppwszOptionalStatusText,
         CREDENTIAL_PROVIDER_STATUS_ICON* pcpsiOptionalStatusIcon);
 
-    HRESULT Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, AutoLogonBridge* autoLogon);
+    // ICredentialProviderCredential2
+    IFACEMETHODIMP GetUserSid(PWSTR* ppszSid);
+
+    // userSid / userName 为空 = 不绑定用户的独立磁贴;否则只接受识别结果等于 userName 的人脸。
+    HRESULT Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, AutoLogonBridge* autoLogon,
+                       PCWSTR userSid, PCWSTR userName);
+    bool IsReadyToSubmit();  // 识别已通过、等待 LogonUI 取凭据(Provider 据此选自动提交的磁贴)
     CFaceCredential();
 
 private:
@@ -80,6 +87,8 @@ private:
     volatile LONG _hotkeyStopFlag;
     AuthState _authState;
     std::wstring _authUser;        // 认证通过的账户名(供 GetSerialization)
+    std::wstring _userSid;         // 绑定用户的 SID 字符串;空 = 独立磁贴(Initialize 后只读)
+    std::wstring _boundUser;       // 绑定用户的本地账户名;空 = 不限定(Initialize 后只读)
     int _failCount;               // 已失败的刷脸次数(达 kMaxFaceAttempts 后停止重试,退回密码)
     int _hotkeyVk;
 };

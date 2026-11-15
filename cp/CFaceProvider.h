@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include <credentialprovider.h>
+#include <vector>
 #include "CFaceCredential.h"
 
 class AutoLogonBridge
@@ -29,7 +30,7 @@ private:
 };
 
 // FaceHello 的 Credential Provider:在登录/解锁场景下枚举出 1 个「刷脸」磁贴。
-class CFaceProvider : public ICredentialProvider
+class CFaceProvider : public ICredentialProvider, public ICredentialProviderSetUserArray
 {
 public:
     // IUnknown
@@ -49,15 +50,23 @@ public:
         BOOL* pbAutoLogonWithDefault);
     IFACEMETHODIMP GetCredentialAt(DWORD dwIndex, ICredentialProviderCredential** ppcpc);
 
+    // ICredentialProviderSetUserArray
+    IFACEMETHODIMP SetUserArray(ICredentialProviderUserArray* users);
+
     CFaceProvider();
 
 private:
     ~CFaceProvider();
-    void _CreateEnumeratedCredential(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus);
+    void _CreateEnumeratedCredentials();
+    void _AddCredential(PCWSTR userSid, PCWSTR userName);
     void _ReleaseEnumeratedCredentials();
 
     LONG _cRef;
-    CFaceCredential* _pCredential;
+    CREDENTIAL_PROVIDER_USAGE_SCENARIO _cpus;
+    ICredentialProviderUserArray* _users;      // LogonUI 给的用户列表(可能为空)
+    std::vector<CFaceCredential*> _credentials; // 每个用户一个磁贴;无用户列表时退回 1 个独立磁贴
+    bool _recreate;      // SetUsageScenario 之后,下次 GetCredentialCount 时(重)建磁贴
+    bool _legacyTile;    // true = 当前是不绑定用户的独立磁贴(旧行为)
     AutoLogonBridge* _autoLogon;
 };
 

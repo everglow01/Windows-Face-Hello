@@ -1,5 +1,7 @@
 #include <new>
+#include <string>
 #include <shlwapi.h>
+#include <sddl.h>
 #include "CFaceProvider.h"
 #include <wtsapi32.h>
 #include "common.h"
@@ -123,13 +125,23 @@ static wchar_t g_imageLabel[] = L"Image";
 static wchar_t g_faceLabel[] = L"Face Unlock";
 static wchar_t g_submitLabel[] = L"\x5237\x8138\x89e3\x9501";
 static wchar_t g_statusLabel[] = L"Status";
+static wchar_t g_providerLabel[] = L"Provider";
+
+// 磁贴挂在用户账户下(ICredentialProviderCredential2)时,LogonUI 用这两个字段类型在
+// 「登录选项」里画本 Provider 的图标与名称。取值即 credentialprovider.h 的
+// CPFG_CREDENTIAL_PROVIDER_LOGO / CPFG_CREDENTIAL_PROVIDER_LABEL;写成字面量让本表保持常量初始化。
+#define FACE_CPFG_PROVIDER_LOGO \
+    { 0x2d837775, 0xf6cd, 0x464e, { 0xa7, 0x45, 0x48, 0x2f, 0xd0, 0xb4, 0x74, 0x93 } }
+#define FACE_CPFG_PROVIDER_LABEL \
+    { 0x286bbff3, 0xbad4, 0x438f, { 0xb0, 0x07, 0x79, 0xb7, 0x26, 0x7c, 0x3d, 0x48 } }
 
 const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR g_fieldDescriptors[FFI_NUM_FIELDS] =
 {
-    { FFI_TILEIMAGE, CPFT_TILE_IMAGE,    g_imageLabel },
+    { FFI_TILEIMAGE, CPFT_TILE_IMAGE,    g_imageLabel, FACE_CPFG_PROVIDER_LOGO },
     { FFI_LABEL,     CPFT_LARGE_TEXT,    g_faceLabel },
     { FFI_SUBMIT,    CPFT_SUBMIT_BUTTON, g_submitLabel },
     { FFI_STATUS,    CPFT_SMALL_TEXT,    g_statusLabel },
+    { FFI_PROVIDER_LABEL, CPFT_SMALL_TEXT, g_providerLabel, FACE_CPFG_PROVIDER_LABEL },
 };
 
 const FIELD_STATE_PAIR g_fieldStatePairs[FFI_NUM_FIELDS] =
@@ -138,7 +150,35 @@ const FIELD_STATE_PAIR g_fieldStatePairs[FFI_NUM_FIELDS] =
     { CPFS_DISPLAY_IN_BOTH,          CPFIS_NONE }, // label
     { CPFS_DISPLAY_IN_SELECTED_TILE, CPFIS_NONE }, // submit button
     { CPFS_DISPLAY_IN_SELECTED_TILE, CPFIS_NONE }, // status text
+    { CPFS_HIDDEN,                   CPFIS_NONE }, // provider label(仅供「登录选项」图标的名称)
 };
+
+namespace
+{
+// 把 LogonUI 给的用户 SID 字符串解析成本地账户名(SAM 名)。人脸档案名、LSA 键与 KERB
+// 账户名约定都是这个名字(微软账户也有本地后备名),所以绑定用户的磁贴用它核对识别结果。
+bool SamNameFromSidString(PCWSTR sidString, std::wstring& outName)
+{
+    PSID sid = nullptr;
+    if (!sidString || !ConvertStringSidToSidW(sidString, &sid))
+    {
+        return false;
+    }
+    wchar_t name[257] = {};
+    wchar_t domain[257] = {};
+    DWORD cchName = ARRAYSIZE(name);
+    DWORD cchDomain = ARRAYSIZE(domain);
+    SID_NAME_USE use = SidTypeUnknown;
+    const BOOL ok = LookupAccountSidW(nullptr, sid, name, &cchName, domain, &cchDomain, &use);
+    LocalFree(sid);
+    if (!ok || name[0] == L'\0')
+    {
+        return false;
+    }
+    outName.assign(name);
+    return true;
+}
+}
 
 AutoLogonBridge::AutoLogonBridge()
     : _cRef(1), _events(nullptr), _context(0), _active(1), _requested(0)
@@ -237,7 +277,8 @@ void AutoLogonBridge::Deactivate()
 }
 
 CFaceProvider::CFaceProvider()
-    : _cRef(1), _pCredential(nullptr), _autoLogon(new (std::nothrow) AutoLogonBridge())
+    : _cRef(1), _cpus(CPUS_INVALID), _users(nullptr), _recreate(false), _legacyTile(false),
+      _autoLogon(new (std::nothrow) AutoLogonBridge())
 {
     DllAddRef();
 }
@@ -249,6 +290,11 @@ CFaceProvider::~CFaceProvider()
         _autoLogon->Deactivate();
     }
     _ReleaseEnumeratedCredentials();
+    if (_users)
+    {
+        _users->Release();
+        _users = nullptr;
+    }
     if (_autoLogon)
     {
         _autoLogon->Release();
@@ -278,12 +324,14 @@ IFACEMETHODIMP CFaceProvider::QueryInterface(REFIID riid, void** ppv)
     static const QITAB qit[] =
     {
         QITABENT(CFaceProvider, ICredentialProvider),
+        QITABENT(CFaceProvider, ICredentialProviderSetUserArray),
         { nullptr },
     };
     return QISearch(this, qit, riid, ppv);
 }
 
 // 只在登录和解锁工作站两个场景出磁贴;其余场景不接管。远程会话一律不出磁贴。
+// 磁贴推迟到 GetCredentialCount 再建:LogonUI 会在两者之间调 SetUserArray 给出用户列表。
 IFACEMETHODIMP CFaceProvider::SetUsageScenario(
     CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, DWORD /*dwFlags*/)
 {
@@ -294,16 +342,37 @@ IFACEMETHODIMP CFaceProvider::SetUsageScenario(
         if (IsRemoteSession() || !IsUsageScenarioEnabled(cpus))
         {
             _ReleaseEnumeratedCredentials();
+            _recreate = false;
             return E_NOTIMPL;
         }
-        if (!_pCredential)
-        {
-            _CreateEnumeratedCredential(cpus);
-        }
+        _cpus = cpus;
+        _recreate = true;
         return S_OK;
     default:
         return E_NOTIMPL;
     }
+}
+
+// ICredentialProviderSetUserArray:LogonUI 给出登录界面上的用户列表,据此给每个用户建一个
+// 挂在其账户下的刷脸磁贴(图标出现在该用户的「登录选项」里,头像用用户自己的)。
+IFACEMETHODIMP CFaceProvider::SetUserArray(ICredentialProviderUserArray* users)
+{
+    if (users)
+    {
+        users->AddRef();
+    }
+    if (_users)
+    {
+        _users->Release();
+    }
+    _users = users;
+    // 若已按「无用户列表」建了独立磁贴,拿到列表后重建一次;已是绑定用户的磁贴则不动,
+    // 避免识别通过后 LogonUI 重新枚举时丢掉待提交的状态。
+    if (_legacyTile)
+    {
+        _recreate = true;
+    }
+    return S_OK;
 }
 
 // 本 Provider 只枚举自己的磁贴,不处理外部反序列化。
@@ -350,43 +419,106 @@ IFACEMETHODIMP CFaceProvider::GetFieldDescriptorAt(
 IFACEMETHODIMP CFaceProvider::GetCredentialCount(
     DWORD* pdwCount, DWORD* pdwDefault, BOOL* pbAutoLogonWithDefault)
 {
-    *pdwCount = _pCredential ? 1 : 0;
-    *pdwDefault = 0;
-    // 识别通过后 SignalAutoLogon 置位,LogonUI 据此自动调 GetSerialization 完成提交
-    *pbAutoLogonWithDefault = _autoLogon && _autoLogon->IsRequested() ? TRUE : FALSE;
+    if (_recreate)
+    {
+        _recreate = false;
+        _CreateEnumeratedCredentials();
+    }
+    *pdwCount = static_cast<DWORD>(_credentials.size());
+    // 独立磁贴(旧行为)默认选中自己;挂在用户下的磁贴不抢默认,由 LogonUI 按上次使用的登录方式定。
+    *pdwDefault = (_legacyTile && !_credentials.empty()) ? 0 : CREDENTIAL_PROVIDER_NO_DEFAULT;
+    *pbAutoLogonWithDefault = FALSE;
+    // 识别通过后 SignalAutoLogon 置位,LogonUI 据此对「识别通过的那一个」磁贴自动调
+    // GetSerialization 完成提交。
+    if (_autoLogon && _autoLogon->IsRequested())
+    {
+        for (size_t i = 0; i < _credentials.size(); ++i)
+        {
+            if (_credentials[i]->IsReadyToSubmit())
+            {
+                *pdwDefault = static_cast<DWORD>(i);
+                *pbAutoLogonWithDefault = TRUE;
+                break;
+            }
+        }
+    }
     return S_OK;
 }
 
 IFACEMETHODIMP CFaceProvider::GetCredentialAt(
     DWORD dwIndex, ICredentialProviderCredential** ppcpc)
 {
-    if (dwIndex == 0 && _pCredential && ppcpc)
+    if (dwIndex < _credentials.size() && ppcpc)
     {
-        return _pCredential->QueryInterface(IID_PPV_ARGS(ppcpc));
+        return _credentials[dwIndex]->QueryInterface(IID_PPV_ARGS(ppcpc));
     }
     return E_INVALIDARG;
 }
 
-void CFaceProvider::_CreateEnumeratedCredential(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus)
+void CFaceProvider::_AddCredential(PCWSTR userSid, PCWSTR userName)
+{
+    CFaceCredential* credential = new (std::nothrow) CFaceCredential();
+    if (!credential)
+    {
+        return;
+    }
+    if (!_autoLogon || FAILED(credential->Initialize(_cpus, _autoLogon, userSid, userName)))
+    {
+        credential->Release();
+        return;
+    }
+    try
+    {
+        _credentials.push_back(credential);
+    }
+    catch (...)
+    {
+        credential->Release();
+    }
+}
+
+void CFaceProvider::_CreateEnumeratedCredentials()
 {
     _ReleaseEnumeratedCredentials();
-    _pCredential = new (std::nothrow) CFaceCredential();
-    if (_pCredential)
+    _legacyTile = false;
+
+    DWORD userCount = 0;
+    if (_users && SUCCEEDED(_users->GetCount(&userCount)) && userCount > 0)
     {
-        if (!_autoLogon || FAILED(_pCredential->Initialize(cpus, _autoLogon)))
+        for (DWORD i = 0; i < userCount; ++i)
         {
-            _ReleaseEnumeratedCredentials();
+            ICredentialProviderUser* user = nullptr;
+            if (FAILED(_users->GetAt(i, &user)) || !user)
+            {
+                continue;
+            }
+            PWSTR sid = nullptr;
+            if (SUCCEEDED(user->GetSid(&sid)) && sid)
+            {
+                std::wstring samName;
+                if (SamNameFromSidString(sid, samName))
+                {
+                    _AddCredential(sid, samName.c_str());
+                }
+            }
+            CoTaskMemFree(sid);
+            user->Release();
         }
+        return;
     }
+
+    // 系统没给用户列表(SetUserArray 未被调用):退回原来的独立「刷脸」磁贴。
+    _legacyTile = true;
+    _AddCredential(nullptr, nullptr);
 }
 
 void CFaceProvider::_ReleaseEnumeratedCredentials()
 {
-    if (_pCredential)
+    for (CFaceCredential* credential : _credentials)
     {
-        _pCredential->Release();
-        _pCredential = nullptr;
+        credential->Release();
     }
+    _credentials.clear();
 }
 
 HRESULT CFaceProvider_CreateInstance(REFIID riid, void** ppv)

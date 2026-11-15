@@ -37,6 +37,99 @@ static HBITMAP _CreateSolidBitmap(int w, int h, COLORREF color)
     return hbmp;
 }
 
+// 内置默认图标:深灰蓝底 + 白色「扫脸」线条(四角取景框、双眼、微笑)。
+// 登录界面画这张图时不认透明通道(实测透明处显示为黑),所以用不透明底色;
+// 先在 512×512 上用粗线画,再 HALFTONE 缩小到目标尺寸,得到平滑边缘。
+// 任一步失败返回 nullptr,交由调用方退回纯色占位图。
+static HBITMAP _CreateDefaultIconBitmap(int w, int h)
+{
+    const int S = 512;
+    auto makeDib = [](int cx, int cy, void** bits) -> HBITMAP
+    {
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = cx;
+        bmi.bmiHeader.biHeight = -cy; // 自上而下
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        return CreateDIBSection(nullptr, &bmi, DIB_RGB_COLORS, bits, nullptr, 0);
+    };
+
+    void* bigBits = nullptr;
+    void* outBits = nullptr;
+    HBITMAP hBig = makeDib(S, S, &bigBits);
+    HBITMAP hOut = makeDib(w, h, &outBits);
+    HDC dcBig = CreateCompatibleDC(nullptr);
+    HDC dcOut = CreateCompatibleDC(nullptr);
+    if (!hBig || !hOut || !dcBig || !dcOut || !outBits)
+    {
+        if (hBig) DeleteObject(hBig);
+        if (hOut) DeleteObject(hOut);
+        if (dcBig) DeleteDC(dcBig);
+        if (dcOut) DeleteDC(dcOut);
+        return nullptr;
+    }
+
+    HGDIOBJ oldBig = SelectObject(dcBig, hBig);
+    HGDIOBJ oldOut = SelectObject(dcOut, hOut);
+
+    RECT all = { 0, 0, S, S };
+    HBRUSH background = CreateSolidBrush(RGB(0x2B, 0x34, 0x45));
+    FillRect(dcBig, &all, background);
+    DeleteObject(background);
+
+    LOGBRUSH lb = {};
+    lb.lbStyle = BS_SOLID;
+    lb.lbColor = RGB(255, 255, 255);
+    HPEN pen = ExtCreatePen(PS_GEOMETRIC | PS_SOLID | PS_ENDCAP_ROUND | PS_JOIN_ROUND, 34, &lb, 0, nullptr);
+    HGDIOBJ oldPen = SelectObject(dcBig, pen);
+    HGDIOBJ oldBrush = SelectObject(dcBig, GetStockObject(NULL_BRUSH));
+
+    // 四角取景框
+    const int a = 96, b = S - 96, L = 96;
+    const POINT corners[4][3] = {
+        { { a, a + L }, { a, a }, { a + L, a } },
+        { { b - L, a }, { b, a }, { b, a + L } },
+        { { b, b - L }, { b, b }, { b - L, b } },
+        { { a + L, b }, { a, b }, { a, b - L } },
+    };
+    for (const auto& c : corners)
+    {
+        Polyline(dcBig, c, 3);
+    }
+    // 双眼
+    MoveToEx(dcBig, 204, 204, nullptr);
+    LineTo(dcBig, 204, 244);
+    MoveToEx(dcBig, 308, 204, nullptr);
+    LineTo(dcBig, 308, 244);
+    // 微笑:椭圆下半段(默认逆时针,从左端画到右端)
+    Arc(dcBig, 176, 216, 336, 356, 186, 310, 326, 310);
+
+    SelectObject(dcBig, oldBrush);
+    SelectObject(dcBig, oldPen);
+    DeleteObject(pen);
+
+    SetStretchBltMode(dcOut, HALFTONE);
+    SetBrushOrgEx(dcOut, 0, 0, nullptr);
+    StretchBlt(dcOut, 0, 0, w, h, dcBig, 0, 0, S, S, SRCCOPY);
+    GdiFlush();
+
+    // GDI 不写 alpha:统一置为不透明。
+    DWORD* px = static_cast<DWORD*>(outBits);
+    for (int i = 0; i < w * h; ++i)
+    {
+        px[i] |= 0xFF000000;
+    }
+
+    SelectObject(dcBig, oldBig);
+    SelectObject(dcOut, oldOut);
+    DeleteDC(dcBig);
+    DeleteDC(dcOut);
+    DeleteObject(hBig);
+    return hOut;
+}
+
 // 用 WIC 解码 png/jpg/bmp,按短边居中裁成正方形(不拉伸变形)再缩放到 w×h,
 // 转成 top-down 32bpp 后返回 HBITMAP。
 // 任一步失败返回 nullptr,交由调用方回退纯色占位图。
@@ -231,13 +324,20 @@ CFaceCredential::~CFaceCredential()
     DllRelease();
 }
 
-HRESULT CFaceCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, AutoLogonBridge* autoLogon)
+HRESULT CFaceCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, AutoLogonBridge* autoLogon,
+                                    PCWSTR userSid, PCWSTR userName)
 {
     _cpus = cpus;
     _autoLogon = autoLogon;
     if (_autoLogon)
     {
         _autoLogon->AddRef();
+    }
+    // 两者都给才算绑定用户;只给其一按独立磁贴处理,避免出现「挂在用户下却不核对身份」的状态。
+    if (userSid && userSid[0] != L'\0' && userName && userName[0] != L'\0')
+    {
+        _userSid = userSid;
+        _boundUser = userName;
     }
     _en = _IsEnglishUI();  // 读一次语言镜像,贯穿本磁贴所有文案
     _hotkeyVk = _ReadHotkeyVk();
@@ -246,7 +346,34 @@ HRESULT CFaceCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, Aut
     {
         hr = SHStrDupW(L"", &_rgFieldStrings[FFI_STATUS]);
     }
+    if (SUCCEEDED(hr))
+    {
+        hr = SHStrDupW(_L(L"面部解锁", L"Face Unlock"), &_rgFieldStrings[FFI_PROVIDER_LABEL]);
+    }
     return hr;
+}
+
+bool CFaceCredential::IsReadyToSubmit()
+{
+    EnterCriticalSection(&_cs);
+    const bool ready = (_authState == AuthState::Success);
+    LeaveCriticalSection(&_cs);
+    return ready;
+}
+
+// ICredentialProviderCredential2:返回绑定用户的 SID,LogonUI 据此把本磁贴并入该用户的账户。
+IFACEMETHODIMP CFaceCredential::GetUserSid(PWSTR* ppszSid)
+{
+    if (!ppszSid)
+    {
+        return E_INVALIDARG;
+    }
+    *ppszSid = nullptr;
+    if (_userSid.empty())
+    {
+        return S_FALSE;
+    }
+    return SHStrDupW(_userSid.c_str(), ppszSid);
 }
 
 // IUnknown
@@ -267,12 +394,21 @@ IFACEMETHODIMP_(ULONG) CFaceCredential::Release()
 
 IFACEMETHODIMP CFaceCredential::QueryInterface(REFIID riid, void** ppv)
 {
-    static const QITAB qit[] =
+    if (!ppv)
     {
-        QITABENT(CFaceCredential, ICredentialProviderCredential),
-        { nullptr },
-    };
-    return QISearch(this, qit, riid, ppv);
+        return E_POINTER;
+    }
+    *ppv = nullptr;
+    // ICredentialProviderCredential2 只在绑定了用户时才对外承认:不绑定用户的磁贴若也实现它,
+    // LogonUI 会把它并进「其他用户」,而不是原来那个独立磁贴。
+    if (riid == __uuidof(IUnknown) || riid == __uuidof(ICredentialProviderCredential) ||
+        (riid == __uuidof(ICredentialProviderCredential2) && !_userSid.empty()))
+    {
+        *ppv = static_cast<ICredentialProviderCredential2*>(this);
+        AddRef();
+        return S_OK;
+    }
+    return E_NOINTERFACE;
 }
 
 IFACEMETHODIMP CFaceCredential::Advise(ICredentialProviderCredentialEvents* pcpce)
@@ -498,6 +634,14 @@ void CFaceCredential::_AuthLoop()
         }
         if (success)
         {
+            // 绑定了用户的磁贴只接受该用户的脸:服务在整库里取最相似者,识别出的若是别人,
+            // 不能拿别人的身份去登录当前选中的账户。
+            if (!_boundUser.empty() && _wcsicmp(user.c_str(), _boundUser.c_str()) != 0)
+            {
+                _OnScanFailed(_L(L"刷脸未通过: 识别到的人脸不属于此账户",
+                                 L"Face check failed: the recognized face does not belong to this account"));
+                return;
+            }
             EnterCriticalSection(&_cs);
             _authUser = user;
             _authState = AuthState::Success;
@@ -600,11 +744,14 @@ IFACEMETHODIMP CFaceCredential::GetBitmapValue(DWORD dwFieldID, HBITMAP* phbmp)
 {
     if (dwFieldID == FFI_TILEIMAGE && phbmp)
     {
-        // 优先用 C:\ProgramData\FaceHello\ 里的自定义头像;读不到/解码失败回退纯蓝占位。
+        // 优先用 C:\ProgramData\FaceHello\ 里的自定义头像;读不到/解码失败用内置扫脸图标,
+        // 连它也画不出来才退回纯蓝占位。
         HBITMAP hbmp = nullptr;
         wchar_t imgPath[MAX_PATH];
         if (_FindFirstImageInFolder(L"C:\\ProgramData\\FaceHello\\", imgPath, ARRAYSIZE(imgPath)))
             hbmp = _LoadBitmapFromFileWIC(imgPath, 128, 128);
+        if (!hbmp)
+            hbmp = _CreateDefaultIconBitmap(128, 128);
         if (!hbmp)
             hbmp = _CreateSolidBitmap(128, 128, RGB(0, 120, 215)); // Windows 蓝
         if (hbmp)

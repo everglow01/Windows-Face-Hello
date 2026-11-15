@@ -38,12 +38,13 @@
 **要点**：
 - **密码永不经过命名管道**。服务只回 `{ok, user, similarity}`；CP 自己在 SYSTEM 上下文读 LSA。
 - **身份契约**：磁贴提交的账户名 == 服务返回的 `user` == LSA 键 `L$FaceHello_<user>` == 录入的 profile 名，四者必须一致解锁才成立。
+- **磁贴位置**：LogonUI 给出用户列表(`ICredentialProviderSetUserArray`)时，Provider 给每个用户建一个磁贴并绑定其 SID(`ICredentialProviderCredential2`)，面部解锁因此出现在该用户自己的账户下、「登录选项」里。绑定用户的磁贴只接受识别结果等于该用户账户名的人脸。没有用户列表时退回独立磁贴。
 - 磁贴只支持 Windows 登录与工作站解锁；仍不接入 `CPUS_CREDUI`、UAC 或应用认证。管理台把 `C:\ProgramData\FaceHello\auth_scope.txt` 写成 `0`(全关)、`1`(Windows 登录)、`2`(工作站解锁)或 `3`(两者)。文件缺失 / 无效时默认 `3`，兼容旧版本升级。
 - Windows 10 及更高版本通常把开机/注销和 `Win+L` 都报告为 `CPUS_LOGON`。`CFaceProvider` 因此检查当前 WTS 会话是否已有登录用户；如果查询失败且只开了一个场景，磁贴保持隐藏，不越过用户设置。
 
 ### 磁贴的可定制点
 
-- **自定义头像**：把一张 PNG/JPG/BMP 放进 `C:\ProgramData\FaceHello\`，`GetBitmapValue` 用 WIC 读**第一张**图、按短边居中裁成正方形再缩放到 128×128；读不到 / 解码失败回退纯蓝占位图。该路径是纯 ASCII、SYSTEM 可读（CP 读不了 OneDrive / 中文路径）。
+- **自定义头像**：把一张 PNG/JPG/BMP 放进 `C:\ProgramData\FaceHello\`，`GetBitmapValue` 用 WIC 读**第一张**图、按短边居中裁成正方形再缩放到 128×128；读不到 / 解码失败回退内置扫脸图标。LogonUI 不认这张图的透明通道，所以图标是不透明的。该路径是纯 ASCII、SYSTEM 可读（CP 读不了 OneDrive / 中文路径）。
 - **多语言**：CP 启动时读 `C:\ProgramData\FaceHello\lang.txt`（控制台改语言时写、服务以 SYSTEM 启动时同步），内容为 `en` 时磁贴标题 / 状态等**自有文案**走英文，否则中文。活体提示（「请向左转头」等）由 Python 服务**已按语言发来**，CP 原样显示。
 - **刷脸启动热键**：CP 启动时读 `C:\ProgramData\FaceHello\hotkey.txt`（控制台设置页写入）。支持 `SPACE`、`ENTER`、单个字母或数字；为空时只有「→」会启动刷脸。
 - **刷脸启用范围**：`auth_scope.txt` 镜像刷脸总开关和登录 / 工作站选择。关闭总开关只把镜像写为 `0`，不会删除持久化的两个场景选择；重新开启后恢复原选择。
