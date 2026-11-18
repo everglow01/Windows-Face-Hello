@@ -120,6 +120,8 @@ Full unlock chain: lock-screen "Face Unlock" tile → (named pipe) → LocalSyst
 
 The global face-unlock switch and the two scenario switches control whether the tile appears for startup/sign-out or workstation unlock. Closing a switch only hides FaceHello in that scope; it does not delete enrolled templates, settings, or the LSA credential. Windows 10 and later can report both situations as `CPUS_LOGON`, so the provider also checks whether the current WTS session already has a signed-in user. If that state cannot be determined while only one scope is enabled, FaceHello stays hidden rather than ignoring the user's choice.
 
+By default, dismissing the lock screen with a key or mouse click starts one scan when the Face Unlock sign-in screen appears. To start scans yourself, choose **Manually** in the console and use **→** or your configured hotkey.
+
 > If a face check fails, press the tile's **→** button to try again — you get **3 attempts**, after which Face Hello falls back to password sign-in (the system password / PIN is always available).
 
 Auth service commands (Administrator; `<venv>` = `.venv\Scripts\python.exe`):

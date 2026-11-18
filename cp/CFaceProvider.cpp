@@ -188,7 +188,9 @@ void AutoLogonBridge::Signal()
     ReleaseSRWLockShared(&_lock);
     if (events)
     {
+        InterlockedIncrement(&_notifying);
         events->CredentialsChanged(context);
+        InterlockedDecrement(&_notifying);
         events->Release();
     }
 }
@@ -201,6 +203,11 @@ void AutoLogonBridge::Clear()
 bool AutoLogonBridge::IsRequested()
 {
     return InterlockedCompareExchange(&_requested, 0, 0) != 0;
+}
+
+bool AutoLogonBridge::IsNotifying()
+{
+    return InterlockedCompareExchange(&_notifying, 0, 0) != 0;
 }
 
 void AutoLogonBridge::Deactivate()
@@ -252,6 +259,7 @@ IFACEMETHODIMP CFaceProvider::QueryInterface(REFIID riid, void** ppv)
     static const QITAB qit[] =
     {
         QITABENT(CFaceProvider, ICredentialProvider),
+        QITABENT(CFaceProvider, ICredentialProviderWithDisplayState),
         { nullptr },
     };
     return QISearch(this, qit, riid, ppv);
@@ -327,7 +335,8 @@ IFACEMETHODIMP CFaceProvider::GetCredentialCount(
     *pdwCount = _pCredential ? 1 : 0;
     *pdwDefault = 0;
     // 识别通过后 SignalAutoLogon 置位,LogonUI 据此自动调 GetSerialization 完成提交
-    *pbAutoLogonWithDefault = _autoLogon && _autoLogon->IsRequested() ? TRUE : FALSE;
+    *pbAutoLogonWithDefault = _autoLogon && _autoLogon->IsRequested()
+        && _pCredential && _pCredential->HasReadyResult() ? TRUE : FALSE;
     return S_OK;
 }
 
@@ -341,6 +350,22 @@ IFACEMETHODIMP CFaceProvider::GetCredentialAt(
     return E_INVALIDARG;
 }
 
+IFACEMETHODIMP CFaceProvider::SetDisplayState(DWORD flags)
+{
+    constexpr DWORD awake = 0x01;
+    constexpr DWORD curtain = 0x04;
+    constexpr DWORD curtainMoving = 0x08;
+    constexpr DWORD providerVisible = 0x80;
+    constexpr DWORD shuttingDown = 0x1000;
+    // 只在见过锁屏封面后接受可见的登录页状态。仅点亮屏幕或预选磁贴都不会开摄像头。
+    _sawLockCover = _sawLockCover || (flags & curtain) != 0;
+    _signInVisible = _sawLockCover && (flags & (awake | providerVisible)) == (awake | providerVisible)
+        && !(flags & (curtain | curtainMoving | shuttingDown));
+    if (_pCredential)
+        _pCredential->SetSignInState(_signInVisible, (flags & (curtain | shuttingDown)) != 0);
+    return S_OK;
+}
+
 void CFaceProvider::_CreateEnumeratedCredential(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus)
 {
     _ReleaseEnumeratedCredentials();
@@ -350,6 +375,10 @@ void CFaceProvider::_CreateEnumeratedCredential(CREDENTIAL_PROVIDER_USAGE_SCENAR
         if (!_autoLogon || FAILED(_pCredential->Initialize(cpus, _autoLogon)))
         {
             _ReleaseEnumeratedCredentials();
+        }
+        else
+        {
+            _pCredential->SetSignInState(_signInVisible, false);
         }
     }
 }

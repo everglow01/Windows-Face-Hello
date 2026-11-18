@@ -94,6 +94,7 @@ from face_hello.i18n import (
     save_auth_scope_mirror,
     save_hotkey_mirror,
     save_lang_mirror,
+    save_unlock_start_mode_mirror,
     set_lang,
     tr,
 )
@@ -1014,6 +1015,14 @@ class SettingsTab(QWidget):
         self.hotkey_set_btn.clicked.connect(self._set_hotkey)
         self.hotkey_clear_btn = QPushButton(tr("hotkey_clear_btn"))
         self.hotkey_clear_btn.clicked.connect(self._clear_hotkey)
+        self.unlock_start_combo = QComboBox()
+        for mode in ("signin", "manual"):
+            self.unlock_start_combo.addItem(tr(f"unlock_start_{mode}"), mode)
+        mode_index = self.unlock_start_combo.findData(s["unlock_start_mode"])
+        self.unlock_start_combo.setCurrentIndex(max(0, mode_index))
+        self.unlock_start_combo.setToolTip(tr("unlock_start_mode_help"))
+        self.unlock_start_combo.currentIndexChanged.connect(self._update_hotkey_controls)
+        self._update_hotkey_controls()
         for sp in (self.match_spin, self.margin_spin, self.yaw_spin, self.blink_spin,
                    self.renewal_spin, self.samples_spin, self.max_templates_spin,
                    self.lockout_fails_spin, self.lockout_secs_spin, self.camera_spin):
@@ -1090,6 +1099,8 @@ class SettingsTab(QWidget):
         hotkey_w = QWidget()
         hotkey_w.setLayout(hotkey_row)
         common_grid.addWidget(hotkey_w, 8, 1, 1, 2)
+        common_grid.addWidget(QLabel(tr("unlock_start_mode_label")), 9, 0)
+        common_grid.addWidget(self.unlock_start_combo, 9, 1, 1, 2)
         self._update_auth_scope_controls(self.face_unlock_check.isChecked())
 
         self.advanced_params_btn = QPushButton(tr("advanced_params_show"))
@@ -1341,6 +1352,7 @@ class SettingsTab(QWidget):
             camera_index=self.camera_spin.value(),
             camera_url=self.camera_url_edit.text().strip(),
             unlock_hotkey=self.unlock_hotkey,
+            unlock_start_mode=self.unlock_start_combo.currentData(),
             camera_url_username=self.camera_user_edit.text().strip(),
             camera_url_password=self.camera_pass_edit.text(),
             face_unlock_enabled=self.face_unlock_check.isChecked(),
@@ -1354,7 +1366,15 @@ class SettingsTab(QWidget):
             self.face_unlock_logon_check.isChecked(),
             self.face_unlock_workstation_check.isChecked(),
         )
+        if not save_unlock_start_mode_mirror(self.unlock_start_combo.currentData()):
+            QMessageBox.warning(self, tr("settings_saved"), tr("unlock_start_sync_failed"))
+            return
         QMessageBox.information(self, tr("saved_title"), tr("settings_saved"))
+
+    def _update_hotkey_controls(self) -> None:
+        manual = self.unlock_start_combo.currentData() == "manual"
+        for widget in (self.hotkey_value, self.hotkey_set_btn, self.hotkey_clear_btn):
+            widget.setEnabled(manual)
 
     def _set_hotkey(self) -> None:
         dlg = HotkeyDialog(self)

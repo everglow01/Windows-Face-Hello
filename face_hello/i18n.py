@@ -138,6 +138,11 @@ _CATALOG: dict[str, dict[str, str]] = {
         "camera_user_placeholder": "帐号",
         "camera_pass_placeholder": "密码",
         "unlock_hotkey_label": "刷脸启动热键:",
+        "unlock_start_mode_label": "刷脸启动方式:",
+        "unlock_start_manual": "手动（箭头或指定热键）",
+        "unlock_start_signin": "进入登录界面后自动开始（默认）",
+        "unlock_start_mode_help": "用任意按键或鼠标点击退下锁屏封面后，自动开始一次刷脸。也可手动按箭头重试。",
+        "unlock_start_sync_failed": "设置已保存，但无法更新锁屏启动方式。请用管理员 PowerShell 打开管理台后重新保存。",
         "face_unlock_enabled": "启用刷脸解锁",
         "face_unlock_scope_label": "启用范围:",
         "face_unlock_logon": "Windows 登录（开机/注销）",
@@ -479,6 +484,11 @@ _CATALOG: dict[str, dict[str, str]] = {
         "camera_user_placeholder": "Username",
         "camera_pass_placeholder": "Password",
         "unlock_hotkey_label": "Face unlock hotkey:",
+        "unlock_start_mode_label": "Start face unlock:",
+        "unlock_start_manual": "Manually (arrow or configured hotkey)",
+        "unlock_start_signin": "Automatically on the sign-in screen (default)",
+        "unlock_start_mode_help": "Dismiss the lock screen with any key or a mouse click to start one scan. Use the arrow to retry.",
+        "unlock_start_sync_failed": "Settings were saved, but the lock-screen start mode could not be updated. Open the console from an administrator PowerShell and save again.",
         "face_unlock_enabled": "Enable face unlock",
         "face_unlock_scope_label": "Enabled for:",
         "face_unlock_logon": "Windows sign-in (startup/sign-out)",
@@ -718,14 +728,15 @@ def tr(key: str, **kw) -> str:
     return t(key, _LANG, **kw)
 
 
-def _save_mirror(path, text: str) -> None:
+def _save_mirror(path, text: str) -> bool:
     from . import config
 
     try:
         config.AVATAR_DIR.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="ascii")
     except OSError:
-        pass
+        return False
+    return True
 
 
 def save_lang_mirror(lang: str) -> None:
@@ -744,6 +755,12 @@ def save_hotkey_mirror(hotkey: str) -> None:
 
     text = str(hotkey or "").strip().upper()
     _save_mirror(config.HOTKEY_FILE, text)
+
+
+def save_unlock_start_mode_mirror(mode: str) -> bool:
+    from . import config
+
+    return _save_mirror(config.UNLOCK_START_MODE_FILE, "signin" if mode == "signin" else "manual")
 
 
 def save_auth_scope_mirror(enabled: bool, logon: bool, workstation: bool) -> None:

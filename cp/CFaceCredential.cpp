@@ -1,5 +1,6 @@
 #include <new>
 #include <string>
+#include <string_view>
 #include <shlwapi.h>
 #include <ntsecapi.h>
 #include <wincodec.h>
@@ -11,6 +12,9 @@
 #include "CredVault.h"
 #include "KerbHelpers.h"
 #include "guid.h"
+
+// Windows 可能在自动提交后要求确认。短时保留已验证的结果，等待同一磁贴提交。
+constexpr ULONGLONG kAutomaticResultMs = 10000;
 
 // 生成一张纯色磁贴位图,供自定义头像不可用时回退。
 static HBITMAP _CreateSolidBitmap(int w, int h, COLORREF color)
@@ -197,6 +201,29 @@ static int _ReadHotkeyVk()
     return 0;
 }
 
+CFaceCredential::StartMode CFaceCredential::_ReadStartMode()
+{
+    HANDLE file = CreateFileW(L"C:\\ProgramData\\FaceHello\\unlock_start_mode.txt", GENERIC_READ,
+                              FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        const DWORD error = GetLastError();
+        return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND
+            ? StartMode::SignIn : StartMode::Manual;
+    }
+    char buffer[16];
+    DWORD bytes = 0;
+    const BOOL ok = ReadFile(file, buffer, sizeof(buffer), &bytes, nullptr);
+    CloseHandle(file);
+    if (ok)
+    {
+        const std::string_view mode(buffer, bytes);
+        if (mode == "signin")
+            return StartMode::SignIn;
+    }
+    return StartMode::Manual;
+}
+
 CFaceCredential::CFaceCredential()
     : _cRef(1), _cpus(CPUS_INVALID), _autoLogon(nullptr),
       _pCredProvCredentialEvents(nullptr), _hAuthThread(nullptr), _hHotkeyThread(nullptr),
@@ -241,6 +268,7 @@ HRESULT CFaceCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, Aut
     }
     _en = _IsEnglishUI();  // 读一次语言镜像,贯穿本磁贴所有文案
     _hotkeyVk = _ReadHotkeyVk();
+    _startMode = _ReadStartMode();
     HRESULT hr = SHStrDupW(_L(L"面部解锁", L"Face Unlock"), &_rgFieldStrings[FFI_LABEL]);
     if (SUCCEEDED(hr))
     {
@@ -307,29 +335,88 @@ IFACEMETHODIMP CFaceCredential::UnAdvise()
 
 IFACEMETHODIMP CFaceCredential::SetSelected(BOOL* pbAutoLogon)
 {
-    *pbAutoLogon = FALSE;
     bool firstReady;
     EnterCriticalSection(&_cs);
+    _selected = true;
     firstReady = (_authState == AuthState::Idle && _failCount == 0);
+    *pbAutoLogon = _automaticRun && _CanUseResultLocked()
+        && _autoLogon && _autoLogon->IsRequested() ? TRUE : FALSE;
     LeaveCriticalSection(&_cs);
     if (firstReady)
     {
         _SetStatus(_L(L"按 → 开始刷脸", L"Press → to start face unlock"));
     }
     _StartHotkeyThread();
+    if (_startMode == StartMode::SignIn)
+        _StartAuthThread(true);
     return S_OK;
 }
 
 IFACEMETHODIMP CFaceCredential::SetDeselected()
 {
+    EnterCriticalSection(&_cs);
+    _selected = false;
+    // 自己请求 LogonUI 刷新时，Windows 可能在枚举过程中暂时取消选中同一磁贴。
+    const bool refreshing = _authState == AuthState::Success && _autoLogon && _autoLogon->IsNotifying();
+    if (_automaticRun && !refreshing)
+        _automaticCancelled = true;
+    LeaveCriticalSection(&_cs);
     _StopHotkeyThread();
     _StopAuthThread();
     return S_OK;
 }
 
-// 选中磁贴时拉起后台扫描线程。仅在空闲/失败态允许重新开始。
-void CFaceCredential::_StartAuthThread()
+void CFaceCredential::SetSignInState(bool visible, bool ended)
 {
+    EnterCriticalSection(&_cs);
+    _signInVisible = visible;
+    // 普通刷新可能暂时隐藏 Provider。只有封面重新出现或关机才作废自动结果。
+    if (ended && _automaticRun)
+        _automaticCancelled = true;
+    LeaveCriticalSection(&_cs);
+    if (visible && _startMode == StartMode::SignIn)
+        _StartAuthThread(true);
+}
+
+bool CFaceCredential::_CanUseResultLocked() const
+{
+    return _authState == AuthState::Success && !_automaticCancelled
+        && (!_automaticRun || (GetTickCount64() < _automaticResultUntil
+            && (_selected || (_autoLogon && _autoLogon->IsNotifying()))));
+}
+
+void CFaceCredential::_ClearAutomaticResult()
+{
+    EnterCriticalSection(&_cs);
+    if (_automaticRun && _authState == AuthState::Success)
+    {
+        _authState = AuthState::Idle;
+        _authUser.clear();
+    }
+    LeaveCriticalSection(&_cs);
+}
+
+bool CFaceCredential::HasReadyResult()
+{
+    EnterCriticalSection(&_cs);
+    const bool ready = _CanUseResultLocked();
+    LeaveCriticalSection(&_cs);
+    return ready;
+}
+
+// 仅在空闲/失败态允许开始扫描。自动模式需通过额外的界面状态检查。
+void CFaceCredential::_StartAuthThread(bool automatic)
+{
+    if (automatic)
+    {
+        DWORD session = 0;
+        const DWORD console = WTSGetActiveConsoleSessionId();
+        if (console == 0xFFFFFFFF || !ProcessIdToSessionId(GetCurrentProcessId(), &session)
+            || session != console || GetSystemMetrics(SM_REMOTESESSION))
+        {
+            return;
+        }
+    }
     // 回收上一轮已自然结束的线程句柄,否则失败/成功后再选中磁贴无法重新扫描。
     if (_hAuthThread != nullptr && WaitForSingleObject(_hAuthThread, 0) == WAIT_OBJECT_0)
     {
@@ -339,12 +426,19 @@ void CFaceCredential::_StartAuthThread()
 
     bool canStart = false;
     EnterCriticalSection(&_cs);
-    if (_hAuthThread == nullptr &&
+    const bool allowTrigger = !automatic ||
+        (_startMode == StartMode::SignIn && _selected && _signInVisible &&
+         !_autoStarted && _authState == AuthState::Idle && _failCount == 0);
+    if (allowTrigger && _hAuthThread == nullptr &&
         (_authState == AuthState::Idle || _authState == AuthState::Failed) &&
         _failCount < kMaxFaceAttempts)  // 用尽 3 次后:自动起与手动重试都不再刷脸
     {
         _authState = AuthState::Running;
         _stopFlag = 0;
+        _autoStarted = _autoStarted || automatic;
+        _automaticRun = automatic;
+        _automaticCancelled = false;
+        _automaticResultUntil = 0;
         canStart = true;
     }
     LeaveCriticalSection(&_cs);
@@ -387,7 +481,7 @@ void CFaceCredential::_StopAuthThread()
 
 void CFaceCredential::_StartHotkeyThread()
 {
-    if (_hotkeyVk == 0)
+    if (_hotkeyVk == 0 || _startMode != StartMode::Manual)
         return;
     if (_hHotkeyThread != nullptr && WaitForSingleObject(_hHotkeyThread, 0) == WAIT_OBJECT_0)
     {
@@ -496,12 +590,23 @@ void CFaceCredential::_AuthLoop()
             Sleep(400);
             continue;
         }
+        EnterCriticalSection(&_cs);
+        if (_automaticCancelled || InterlockedCompareExchange(&_stopFlag, 0, 0) != 0)
+        {
+            _authState = AuthState::Idle;
+            LeaveCriticalSection(&_cs);
+            return;
+        }
         if (success)
         {
-            EnterCriticalSection(&_cs);
             _authUser = user;
             _authState = AuthState::Success;
-            LeaveCriticalSection(&_cs);
+            if (_automaticRun)
+                _automaticResultUntil = GetTickCount64() + kAutomaticResultMs;
+        }
+        LeaveCriticalSection(&_cs);
+        if (success)
+        {
             _SetStatus(_L(L"识别通过,正在登录…", L"Recognized, signing in…"));
             if (_autoLogon != nullptr)
             {
@@ -648,11 +753,26 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
     //    未识别成功就返回 NOT_FINISHED(LogonUI 仅在自动提交时调到这里)。
     std::wstring user;
     EnterCriticalSection(&_cs);
-    const bool ready = (_authState == AuthState::Success);
-    if (ready) { user = _authUser; }
+    const bool hadResult = (_authState == AuthState::Success);
+    const bool ready = _CanUseResultLocked();
+    const bool automatic = _automaticRun;
+    if (ready)
+        user = _authUser;
+    if (hadResult && (!ready || !automatic))
+    {
+        _authUser.clear();
+        _authState = AuthState::Idle;
+    }
     LeaveCriticalSection(&_cs);
+    if (hadResult && _autoLogon)
+        _autoLogon->Clear();  // 自动提交信号只发一次，确认按钮可复用尚有效的结果。
     if (!ready)
     {
+        if (hadResult)
+        {
+            _SetStatus(_L(L"刷脸结果已失效，按 → 重试", L"Face result expired. Press → to retry"));
+            return S_OK;
+        }
         // 用户按了「→」提交按钮但还没识别成功:开始或重试刷脸。
         // 还有机会且当前没有扫描在跑 → 重启刷脸;否则什么都不做——
         // 状态文字已由 _OnScanFailed 设成「(按 → 重试,剩 N 次)」或用尽时的「请改用密码登录」,
@@ -667,16 +787,11 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
         }
         return S_OK;  // 仍 NOT_FINISHED,不提交凭据
     }
-    // 这次自动提交已消费:复位状态并清掉自动登录标志,避免失败后死循环重试。
-    EnterCriticalSection(&_cs);
-    _authState = AuthState::Idle;
-    LeaveCriticalSection(&_cs);
-    if (_autoLogon != nullptr) { _autoLogon->Clear(); }
-
     // 从 LSA Secret 取该用户登录密码(CP 在锁屏是 SYSTEM,可读)。
     std::wstring password;
     if (!CredVault::RetrievePassword(user, password))
     {
+        _ClearAutomaticResult();
         _ReportFail(_L(L"已识别,但未找到登录密码(请先写入 LSA Secret)",
                        L"Recognized, but no sign-in password found (set it in the console first)"),
                     ppwszOptionalStatusText, pcpsiOptionalStatusIcon);
@@ -713,7 +828,7 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
         {
             ULONG ulAuthPackage = 0;
             hr = RetrieveNegotiateAuthPackage(&ulAuthPackage);
-            if (SUCCEEDED(hr))
+            if (SUCCEEDED(hr) && (!automatic || HasReadyResult()))
             {
                 pcpcs->ulAuthenticationPackage = ulAuthPackage;
                 pcpcs->clsidCredentialProvider = CLSID_FaceHelloProvider;
@@ -734,6 +849,7 @@ IFACEMETHODIMP CFaceCredential::GetSerialization(
     }
     if (FAILED(hr))
     {
+        _ClearAutomaticResult();
         _ReportFail(_L(L"构造登录凭据失败", L"Failed to build sign-in credential"),
                     ppwszOptionalStatusText, pcpsiOptionalStatusIcon);
     }
@@ -745,6 +861,7 @@ IFACEMETHODIMP CFaceCredential::ReportResult(
     PWSTR* ppwszOptionalStatusText,
     CREDENTIAL_PROVIDER_STATUS_ICON* pcpsiOptionalStatusIcon)
 {
+    _ClearAutomaticResult();
     *ppwszOptionalStatusText = nullptr;
     *pcpsiOptionalStatusIcon = CPSI_NONE;
     return S_OK;

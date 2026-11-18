@@ -44,6 +44,7 @@ AVATAR_DIR = _PROGRAMDATA
 # (CP 读不了 DPAPI 加密的人脸库)。控制台改语言时写,服务启动时按 settings 同步。
 LANG_FILE = _PROGRAMDATA / "lang.txt"
 HOTKEY_FILE = _PROGRAMDATA / "hotkey.txt"
+UNLOCK_START_MODE_FILE = _PROGRAMDATA / "unlock_start_mode.txt"
 # 刷脸启用范围镜像:十进制位掩码供 C++ CP 读取(bit 0=登录,bit 1=工作站解锁)。
 # 文件缺失或内容无效时 CP 默认两项都启用,保证旧版本升级行为不变。
 AUTH_SCOPE_FILE = _PROGRAMDATA / "auth_scope.txt"
@@ -114,6 +115,7 @@ DEFAULTS = {
     "camera_url_username": "",
     "camera_url_password": "",
     "unlock_hotkey": "",
+    "unlock_start_mode": "signin",
     # CP 磁贴启用范围。总开关关闭时两个场景设置保留,重新开启后恢复原选择。
     "face_unlock_enabled": True,
     "face_unlock_logon_enabled": True,
