@@ -302,6 +302,12 @@ def test_copy_payload_includes_installed_doctor(monkeypatch, tmp_path):
     dll.write_bytes(b"dll")
     python_dir = tmp_path / "python"
     python_dir.mkdir()
+    qt_dir = python_dir / "Lib" / "site-packages" / "PySide6"
+    qt_dir.mkdir(parents=True)
+    for name in ("msvcp140.dll", "msvcp140_1.dll"):
+        (qt_dir / name).write_bytes(b"crt")
+    for name in ("vcruntime140.dll", "vcruntime140_1.dll"):
+        (python_dir / name).write_bytes(b"crt")
     monkeypatch.setattr(build_release, "ROOT", root)
     monkeypatch.setattr(build_release, "BUILD", build)
     monkeypatch.setattr(build_release, "PYDIR", python_dir)

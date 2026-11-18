@@ -267,12 +267,23 @@ def step_copy_payload(version: str, signer_certificate: Path | None = None) -> N
         for d in psys.glob("*.dll"):
             shutil.copy(d, PYDIR / d.name)
 
+    # Qt 已携带这些运行库;服务不导入 Qt,需要在 python.exe 旁直接找到它们。
+    qt_dir = PYDIR / "Lib" / "site-packages" / "PySide6"
+    for name in ("msvcp140.dll", "msvcp140_1.dll"):
+        shutil.copy2(qt_dir / name, PYDIR / name)
+    # 两个 vcruntime 由 standalone Python 提供,不要覆盖;缺件不能借系统 DLL 蒙混过关。
+    for name in ("msvcp140.dll", "msvcp140_1.dll", "vcruntime140.dll", "vcruntime140_1.dll"):
+        if not (PYDIR / name).is_file():
+            raise RuntimeError(f"portable VC++ runtime missing: {name}")
+
 
 def step_smoke() -> None:
     env = os.environ.copy()
     env.pop("FACEHELLO_HOME", None)
     env["PYTHONPATH"] = str(BUILD)
     env["QT_QPA_PLATFORM"] = "offscreen"
+    # 独立进程先验证服务依赖,避免 GUI 提前加载 Qt 自带的运行库而掩盖漏包。
+    run(PYDIR / "python.exe", "-I", "-c", "import onnxruntime", env=env)
     run(PYDIR / "python.exe", ROOT / "scripts" / "release_smoke.py", BUILD, env=env)
 
 
