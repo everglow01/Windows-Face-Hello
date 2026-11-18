@@ -146,34 +146,45 @@ def test_runtime_dacl_allows_only_system_and_administrators():
     assert second[1] == install_maintenance.ntsecuritycon.FILE_ALL_ACCESS
 
 
-def test_repair_runtime_acl_recovers_access_denied_and_checks_log(tmp_path, monkeypatch):
+def test_repair_runtime_acl_resets_owner_of_every_target_and_checks_log(tmp_path, monkeypatch):
+    # 目录若在安装前就已存在,只改 DACL 会把原所有者留在对象上。所以根目录与每个子项都
+    # 无条件重置所有者,而不是只在「拒绝访问」时才夺权。
     root = tmp_path / "FaceHello"
     data = root / "data"
     data.mkdir(parents=True)
     log = data / "service.log"
     log.write_text("existing", encoding="utf-8")
+    gallery = data / "faces.dat"
+    gallery.write_bytes(b"gallery")
     monkeypatch.setattr(install_maintenance.config, "AVATAR_DIR", root)
     monkeypatch.setattr(install_maintenance.config, "DATA_DIR", data)
-    set_calls = []
-    recovered = []
-
-    def set_acl(path, is_directory):
-        set_calls.append((path, is_directory))
-        if path == log and path not in recovered:
-            raise pywintypes.error(5, "SetNamedSecurityInfo", "Access is denied")
-
-    monkeypatch.setattr(install_maintenance, "_set_runtime_dacl", set_acl)
+    secured = []
     monkeypatch.setattr(
         install_maintenance,
         "_take_ownership",
-        lambda path, is_directory: recovered.append(path),
+        lambda path, is_directory: secured.append((path, is_directory)),
     )
 
     install_maintenance._repair_runtime_acl()
 
-    assert set_calls[0] == (root, True)
-    assert log in recovered
+    assert secured == [(root, True), (data, True), (gallery, False), (log, False)]
     assert log.read_text(encoding="utf-8") == "existing"
+
+
+def test_repair_runtime_acl_reports_owner_reset_failure(tmp_path, monkeypatch):
+    root = tmp_path / "FaceHello"
+    data = root / "data"
+    data.mkdir(parents=True)
+    monkeypatch.setattr(install_maintenance.config, "AVATAR_DIR", root)
+    monkeypatch.setattr(install_maintenance.config, "DATA_DIR", data)
+
+    def deny(path, is_directory):
+        raise pywintypes.error(5, "SetNamedSecurityInfo", "Access is denied")
+
+    monkeypatch.setattr(install_maintenance, "_take_ownership", deny)
+
+    with pytest.raises(RuntimeError, match="cannot secure runtime data ACL .*winerror=5"):
+        install_maintenance._repair_runtime_acl()
 
 
 def test_repair_runtime_acl_reports_log_preflight_failure(tmp_path, monkeypatch):
@@ -184,7 +195,7 @@ def test_repair_runtime_acl_reports_log_preflight_failure(tmp_path, monkeypatch)
     log.mkdir()
     monkeypatch.setattr(install_maintenance.config, "AVATAR_DIR", root)
     monkeypatch.setattr(install_maintenance.config, "DATA_DIR", data)
-    monkeypatch.setattr(install_maintenance, "_set_runtime_dacl", lambda path, is_dir: None)
+    monkeypatch.setattr(install_maintenance, "_take_ownership", lambda path, is_dir: None)
 
     with pytest.raises(RuntimeError, match="cannot append service log"):
         install_maintenance._repair_runtime_acl()

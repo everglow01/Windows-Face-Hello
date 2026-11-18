@@ -194,18 +194,19 @@ def _runtime_dacl(is_directory: bool):
     return dacl, admins_sid
 
 
-def _set_runtime_dacl(path: Path, is_directory: bool) -> None:
-    dacl, _admins_sid = _runtime_dacl(is_directory)
-    win32security.SetNamedSecurityInfo(
-        str(path),
-        win32security.SE_FILE_OBJECT,
-        win32security.DACL_SECURITY_INFORMATION
-        | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
-        None,
-        None,
-        dacl,
-        None,
-    )
+def _secure_runtime_path(path: Path, is_directory: bool) -> None:
+    """把所有者重置为 Administrators,再套上只放行 SYSTEM / Administrators 的受保护 DACL。
+
+    所有者无条件重置,而不是只在「拒绝访问」时才夺权:C:\\ProgramData 默认允许普通用户
+    建目录,目录若在安装前就已存在,只改 DACL 会把原所有者留在对象上。存放人脸库的运行
+    数据目录不应由非管理员账户持有。
+    """
+    try:
+        _take_ownership(path, is_directory)
+    except pywintypes.error as exc:
+        raise RuntimeError(
+            f"cannot secure runtime data ACL {path}: winerror={exc.winerror}"
+        ) from exc
 
 
 def _take_ownership(path: Path, is_directory: bool) -> None:
@@ -262,40 +263,14 @@ def _repair_runtime_acl() -> None:
     if root.exists() and _is_reparse_point(root):
         raise RuntimeError(f"refusing to follow runtime data reparse point: {root}")
     root.mkdir(parents=True, exist_ok=True)
-    try:
-        _set_runtime_dacl(root, True)
-    except pywintypes.error as exc:
-        if getattr(exc, "winerror", None) != 5:
-            raise RuntimeError(
-                f"cannot repair runtime data ACL {root}: winerror={exc.winerror}"
-            ) from exc
-        try:
-            _take_ownership(root, True)
-        except pywintypes.error as recovery_exc:
-            raise RuntimeError(
-                f"cannot recover runtime data ACL {root}: winerror={recovery_exc.winerror}"
-            ) from recovery_exc
+    _secure_runtime_path(root, True)
     if data_dir.exists() and _is_reparse_point(data_dir):
         raise RuntimeError(f"refusing to follow runtime data reparse point: {data_dir}")
     data_dir.mkdir(parents=True, exist_ok=True)
     for path in _runtime_acl_targets(root):
         if path == root:
             continue
-        is_directory = path.is_dir()
-        try:
-            _set_runtime_dacl(path, is_directory)
-        except pywintypes.error as exc:
-            if getattr(exc, "winerror", None) != 5:
-                raise RuntimeError(
-                    f"cannot repair runtime data ACL {path}: winerror={exc.winerror}"
-                ) from exc
-            try:
-                _take_ownership(path, is_directory)
-            except pywintypes.error as recovery_exc:
-                raise RuntimeError(
-                    "cannot recover runtime data ACL "
-                    f"{path}: winerror={recovery_exc.winerror}"
-                ) from recovery_exc
+        _secure_runtime_path(path, path.is_dir())
     log_path = data_dir / "service.log"
     try:
         with log_path.open("a", encoding="utf-8"):
