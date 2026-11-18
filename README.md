@@ -160,11 +160,12 @@ Camera (OpenCV) → Active liveness (MediaPipe FaceLandmarker: EAR blink + solve
 
 ## 🖼️ Custom Lock-screen Avatar
 
-You can drop your own avatar image into the default path `C:\ProgramData\FaceHello`. The program takes the **first** image in that directory, scales and crops it to a square, and places it on the lock-screen tile; newer Windows displays it as a circle automatically.
+You can drop your own avatar image into the default path `C:\ProgramData\FaceHello`. The program takes the **first** image in that directory, scales and crops it to a square, and uses it as the Face Unlock icon. Face Unlock is listed under your own account on the sign-in screen, as an entry in **Sign-in options**; your account picture stays as it is.
 
 - Supports **PNG / JPG / BMP**; a square image is recommended so the edges aren't cropped.
 - A pure-ASCII path — the Credential Provider running as SYSTEM at the lock screen can read it (it can't access OneDrive / Chinese paths).
-- If no image is found or decoding fails, the tile falls back to the default solid-blue placeholder without affecting unlock.
+- If no image is found or decoding fails, a built-in face icon is used; unlock is not affected.
+- The sign-in screen ignores transparency in this image (transparent areas come out black), so use an opaque background.
 
 ![avatar](README_image/touxiang.png)
 

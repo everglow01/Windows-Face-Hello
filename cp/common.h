@@ -4,14 +4,16 @@
 #include <strsafe.h>
 #include <credentialprovider.h>
 
-// 刷脸磁贴上的字段:图标 + 标题 + 提交按钮 + 状态文字。
+// 刷脸磁贴上的字段:图标 + 标题 + 提交按钮 + 状态文字 + Provider 名称(隐藏,仅供
+// 「登录选项」里本 Provider 图标的名称)。
 enum FACE_FIELD_ID
 {
-    FFI_TILEIMAGE  = 0,
-    FFI_LABEL      = 1,
-    FFI_SUBMIT     = 2,
-    FFI_STATUS     = 3,
-    FFI_NUM_FIELDS = 4,
+    FFI_TILEIMAGE      = 0,
+    FFI_LABEL          = 1,
+    FFI_SUBMIT         = 2,
+    FFI_STATUS         = 3,
+    FFI_PROVIDER_LABEL = 4,
+    FFI_NUM_FIELDS     = 5,
 };
 
 // 字段的显示状态(在普通磁贴 / 仅选中磁贴时显示)与交互状态。
