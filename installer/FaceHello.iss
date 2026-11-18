@@ -73,7 +73,7 @@ english.InstallFailedHeading=Installation incomplete
 english.InstallFailedBody=FaceHello configuration or acceptance failed. Review the error and setup log; keep any recovery backup and acceptance baseline.
 
 [Tasks]
-Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标:"
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Dirs]
 ; 数据 + 锁屏头像目录(SYSTEM 服务与提权 GUI 共享;CP 硬编码读 ProgramData\FaceHello)
