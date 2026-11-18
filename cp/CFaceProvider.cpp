@@ -66,6 +66,32 @@ SessionUserState CurrentSessionUserState()
     return hasUser ? SessionUserState::Present : SessionUserState::Absent;
 }
 
+// 当前 LogonUI 是否跑在远程(RDP 等)会话里。
+// 摄像头接在物理机上,拍到的是坐在机器前的人,而不是远程发起登录的人:远程会话若也出
+// 刷脸磁贴,远程一方就能借本机摄像头前的人完成认证。Windows Hello 生物识别同样不在远程
+// 会话里提供。协议类型:0 = 控制台,1 = 旧版 ICA,2 = RDP;再用 SM_REMOTESESSION 兜底。
+bool IsRemoteSession()
+{
+    LPWSTR buffer = nullptr;
+    DWORD bytes = 0;
+    if (WTSQuerySessionInformationW(
+            WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION,
+            WTSClientProtocolType, &buffer, &bytes))
+    {
+        const bool remote = buffer != nullptr && bytes >= sizeof(USHORT)
+            && *reinterpret_cast<const USHORT*>(buffer) != 0;
+        if (buffer)
+        {
+            WTSFreeMemory(buffer);
+        }
+        if (remote)
+        {
+            return true;
+        }
+    }
+    return GetSystemMetrics(SM_REMOTESESSION) != 0;
+}
+
 bool IsUsageScenarioEnabled(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus)
 {
     const DWORD scope = ReadAuthScope();
@@ -265,7 +291,7 @@ IFACEMETHODIMP CFaceProvider::QueryInterface(REFIID riid, void** ppv)
     return QISearch(this, qit, riid, ppv);
 }
 
-// 只在登录和解锁工作站两个场景出磁贴;其余场景不接管。
+// 只在登录和解锁工作站两个场景出磁贴;其余场景不接管。远程会话一律不出磁贴。
 IFACEMETHODIMP CFaceProvider::SetUsageScenario(
     CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, DWORD /*dwFlags*/)
 {
@@ -273,7 +299,7 @@ IFACEMETHODIMP CFaceProvider::SetUsageScenario(
     {
     case CPUS_LOGON:
     case CPUS_UNLOCK_WORKSTATION:
-        if (!IsUsageScenarioEnabled(cpus))
+        if (IsRemoteSession() || !IsUsageScenarioEnabled(cpus))
         {
             _ReleaseEnumeratedCredentials();
             return E_NOTIMPL;
