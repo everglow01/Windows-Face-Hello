@@ -79,9 +79,10 @@ def test_settings_camera_test_and_save_reject_invalid_url(qapp, tmp_path, monkey
     assert tab.camera_test_btn.isEnabled()
 
     monkeypatch.setattr(store, "save", lambda: pytest.fail("无效 URL 不应落盘"))
-    tab._save()
+    assert not tab._save()
     assert store.get_settings()["camera_url"] == ""
-    assert len(warnings) == 2
+    assert len(warnings) == 1
+    assert tab.autosave_status.text() == app_main.tr("camera_url_invalid")
 
 
 def test_settings_url_echo_follows_content(qapp, tmp_path):

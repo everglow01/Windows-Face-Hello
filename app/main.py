@@ -1037,9 +1037,28 @@ class SettingsTab(QWidget):
         self.multi_face_check = QCheckBox(tr("multi_face_protection"))
         self.multi_face_check.setChecked(s.get("multi_face_protection_enabled", False))
 
-        save_btn = QPushButton(tr("save_settings"))
-        save_btn.setObjectName("accent")
-        save_btn.clicked.connect(self._save)
+        # 数值等选项合并写入，串流字段离开输入框后再保存。
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(400)
+        self._autosave_timer.timeout.connect(self._save_pending_settings)
+        self._bindings = self._setting_bindings()
+        self._saved_settings = self._read_settings()
+        self._pending_settings = self._saved_settings
+        self._mirrors_pending = False
+        reset_btn = QPushButton(tr("reset_settings"))
+        reset_btn.clicked.connect(self._reset_settings)
+        self.autosave_status = QLabel(tr("settings_autosave_hint"))
+        self.autosave_status.setObjectName("hint")
+        self.autosave_status.setWordWrap(True)
+        for _get, _set, changed in self._bindings.values():
+            changed.connect(self._schedule_save)
+        save_row = QHBoxLayout()
+        save_row.setContentsMargins(0, 0, 0, 0)
+        save_row.setSpacing(12)
+        save_row.addWidget(reset_btn)
+        save_row.addWidget(self.autosave_status)
+        save_row.addStretch(1)
 
         params_title = QLabel(tr("params_security"))
         params_title.setObjectName("pageTitle")
@@ -1166,7 +1185,7 @@ class SettingsTab(QWidget):
             alignment=Qt.AlignmentFlag.AlignLeft,
         )
         panel_layout.addWidget(self.advanced_params_panel)
-        panel_layout.addWidget(save_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        panel_layout.addLayout(save_row)
 
         update_title = QLabel(tr("update_title"))
         update_title.setObjectName("h2")
@@ -1329,47 +1348,116 @@ class SettingsTab(QWidget):
         self.update_btn.setEnabled(True)
         self.update_download_btn.setEnabled(True)
 
-    def _save(self) -> None:
-        # 无效 URL 不落盘:否则服务每次解锁都会因来源无法解析而失败
-        if _resolve_camera_source(self, {
-            "camera_url": self.camera_url_edit.text(),
-            "camera_url_username": self.camera_user_edit.text(),
-        }) is None:
+    def _setting_bindings(self) -> dict:
+        """自动保存与恢复默认值共用的控件绑定。"""
+        def spin(w):
+            return (w.value, w.setValue, w.valueChanged)
+
+        def check(w):
+            return (w.isChecked, w.setChecked, w.toggled)
+
+        def line(w, *, strip=False):
+            getter = (lambda: w.text().strip()) if strip else w.text
+            return (getter, w.setText, w.editingFinished)
+
+        return {
+            "liveness_enabled": check(self.liveness_check),
+            "antispoof_enabled": check(self.antispoof_check),
+            "multi_face_protection_enabled": check(self.multi_face_check),
+            "match_threshold": spin(self.match_spin),
+            "match_margin": spin(self.margin_spin),
+            "yaw_threshold_deg": spin(self.yaw_spin),
+            "required_blinks": spin(self.blink_spin),
+            "renew_days": spin(self.renewal_spin),
+            "enroll_samples": spin(self.samples_spin),
+            "max_templates_per_name": spin(self.max_templates_spin),
+            "lockout_max_fails": spin(self.lockout_fails_spin),
+            "lockout_seconds": spin(self.lockout_secs_spin),
+            "camera_index": spin(self.camera_spin),
+            "camera_url": line(self.camera_url_edit, strip=True),
+            "camera_url_username": line(self.camera_user_edit, strip=True),
+            "camera_url_password": line(self.camera_pass_edit),
+            "unlock_start_mode": (
+                self.unlock_start_combo.currentData,
+                lambda mode: self.unlock_start_combo.setCurrentIndex(
+                    self.unlock_start_combo.findData(mode)
+                ),
+                self.unlock_start_combo.currentIndexChanged,
+            ),
+            "face_unlock_enabled": check(self.face_unlock_check),
+            "face_unlock_logon_enabled": check(self.face_unlock_logon_check),
+            "face_unlock_workstation_enabled": check(self.face_unlock_workstation_check),
+        }
+
+    def _schedule_save(self, *_args) -> None:
+        self._pending_settings = self._read_settings()
+        self.autosave_status.setText(tr("settings_save_pending"))
+        self._autosave_timer.start()
+
+    def _save_pending_settings(self) -> None:
+        self._save(self._pending_settings)
+
+    def _read_settings(self) -> dict:
+        values = {key: get() for key, (get, _set, _changed) in self._bindings.items()}
+        values["unlock_hotkey"] = self.unlock_hotkey
+        return values
+
+    def _save(self, values: dict | None = None) -> bool:
+        self._autosave_timer.stop()
+        if values is None:
+            values = self._read_settings()
+        changed = {key: value for key, value in values.items() if value != self._saved_settings[key]}
+        if not changed and not self._mirrors_pending:
+            if self.autosave_status.text() != tr("settings_autosaved"):
+                self.autosave_status.setText(tr("settings_autosave_hint"))
+            return True
+        # 串流地址无效时保留上一份配置，且不在自动保存时弹窗。
+        try:
+            camera_source(values)
+        except CameraSourceError:
+            self.autosave_status.setText(tr("camera_url_invalid"))
+            return False
+        if changed:
+            previous = self.store.get_settings()
+            self.store.update_settings(**changed)
+            try:
+                self.store.save()
+            except Exception:  # noqa: BLE001 文件或 DPAPI 出错时恢复共享 FaceStore 中的设置
+                self.store.update_settings(**{key: previous[key] for key in changed})
+                self.autosave_status.setText(tr("settings_save_failed"))
+                return False
+            self._saved_settings = values
+            self._mirrors_pending |= bool(changed.keys() & {
+                "unlock_hotkey", "unlock_start_mode", "face_unlock_enabled",
+                "face_unlock_logon_enabled", "face_unlock_workstation_enabled",
+            })
+        if self._mirrors_pending:
+            synced = (
+                save_hotkey_mirror(values["unlock_hotkey"]),
+                save_unlock_start_mode_mirror(values["unlock_start_mode"]),
+                save_auth_scope_mirror(
+                    values["face_unlock_enabled"],
+                    values["face_unlock_logon_enabled"],
+                    values["face_unlock_workstation_enabled"],
+                ),
+            )
+            if not all(synced):
+                self.autosave_status.setText(tr("unlock_start_sync_failed"))
+                return False
+            self._mirrors_pending = False
+        self.autosave_status.setText(tr("settings_autosaved"))
+        return True
+
+    def _reset_settings(self) -> None:
+        """确认后把本页所有设置恢复为 config.DEFAULTS 并立即保存;不动人脸库与 LSA 密码。"""
+        answer = QMessageBox.question(self, tr("reset_settings"), tr("reset_settings_confirm"))
+        if answer != QMessageBox.StandardButton.Yes:
             return
-        self.store.update_settings(
-            liveness_enabled=self.liveness_check.isChecked(),
-            antispoof_enabled=self.antispoof_check.isChecked(),
-            multi_face_protection_enabled=self.multi_face_check.isChecked(),
-            match_threshold=self.match_spin.value(),
-            match_margin=self.margin_spin.value(),
-            yaw_threshold_deg=self.yaw_spin.value(),
-            required_blinks=self.blink_spin.value(),
-            renew_days=self.renewal_spin.value(),
-            enroll_samples=self.samples_spin.value(),
-            max_templates_per_name=self.max_templates_spin.value(),
-            lockout_max_fails=self.lockout_fails_spin.value(),
-            lockout_seconds=self.lockout_secs_spin.value(),
-            camera_index=self.camera_spin.value(),
-            camera_url=self.camera_url_edit.text().strip(),
-            unlock_hotkey=self.unlock_hotkey,
-            unlock_start_mode=self.unlock_start_combo.currentData(),
-            camera_url_username=self.camera_user_edit.text().strip(),
-            camera_url_password=self.camera_pass_edit.text(),
-            face_unlock_enabled=self.face_unlock_check.isChecked(),
-            face_unlock_logon_enabled=self.face_unlock_logon_check.isChecked(),
-            face_unlock_workstation_enabled=self.face_unlock_workstation_check.isChecked(),
-        )
-        self.store.save()
-        save_hotkey_mirror(self.unlock_hotkey)
-        save_auth_scope_mirror(
-            self.face_unlock_check.isChecked(),
-            self.face_unlock_logon_check.isChecked(),
-            self.face_unlock_workstation_check.isChecked(),
-        )
-        if not save_unlock_start_mode_mirror(self.unlock_start_combo.currentData()):
-            QMessageBox.warning(self, tr("settings_saved"), tr("unlock_start_sync_failed"))
-            return
-        QMessageBox.information(self, tr("saved_title"), tr("settings_saved"))
+        for key, (_get, set_value, _changed) in self._bindings.items():
+            set_value(config.DEFAULTS[key])
+        self.unlock_hotkey = config.DEFAULTS["unlock_hotkey"]
+        self.hotkey_value.setText(_hotkey_text(self.unlock_hotkey))
+        self._save()
 
     def _update_hotkey_controls(self) -> None:
         manual = self.unlock_start_combo.currentData() == "manual"
@@ -1381,10 +1469,12 @@ class SettingsTab(QWidget):
         if dlg.exec() == QDialog.Accepted:
             self.unlock_hotkey = dlg.value
             self.hotkey_value.setText(_hotkey_text(self.unlock_hotkey))
+            self._schedule_save()
 
     def _clear_hotkey(self) -> None:
         self.unlock_hotkey = ""
         self.hotkey_value.setText(_hotkey_text(self.unlock_hotkey))
+        self._schedule_save()
 
     def _sync_camera_url_echo(self, text: str) -> None:
         mode = (QLineEdit.Password if _url_may_contain_secret(text)
@@ -2076,6 +2166,15 @@ class MainWindow(QWidget):
         if self._close_ready:
             super().closeEvent(event)
             return
+        if not self._closing and not self.settings_tab._save():
+            answer = QMessageBox.question(
+                self, tr("confirm_title"), tr("settings_close_unsaved"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
         workers = self._active_workers()
         if not workers:
             super().closeEvent(event)

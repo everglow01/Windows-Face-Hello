@@ -97,7 +97,13 @@ _CATALOG: dict[str, dict[str, str]] = {
         "select_template": "请先选中一条模板",
         "liveness_check": "启用活体检测(关闭=直接识别,牺牲防照片能力)",
         "antispoof_check": "启用被动反欺骗(防屏幕翻拍/视频回放)",
-        "save_settings": "保存设置",
+        "reset_settings": "重置为初始设置",
+        "reset_settings_confirm": "把本页所有设置恢复为初始值?\n\n已录入的人脸和登录密码不受影响。",
+        "settings_autosave_hint": "修改会自动保存",
+        "settings_autosaved": "已自动保存",
+        "settings_save_pending": "正在等待保存…",
+        "settings_save_failed": "无法保存设置。请检查写入权限后重试。",
+        "settings_close_unsaved": "有设置未能保存或同步到锁屏。仍要退出吗？",
         "match_threshold_label": "匹配阈值(越高越严):",
         "grp_camera": "摄像头",
         "grp_recognition": "识别",
@@ -142,7 +148,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         "unlock_start_manual": "手动（箭头或指定热键）",
         "unlock_start_signin": "进入登录界面后自动开始（默认）",
         "unlock_start_mode_help": "用任意按键或鼠标点击退下锁屏封面后，自动开始一次刷脸。也可手动按箭头重试。",
-        "unlock_start_sync_failed": "设置已保存，但无法更新锁屏启动方式。请用管理员 PowerShell 打开管理台后重新保存。",
+        "unlock_start_sync_failed": "设置已保存，但无法同步锁屏配置。请以管理员身份打开管理台后重试。",
         "face_unlock_enabled": "启用刷脸解锁",
         "face_unlock_scope_label": "启用范围:",
         "face_unlock_logon": "Windows 登录（开机/注销）",
@@ -168,7 +174,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         "enrolled_users_empty": "尚未录入用户。完成首次录入后，可在此管理用户和模板。",
         "params_security": "设置与安全",
         "settings_common_title": "日常设置与保护",
-        "settings_common_help": "选择摄像头、刷脸启动热键和解锁保护。修改后请保存设置。",
+        "settings_common_help": "选择摄像头、刷脸启动热键和解锁保护。修改会自动保存。",
         "advanced_params_show": "展开高级参数",
         "advanced_params_hide": "收起高级参数",
         "advanced_params_help": "以下参数会影响识别严格度、活体挑战、失败锁定和录入模板。建议仅在测试或标定后调整。",
@@ -178,8 +184,6 @@ _CATALOG: dict[str, dict[str, str]] = {
         "renewal_overdue_days": "已超过 {days} 天",
         "confirm_title": "确认",
         "delete_user_q": "删除用户「{name}」?",
-        "saved_title": "已保存",
-        "settings_saved": "设置已保存(语言更改将在重启控制台后生效)",
         # --- GUI:服务与凭据页 ---
         "tab_service": "服务与诊断",
         "tab_service_tooltip": "服务、凭据与诊断",
@@ -443,7 +447,13 @@ _CATALOG: dict[str, dict[str, str]] = {
         "select_template": "Select a template first",
         "liveness_check": "Enable liveness (off = recognize directly, weaker photo resistance)",
         "antispoof_check": "Enable passive anti-spoofing (screen/replay)",
-        "save_settings": "Save settings",
+        "reset_settings": "Reset to defaults",
+        "reset_settings_confirm": "Restore every setting on this page to its default value?\n\nEnrolled faces and the sign-in password are not affected.",
+        "settings_autosave_hint": "Changes are saved automatically",
+        "settings_autosaved": "Saved automatically",
+        "settings_save_pending": "Waiting to save…",
+        "settings_save_failed": "Couldn't save settings. Check write permissions and try again.",
+        "settings_close_unsaved": "Some changes couldn't be saved or applied to the lock screen. Close anyway?",
         "match_threshold_label": "Match threshold (higher = stricter):",
         "grp_camera": "Camera",
         "grp_recognition": "Recognition",
@@ -488,7 +498,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         "unlock_start_manual": "Manually (arrow or configured hotkey)",
         "unlock_start_signin": "Automatically on the sign-in screen (default)",
         "unlock_start_mode_help": "Dismiss the lock screen with any key or a mouse click to start one scan. Use the arrow to retry.",
-        "unlock_start_sync_failed": "Settings were saved, but the lock-screen start mode could not be updated. Open the console from an administrator PowerShell and save again.",
+        "unlock_start_sync_failed": "Settings were saved, but the lock-screen settings couldn't be applied. Run the console as administrator and try again.",
         "face_unlock_enabled": "Enable face unlock",
         "face_unlock_scope_label": "Enabled for:",
         "face_unlock_logon": "Windows sign-in (startup/sign-out)",
@@ -514,7 +524,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         "enrolled_users_empty": "No users enrolled yet. Complete an enrollment to manage users and templates here.",
         "params_security": "Settings & security",
         "settings_common_title": "Everyday settings & protection",
-        "settings_common_help": "Choose the camera, face unlock hotkey, and unlock protections. Save settings after making changes.",
+        "settings_common_help": "Choose the camera, face unlock hotkey, and unlock protections. Changes are saved automatically.",
         "advanced_params_show": "Show advanced parameters",
         "advanced_params_hide": "Hide advanced parameters",
         "advanced_params_help": "These parameters affect recognition strictness, liveness challenges, failure lockout, and enrollment templates. Adjust them only after testing or calibration.",
@@ -524,8 +534,6 @@ _CATALOG: dict[str, dict[str, str]] = {
         "renewal_overdue_days": "{days} days past suggestion",
         "confirm_title": "Confirm",
         "delete_user_q": "Delete user “{name}”?",
-        "saved_title": "Saved",
-        "settings_saved": "Settings saved (language change takes effect after restarting the console)",
         # --- GUI: service & credentials tab ---
         "tab_service": "Service & diagnostics",
         "tab_service_tooltip": "Service, credentials & diagnostics",
@@ -750,11 +758,11 @@ def save_lang_mirror(lang: str) -> None:
     _save_mirror(config.LANG_FILE, lang if lang in _CATALOG else DEFAULT_LANG)
 
 
-def save_hotkey_mirror(hotkey: str) -> None:
+def save_hotkey_mirror(hotkey: str) -> bool:
     from . import config
 
     text = str(hotkey or "").strip().upper()
-    _save_mirror(config.HOTKEY_FILE, text)
+    return _save_mirror(config.HOTKEY_FILE, text)
 
 
 def save_unlock_start_mode_mirror(mode: str) -> bool:
@@ -763,7 +771,7 @@ def save_unlock_start_mode_mirror(mode: str) -> bool:
     return _save_mirror(config.UNLOCK_START_MODE_FILE, "signin" if mode == "signin" else "manual")
 
 
-def save_auth_scope_mirror(enabled: bool, logon: bool, workstation: bool) -> None:
+def save_auth_scope_mirror(enabled: bool, logon: bool, workstation: bool) -> bool:
     """写 CP 场景位掩码:bit 0=Windows 登录,bit 1=工作站解锁。"""
     from . import config
 
@@ -772,4 +780,4 @@ def save_auth_scope_mirror(enabled: bool, logon: bool, workstation: bool) -> Non
         mask |= 1
     if enabled and workstation:
         mask |= 2
-    _save_mirror(config.AUTH_SCOPE_FILE, str(mask))
+    return _save_mirror(config.AUTH_SCOPE_FILE, str(mask))
