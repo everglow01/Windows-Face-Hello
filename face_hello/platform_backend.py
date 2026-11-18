@@ -51,14 +51,25 @@ def unprotect(blob: bytes) -> bytes:
 
 
 # ---- 摄像头后端 ----
-def open_capture(index: int):
+# 网络串流的连线/读帧超时。手机端 App 释放相机后再被连线时,冷启动实测约 2~3s。
+STREAM_TIMEOUT_MS = 5000
+
+
+def open_capture(index: int | str):
     """按平台选 OpenCV 后端打开摄像头,返回 `cv2.VideoCapture`。
 
-    Windows 固定 DSHOW(MSMF 在设备不可用时会 C++ 层阻塞数十分钟,Python 超时打不断,
-    详见 camera.py)。其余平台用默认后端(Linux=V4L2 / macOS=AVFoundation)。
+    字符串视为网络串流 URL(HTTP MJPEG / RTSP),用 FFmpeg 并设连线与读帧超时,
+    避免手机离线时无限阻塞;与 LocalSystem 服务搭配时不依赖任何用户会话里的虚拟摄像头。
+    整数为本机摄像头:Windows 固定 DSHOW(MSMF 在设备不可用时会 C++ 层阻塞数十分钟,
+    Python 超时打不断,详见 camera.py)。其余平台用默认后端(Linux=V4L2 / macOS=AVFoundation)。
     """
     import cv2
 
+    if isinstance(index, str):
+        return cv2.VideoCapture(index, cv2.CAP_FFMPEG, [
+            cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, STREAM_TIMEOUT_MS,
+            cv2.CAP_PROP_READ_TIMEOUT_MSEC, STREAM_TIMEOUT_MS,
+        ])
     if IS_WINDOWS:
         return cv2.VideoCapture(index, cv2.CAP_DSHOW)
     return cv2.VideoCapture(index)

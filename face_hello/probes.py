@@ -109,14 +109,23 @@ def load_models() -> tuple[float, bool]:
     return time.perf_counter() - started, get_antispoof() is not None
 
 
-def configured_camera_index() -> int:
+def configured_camera_index() -> int | str:
+    """设置里实际使用的摄像头来源:`camera_url` 非空时为 URL,否则为 `camera_index`。
+
+    人脸库读不到时沿用默认 index 0(认证同样读不到,库检查会单独报错);但填了 `camera_url`
+    却无法解析时**直接抛** `CameraSourceError`,不能静默改测 USB 摄像头 0——否则诊断显示
+    摄像头正常,真正认证却一直用坏的网络地址失败。
+    """
+    from .camera import camera_source
+
     try:
-        return int(FaceStore().load().get_settings().get("camera_index", 0))
+        settings = FaceStore().load().get_settings()
     except Exception:
         return 0
+    return camera_source(settings)
 
 
-def capture_camera_frame(index: int, timeout_s: float = 8.0):
+def capture_camera_frame(index: int | str, timeout_s: float = 8.0):
     from .camera import Camera
 
     cam = Camera(index)
