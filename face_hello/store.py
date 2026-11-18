@@ -211,7 +211,11 @@ class FaceStore:
     def get_settings(self) -> dict:
         """DEFAULTS 叠加已持久化的覆盖项。"""
         merged = dict(config.DEFAULTS)
-        merged.update(self._data.get("settings", {}))
+        saved = self._data.get("settings", {})
+        merged.update(saved)
+        # 旧版用非空串流地址表示选择了网络摄像头。
+        if "camera_source_mode" not in saved and str(merged["camera_url"]).strip():
+            merged["camera_source_mode"] = "stream"
         return merged
 
     def update_settings(self, **kw) -> None:

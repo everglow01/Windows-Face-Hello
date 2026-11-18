@@ -44,7 +44,7 @@ def _saved(tab) -> dict:
 def test_change_is_saved_automatically_after_debounce(tab):
     tab.lockout_fails_spin.setValue(9)
     tab.liveness_check.setChecked(False)
-    tab.unlock_start_combo.setCurrentIndex(tab.unlock_start_combo.findData("manual"))
+    tab.start_mode.buttons["manual"].click()
     assert tab._autosave_timer.isActive()  # 连续修改只排程一次写盘
     assert not tab.store.path.exists()
 
@@ -81,7 +81,7 @@ def test_save_failure_is_reported_inline(tab, monkeypatch):
 
 
 def test_failed_mirror_sync_keeps_saved_settings_and_retries(tab, monkeypatch):
-    tab.unlock_start_combo.setCurrentIndex(tab.unlock_start_combo.findData("manual"))
+    tab.start_mode.buttons["manual"].click()
     with monkeypatch.context() as failing:
         failing.setattr(main, "save_unlock_start_mode_mirror", lambda _mode: False)
         assert not tab._save()
@@ -94,11 +94,14 @@ def test_failed_mirror_sync_keeps_saved_settings_and_retries(tab, monkeypatch):
 
 
 def test_pending_autosave_does_not_capture_unfinished_stream_edit(tab):
+    tab.camera_mode.buttons["stream"].click()
+    tab.camera_url_edit.setText("rtsp://old.invalid/stream")
+    assert tab._save()
     tab.lockout_fails_spin.setValue(9)
     tab.camera_url_edit.setText("rtsp://camera.invalid/stream")
     tab._autosave_timer.timeout.emit()
     assert _saved(tab)["lockout_max_fails"] == 9
-    assert _saved(tab)["camera_url"] == ""
+    assert _saved(tab)["camera_url"] == "rtsp://old.invalid/stream"
 
     tab.camera_url_edit.editingFinished.emit()
     tab._autosave_timer.timeout.emit()
@@ -112,6 +115,7 @@ def test_close_flushes_pending_settings_or_confirms_discard(tab, monkeypatch, ur
     window._close_ready = window._closing = False
     window._active_workers = lambda: []
     window.settings_tab = tab
+    tab.camera_mode.buttons["stream"].click()
     tab.lockout_fails_spin.setValue(9)
     tab.camera_url_edit.setText(url)
     assert tab._autosave_timer.isActive()
@@ -138,8 +142,9 @@ def test_close_flushes_pending_settings_or_confirms_discard(tab, monkeypatch, ur
 def test_reset_restores_defaults_and_saves(tab, monkeypatch):
     tab.lockout_fails_spin.setValue(9)
     tab.face_unlock_check.setChecked(False)
-    tab.unlock_start_combo.setCurrentIndex(tab.unlock_start_combo.findData("manual"))
+    tab.start_mode.buttons["manual"].click()
     tab.camera_url_edit.setText("rtsp://camera.invalid/stream")
+    tab.camera_mode.buttons["stream"].click()
     tab.camera_user_edit.setText("test-user")
     tab.camera_pass_edit.setText("test-password")
     tab.unlock_hotkey = "SPACE"
@@ -168,3 +173,24 @@ def test_reset_cancelled_keeps_settings(tab, monkeypatch):
     tab._reset_settings()
 
     assert _saved(tab)["lockout_max_fails"] == 9
+
+def test_switch_camera_source_preserves_stream_and_uses_selected_device(tab):
+    tab.camera_mode.buttons["stream"].click()
+    assert not tab._save()  # Never substitute the local camera for an empty stream.
+    tab.camera_url_edit.setText("rtsp://camera.invalid/live")
+    tab.camera_user_edit.setText("alex")
+    tab.camera_pass_edit.setText("test")
+    assert tab._save()
+    assert main.camera_source(_saved(tab)) == "rtsp://alex:test@camera.invalid/live"
+    tab.camera_mode.buttons["local"].click()
+    tab.camera_spin.setValue(2)
+    assert tab._save()
+    saved = _saved(tab)
+    assert main.camera_source(saved) == 2
+    assert saved["camera_url"] == "rtsp://camera.invalid/live"
+    reopened = main.SettingsTab(FaceStore(tab.store.path).load())
+    assert reopened.camera_mode.value() == "local"
+    reopened.camera_mode.buttons["stream"].click()
+    assert main.camera_source(reopened._read_settings()) == "rtsp://alex:test@camera.invalid/live"
+    reopened._autosave_timer.stop()
+    reopened.deleteLater()

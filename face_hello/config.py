@@ -105,10 +105,11 @@ DEFAULTS = {
     # 录入
     "enroll_samples": 8,        # 录入采集合格帧数
     "max_templates_per_name": 5,  # 每个用户最多存几条模板(补录角度),超出按 FIFO 丢最早
+    "camera_source_mode": "local",  # local 或 stream。切回本机时保留串流配置。
     # 摄像头索引(0=默认/第一个)。多摄像头(内置+USB+虚拟)时改这里;控制台「测试」按钮可预览确认。
     "camera_index": 0,
     # 网络串流摄像头 URL(如手机 IP Webcam 的 http://user:pass@192.168.x.x:8080/video)。
-    # 非空时取代 camera_index;服务以 LocalSystem 直接拉流,锁屏时不依赖用户会话里的虚拟摄像头。
+    # 选择串流时取代 camera_index;服务以 LocalSystem 直接拉流,锁屏时不依赖用户会话里的虚拟摄像头。
     "camera_url": "",
     # 串流的 HTTP/RTSP 认证(选填)。与 camera_url 分开存,由 camera_source() 百分号编码后拼进 URL;
     # 设置随人脸库一起经 DPAPI 加密落盘。URL 本身已带 user:pass@ 时以 URL 为准。

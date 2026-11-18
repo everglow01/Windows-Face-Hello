@@ -72,6 +72,7 @@ def test_settings_camera_test_and_save_reject_invalid_url(qapp, tmp_path, monkey
     _fail_if_worker_created(monkeypatch)
     store = make_store(tmp_path)
     tab = app_main.SettingsTab(store)
+    tab.camera_mode.buttons["stream"].click()
     tab.camera_url_edit.setText(_BAD_URL)
     tab.camera_user_edit.setText("me")
 
@@ -103,6 +104,7 @@ def test_settings_url_echo_follows_content(qapp, tmp_path):
 def test_settings_url_with_saved_credentials_starts_masked(qapp, tmp_path):
     store = make_store(tmp_path, camera_url="http://user:secret@10.0.0.5/video")
     tab = app_main.SettingsTab(store)
+    assert tab.camera_mode.value() == "stream"
     assert tab.camera_url_edit.echoMode() == QLineEdit.Password
 
 
@@ -114,6 +116,7 @@ def test_settings_url_with_saved_credentials_starts_masked(qapp, tmp_path):
 def test_settings_url_typing_preserves_text_and_masks_secrets(qapp, tmp_path, url):
     tab = app_main.SettingsTab(make_store(tmp_path))
     tab.show()
+    tab.camera_mode.buttons["stream"].click()
     edit = tab.camera_url_edit
     try:
         edit.setFocus()
@@ -121,7 +124,7 @@ def test_settings_url_typing_preserves_text_and_masks_secrets(qapp, tmp_path, ur
         QTest.keyClicks(edit, url)
         assert edit.text() == url
 
-        tab.camera_spin.setFocus()
+        tab.camera_user_edit.setFocus()
         qapp.processEvents()
         assert edit.text() == url
         assert "FAKE_" not in edit.displayText()
@@ -139,3 +142,29 @@ def test_settings_url_typing_preserves_text_and_masks_secrets(qapp, tmp_path, ur
     finally:
         tab.close()
         tab.deleteLater()
+
+
+def test_enroll_actions_follow_account_and_capture_state(qapp, tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    tab = app_main.EnrollTab(object(), store)
+    monkeypatch.setattr(app_main.EnrollWorker, "start", lambda self: None)
+    monkeypatch.setattr(app_main.TemplateLabelDialog, "prompt", lambda *_args: "")
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
+    tab.name_edit.setText("example")
+    assert tab.append_btn.isHidden() and tab.del_btn.isHidden()
+    tab.start_btn.click()
+    assert tab.name_edit.isReadOnly()
+    assert tab.preview.currentWidget() is tab.preview.live
+    tab.worker.finished_ok.emit(unit_vec(1.0))
+    assert not tab.name_edit.isReadOnly() and not tab.append_btn.isHidden()
+    assert tab.start_btn.text() == app_main.tr("replace_enroll")
+    assert tab.preview.currentWidget() is not tab.preview.live
+    tab.append_btn.click()
+    tab.worker.finished_ok.emit(unit_vec(1.0))
+    assert len(store.list_profiles()) == 2
+    tab.name_edit.setText("another")
+    assert tab.append_btn.isHidden()
+    assert tab.start_btn.text() == app_main.tr("start_enroll")
+    tab.start_btn.click()
+    tab.worker.failed.emit("camera unavailable")
+    assert not tab.name_edit.isReadOnly() and tab.start_btn.isEnabled()

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from collections import deque
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
-from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy, QWidget
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtWidgets import (
+    QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+    QStackedWidget, QVBoxLayout, QWidget,
+)
 
 from face_hello.i18n import tr
 from app.theme import (
@@ -22,6 +25,148 @@ from app.theme import (
 )
 
 PREVIEW_W, PREVIEW_H = 560, 420
+
+
+def page_label(key: str, role: str = "hint") -> QLabel:
+    label = QLabel(tr(key))
+    label.setObjectName(role)
+    label.setWordWrap(True)
+    return label
+
+
+def divider() -> QFrame:
+    rule = QFrame()
+    rule.setObjectName("pageDivider")
+    rule.setFixedHeight(1)
+    return rule
+
+
+def console_icon(name: str, color: str = TEXT_SECONDARY, size: int = 20) -> QIcon:
+    """Small line icons shared by the sidebar and the enrollment controls."""
+    pix = QPixmap(size * 3, size * 3)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.scale(pix.width() / 24, pix.height() / 24)
+    p.setPen(QPen(QColor(color), 1.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+
+    def stroke(*points):
+        path = QPainterPath(QPointF(*points[0]))
+        for point in points[1:]:
+            path.lineTo(QPointF(*point))
+        p.drawPath(path)
+
+    if name == "face":
+        for x, y, dx, dy in ((3, 3, 1, 1), (21, 3, -1, 1),
+                             (3, 21, 1, -1), (21, 21, -1, -1)):
+            stroke((x, y + 5 * dy), (x, y), (x + 5 * dx, y))
+        stroke((8, 9), (8, 10))
+        stroke((16, 9), (16, 10))
+        path = QPainterPath(QPointF(8, 14))
+        path.cubicTo(10, 17, 14, 17, 16, 14)
+        p.drawPath(path)
+    elif name == "camera":
+        p.drawRoundedRect(QRectF(2.5, 6.5, 19, 13.5), 3, 3)
+        stroke((7, 6.5), (9, 4), (15, 4), (17, 6.5))
+        p.drawEllipse(QRectF(8.5, 9.5, 7, 7))
+    elif name == "test":
+        p.drawEllipse(QRectF(3, 3, 18, 18))
+        stroke((10, 8), (16, 12), (10, 16), (10, 8))
+    elif name == "service":
+        p.drawRoundedRect(QRectF(2.5, 4, 19, 16), 3, 3)
+        stroke((5, 12), (8, 12), (10, 8), (13, 16), (15, 12), (19, 12))
+    elif name == "settings":
+        for y, x in ((6, 8), (12, 16), (18, 10)):
+            stroke((3, y), (x - 2, y))
+            stroke((x + 2, y), (21, y))
+            p.drawEllipse(QRectF(x - 2, y - 2, 4, 4))
+    p.end()
+    pix.setDevicePixelRatio(3)
+    return QIcon(pix)
+
+
+class ModeSelector(QWidget):
+    """Mutually exclusive buttons backed by stable settings values."""
+    changed = Signal(str)
+
+    def __init__(self, choices, selected):
+        super().__init__()
+        self.buttons = {}
+        group = QButtonGroup(self)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(5)
+        for value, key in choices:
+            button = QPushButton(tr(key))
+            button.setObjectName("modeChoice")
+            button.setCheckable(True)
+            button.setProperty("mode", value)
+            group.addButton(button)
+            self.buttons[value] = button
+            layout.addWidget(button)
+        layout.addStretch()
+        self.group = group
+        self.set_value(selected)
+        group.buttonToggled.connect(self._on_toggled)
+
+    def _on_toggled(self, button, checked):
+        if checked:
+            self.changed.emit(button.property("mode"))
+
+    def value(self):
+        return self.group.checkedButton().property("mode")
+
+    def set_value(self, value):
+        self.buttons.get(value, next(iter(self.buttons.values()))).setChecked(True)
+
+
+class _Viewfinder(QFrame):
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor("#bdae9b"), 1.2))
+        bounds = self.rect().adjusted(self.width() // 6, 61, -self.width() // 6, -41)
+        for point, dx, dy in ((bounds.topLeft(), 1, 1), (bounds.topRight(), -1, 1),
+                              (bounds.bottomLeft(), 1, -1), (bounds.bottomRight(), -1, -1)):
+            corner = QPointF(point)
+            painter.drawLine(corner, corner + QPointF(dx * 16, 0))
+            painter.drawLine(corner, corner + QPointF(0, dy * 16))
+        painter.end()
+
+
+class EnrollmentPreview(QStackedWidget):
+    def __init__(self):
+        super().__init__()
+        self.setFixedHeight(322)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        idle = _Viewfinder()
+        idle.setObjectName("cameraIdle")
+        layout = QVBoxLayout(idle)
+        layout.setContentsMargins(16, 12, 16, 16)
+        layout.addWidget(page_label("camera_preview", "cameraCaption"))
+        layout.addStretch()
+        mark = QLabel()
+        mark.setPixmap(console_icon("face", "#9c8b76", 48).pixmap(48, 48))
+        layout.addWidget(mark, 0, Qt.AlignCenter)
+        for key, role in (("camera_off", "previewTitle"), ("camera_idle_help", "hint")):
+            label = page_label(key, role)
+            label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(label)
+        layout.addStretch()
+        self.addWidget(idle)
+        self.live = QLabel()
+        self.live.setObjectName("cameraLive")
+        self.live.setAlignment(Qt.AlignCenter)
+        self.live.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.addWidget(self.live)
+
+    def set_running(self, running: bool) -> None:
+        self.live.clear()
+        self.setCurrentWidget(self.live if running else self.widget(0))
+
+    def show_frame(self, image: QImage) -> None:
+        show_frame(self.live, image)
 
 
 class PreviewLabel(QLabel):

@@ -31,14 +31,15 @@ class CameraSourceError(ValueError):
 
 
 def camera_source(settings: dict) -> CameraSource:
-    """settings 里填了 `camera_url` 就用网络串流,否则用 `camera_index` 的本机摄像头。
+    """按所选来源解析摄像头。旧版设置由串流地址是否为空决定来源。
 
     填了 `camera_url_username` 时,把账号密码百分号编码后拼进 URL(密码含 @ : / # 等也安全);
     URL 本身已带 user:pass@ 则原样使用。URL 无法解析时抛 `CameraSourceError`(不含 URL),
     绝不静默回退到本机摄像头。
     """
     url = str(settings.get("camera_url", "") or "").strip()
-    if not url:
+    mode = settings.get("camera_source_mode")
+    if mode == "local" or (not url and mode != "stream"):
         return int(settings.get("camera_index", 0))
     parts = _parse_stream_url(url)
     user = str(settings.get("camera_url_username", "") or "")

@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QSize, QTimer, QUrl, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, QSize, QTimer, QUrl, Qt
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -19,7 +19,7 @@ from PySide6.QtGui import (
     QPainter,
     QPen,
     QPixmap,
-    QPolygon,
+    QPainterPath,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -74,6 +74,11 @@ from app.widgets import (
     PREVIEW_H,
     PREVIEW_W,
     CaptionButton,
+    EnrollmentPreview,
+    ModeSelector,
+    console_icon,
+    divider,
+    page_label,
     ResizeHandle,
     SimilarityHistogram,
     preview_label as _preview_label,
@@ -175,30 +180,28 @@ QLineEdit, QSpinBox, QDoubleSpinBox {
     padding: 6px 8px;
 }
 
-/* 自定义边框后必须显式给上下按钮几何,否则点击区域塌陷、点上三角会落到输入框上 */
-QSpinBox, QDoubleSpinBox { padding-right: 22px; }
+QSpinBox, QDoubleSpinBox { padding: 0px 2px 0px 8px; min-height: 32px; }
+QSpinBox::up-button, QDoubleSpinBox::up-button,
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border; width: 26px; height: 16px; margin-right: 1px;
+    border: none; border-left: 1px solid #e7e0d6; background: #f5f2ec;
+}
 QSpinBox::up-button, QDoubleSpinBox::up-button {
-    subcontrol-origin: border;
-    subcontrol-position: top right;
-    width: 20px;
-    border-left: 1px solid __BORDER_CONTROL__;
-    border-top-right-radius: __RADIUS_CONTROL__;
-    background: __SURFACE_CONTROL__;
+    subcontrol-position: top right; margin-top: 1px; border-top-right-radius: 5px;
 }
 QSpinBox::down-button, QDoubleSpinBox::down-button {
-    subcontrol-origin: border;
-    subcontrol-position: bottom right;
-    width: 20px;
-    border-left: 1px solid __BORDER_CONTROL__;
-    border-bottom-right-radius: __RADIUS_CONTROL__;
-    background: __SURFACE_CONTROL__;
+    subcontrol-position: bottom right; margin-bottom: 1px; border-bottom-right-radius: 5px;
 }
 QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
-QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover { background: __SURFACE_CONTROL_HOVER__; }
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover { background: #eee7dd; }
 QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
-QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed { background: __SURFACE_CONTROL_PRESSED__; }
-QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(__UP_ARROW__); }
-QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(__DOWN_ARROW__); }
+QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed { background: #e7d7cb; }
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow,
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { width: 12px; height: 8px; }
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url("__UP_ARROW__"); }
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url("__DOWN_ARROW__"); }
+QSpinBox::up-arrow:off, QDoubleSpinBox::up-arrow:off { image: url("__MUTED_UP_ARROW__"); }
+QSpinBox::down-arrow:off, QDoubleSpinBox::down-arrow:off { image: url("__MUTED_DOWN_ARROW__"); }
 
 QTableWidget {
     border-radius: __RADIUS_CARD__;
@@ -229,6 +232,32 @@ QLabel#pageTitle {
     font-weight: 700;
     color: __TEXT__;
 }
+QWidget#consolePage, QWidget#consolePage QWidget { background-color: #fcfbf8; }
+QWidget#consolePage QLabel { background: transparent; }
+QWidget#consolePage QLineEdit, QWidget#consolePage QSpinBox,
+QWidget#consolePage QDoubleSpinBox { background: __SURFACE__; }
+QWidget#consolePage QPushButton { background: __SURFACE__; }
+QWidget#consolePage QPushButton:hover { background: __SURFACE_HOVER__; }
+QWidget#consolePage QPushButton:disabled { background: __SURFACE_DISABLED__; }
+QWidget#consolePage QPushButton#enrollPrimary {
+    background: #a64d31; border-color: #954429; color: #fffaf5;
+    font-weight: 600; padding: 10px 14px;
+}
+QWidget#consolePage QPushButton#enrollPrimary:hover { background: #91412a; }
+QWidget#consolePage QPushButton#enrollPrimary:focus { border: 2px solid #67301d; }
+QWidget#consolePage QPushButton#enrollPrimary:disabled { background: __ACCENT_DISABLED__; }
+QWidget#consolePage QPushButton#modeChoice:checked {
+    background: #f7e6db; color: #79371f; border-color: #b77d62; font-weight: 600;
+}
+QWidget#consolePage QFrame#pageDivider { background: #ded9cf; }
+QWidget#consolePage QFrame#cameraIdle {
+    background: #ede9df; border: 1px solid #d9d1c3; border-radius: 12px;
+}
+QWidget#consolePage QLabel#cameraLive { background: __TEXT__; }
+QLabel#consoleTitle { font-size: 30px; font-weight: 700; }
+QLabel#consoleSection { font-size: 18px; font-weight: 700; }
+QLabel#previewTitle { font-size: 16px; font-weight: 600; }
+QLabel#cameraCaption { font-size: 12px; color: __TEXT_MUTED__; }
 QLabel#sectionTitle {
     font-size: __FONT_SIZE_SECTION__;
     font-weight: 600;
@@ -249,13 +278,10 @@ QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 
 QWidget#sideBar {
     background: __SIDEBAR__;
-    border: 1px solid __BORDER_SIDEBAR__;
-    border-radius: __RADIUS_CARD__;
+    border-right: 1px solid __BORDER_SIDEBAR__;
 }
 QWidget#contentPanel {
-    background: __SURFACE__;
-    border: 1px solid __BORDER__;
-    border-radius: __RADIUS_CARD__;
+    background: #fcfbf8;
 }
 QScrollArea#pageScroll, QWidget#pageScrollViewport, QWidget#scrollContent {
     background: transparent;
@@ -364,7 +390,7 @@ QComboBox#sideCombo::down-arrow {
     height: 10px;
 }
 QWidget#titleBar {
-    background: transparent;
+    background: #fcfbf8;
 }
 QPushButton#windowButton, QPushButton#windowCloseButton {
     background: transparent;
@@ -408,20 +434,19 @@ QScrollBar::handle:vertical:hover { background: __BORDER_STRONG__; }
 """
 
 
-def _make_arrow(path: str, up: bool) -> None:
-    """画一个小三角箭头 PNG 到 path(QSS 接管 spinbox 后默认箭头不再绘制,自带一个)。"""
-    pm = QPixmap(12, 12)
+def _make_arrow(path: str, up: bool, color: str) -> None:
+    pm = QPixmap(48, 32)
     pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    p.setBrush(QColor(TEXT_MUTED))
-    p.setPen(Qt.NoPen)
-    if up:
-        tri = QPolygon([QPoint(2, 8), QPoint(10, 8), QPoint(6, 4)])
-    else:
-        tri = QPolygon([QPoint(2, 5), QPoint(10, 5), QPoint(6, 9)])
-    p.drawPolygon(tri)
-    p.end()
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.scale(4, 4)
+    painter.setPen(QPen(QColor(color), 1.45, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+    ends, center = (5.5, 2.4) if up else (2.5, 5.6)
+    stroke = QPainterPath(QPointF(2.2, ends))
+    stroke.lineTo(6, center)
+    stroke.lineTo(9.8, ends)
+    painter.drawPath(stroke)
+    painter.end()
     pm.save(path, "PNG")
 
 
@@ -463,8 +488,12 @@ def _themed_qss() -> str:
     down = os.path.join(tmp, "facehello_spin_down.png").replace("\\", "/")
     combo = os.path.join(tmp, "facehello_combo_down.png").replace("\\", "/")
     check = os.path.join(tmp, "facehello_checkbox_check.png").replace("\\", "/")
-    _make_arrow(up, True)
-    _make_arrow(down, False)
+    muted_up = os.path.join(tmp, "facehello_spin_up_muted.png").replace("\\", "/")
+    muted_down = os.path.join(tmp, "facehello_spin_down_muted.png").replace("\\", "/")
+    _make_arrow(up, True, "#665b50")
+    _make_arrow(down, False, "#665b50")
+    _make_arrow(muted_up, True, "#b2a89c")
+    _make_arrow(muted_down, False, "#b2a89c")
     _make_combo_arrow(combo)
     _make_checkbox_check(check)
     qss = FLUENT_QSS
@@ -474,6 +503,8 @@ def _themed_qss() -> str:
         qss
         .replace("__UP_ARROW__", up)
         .replace("__DOWN_ARROW__", down)
+        .replace("__MUTED_UP_ARROW__", muted_up)
+        .replace("__MUTED_DOWN_ARROW__", muted_down)
         .replace("__COMBO_ARROW__", combo)
         .replace("__CHECKBOX_CHECK__", check)
     )
@@ -508,7 +539,8 @@ def _scrollable_page(content: QWidget) -> QScrollArea:
     scroll = QScrollArea()
     scroll.setObjectName("pageScroll")
     scroll.viewport().setObjectName("pageScrollViewport")
-    content.setObjectName("scrollContent")
+    if not content.objectName():
+        content.setObjectName("scrollContent")
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QFrame.Shape.NoFrame)
     scroll.setWidget(content)
@@ -536,13 +568,13 @@ class EnrollTab(QWidget):
         # 预填当前 Windows 账户名:档案名必须等于该账户名,锁屏刷脸才能对上 LSA 密码 + KERB
         self.name_edit.setText(cred_vault.current_user())
         self.name_edit.setPlaceholderText(tr("win_account_name"))
+        self.name_edit.setAccessibleName(tr("win_account_name"))
         self.start_btn = QPushButton(tr("start_enroll"))
-        self.start_btn.setObjectName("accent")
         self.start_btn.clicked.connect(lambda: self._begin(append=False))
         self.append_btn = QPushButton(tr("add_angle"))  # 同名追加一条模板,覆盖更多角度/光照
         self.append_btn.clicked.connect(lambda: self._begin(append=True))
-        self.preview = _preview_label()
-        self.status = QLabel(tr("enroll_hint"))
+        self.preview = EnrollmentPreview()
+        self.status = QLabel()
         self.status.setObjectName("hint")
         self.status.setWordWrap(True)
         self.progress_bar = QProgressBar()  # 只在采到合格帧时推进,给实时反馈
@@ -570,78 +602,70 @@ class EnrollTab(QWidget):
         self.manage_btn = QPushButton(tr("manage_templates"))  # 删该用户下单条补录模板
         self.manage_btn.setEnabled(False)
         self.manage_btn.clicked.connect(self._manage_templates)
-        users_title = QLabel(tr("enrolled_users"))
-        users_title.setObjectName("h2")
-
-        page_title = QLabel(tr("tab_enroll"))
-        page_title.setObjectName("pageTitle")
-        page_help = QLabel(tr("enroll_page_help"))
-        page_help.setObjectName("hint")
-        page_help.setWordWrap(True)
-        action_title = QLabel(tr("enroll_action_title"))
-        action_title.setObjectName("sectionTitle")
-        action_help = QLabel(tr("enroll_action_help"))
-        action_help.setObjectName("hint")
-        action_help.setWordWrap(True)
-
-        account_row = QHBoxLayout()
-        account_row.addWidget(QLabel(tr("username_label")))
-        account_row.addWidget(self.name_edit, 1)
-        action_row = QHBoxLayout()
-        action_row.addWidget(self.start_btn)
-        action_row.addWidget(self.append_btn)
-        action_row.addStretch(1)
-
-        del_row = QHBoxLayout()
-        del_row.addWidget(self.del_btn)
-        del_row.addWidget(self.manage_btn)
-        del_row.addStretch(1)  # 按钮不再整行宽
-
-        guide_title = QLabel(tr("enroll_guide_title"))
-        guide_title.setObjectName("h2")
-        guide_title.setStyleSheet("background:transparent;")
-        guide_body = QLabel(tr("enroll_guide_body"))
-        guide_body.setObjectName("hint")
-        guide_body.setWordWrap(True)
-        guide_body.setStyleSheet("background:transparent;")
-
-        left = QVBoxLayout()
-        left.setSpacing(10)
-        left.addWidget(action_title)
-        left.addWidget(action_help)
-        left.addLayout(account_row)
-        left.addLayout(action_row)
-        left.addWidget(self.preview)
-        left.addWidget(self.status)
-        left.addWidget(self.progress_bar)
-
-        right = QVBoxLayout()
-        right.setSpacing(10)
-        right.addWidget(users_title)
-        right.addWidget(self.table)
-        right.addWidget(self.empty_users)
-        right.addLayout(del_row)
-        right.addSpacing(14)
-        right.addWidget(guide_title)
-        right.addWidget(guide_body)
-        right.addStretch(1)
-
-        content = QHBoxLayout()
-        content.setSpacing(16)
-        content.addLayout(left)
-        content.addLayout(right, 1)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 18)
+        content = QWidget()
+        content.setObjectName("consolePage")
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(34, 10, 34, 24)
         layout.setSpacing(8)
-        layout.addWidget(page_title)
-        layout.addWidget(page_help)
-        layout.addSpacing(6)
-        layout.addStretch(1)
-        layout.addLayout(content)
-        layout.addStretch(1)
+        layout.addWidget(page_label("tab_enroll", "consoleTitle"))
+        layout.addWidget(page_label("enroll_page_help"))
+        layout.addSpacing(12)
 
+        capture = QHBoxLayout()
+        capture.setSpacing(26)
+        capture.addWidget(self.preview, 2)
+        account = QVBoxLayout()
+        account.setSpacing(8)
+        account.addWidget(page_label("enroll_action_title", "consoleSection"))
+        account.addSpacing(4)
+        account.addWidget(page_label("win_account_name"))
+        account.addWidget(self.name_edit)
+        account.addWidget(page_label("account_name_hint"))
+        account.addSpacing(6)
+        self.append_btn.setObjectName("enrollPrimary")
+        account.addWidget(self.append_btn)
+        account.addWidget(self.start_btn)
+        account.addSpacing(10)
+        account.addWidget(divider())
+        account.addWidget(page_label("enroll_lighting_hint"))
+        account.addWidget(self.status)
+        account.addWidget(self.progress_bar)
+        account.addStretch()
+        capture.addLayout(account, 1)
+        layout.addLayout(capture)
+        layout.addSpacing(15)
+        layout.addWidget(page_label("enrolled_users", "consoleSection"))
+        layout.addWidget(divider())
+        layout.addWidget(self.table)
+        layout.addWidget(self.empty_users)
+        actions = QHBoxLayout()
+        actions.addWidget(self.manage_btn)
+        actions.addWidget(self.del_btn)
+        actions.addStretch()
+        layout.addLayout(actions)
+        layout.addStretch()
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(_scrollable_page(content))
+        self.progress_bar.hide()
+        self.name_edit.textChanged.connect(self._update_enroll_actions)
         self.refresh()
+
+    def _update_enroll_actions(self) -> None:
+        existing = self.name_edit.text().strip() in self._profile_names
+        self.append_btn.setVisible(existing)
+        self.start_btn.setText(tr("replace_enroll" if existing else "start_enroll"))
+        self.start_btn.setObjectName("replaceEnroll" if existing else "enrollPrimary")
+        self.start_btn.setIcon(QIcon() if existing else console_icon("camera", ON_ACCENT, 17))
+        self.start_btn.style().unpolish(self.start_btn)
+        self.start_btn.style().polish(self.start_btn)
+
+    def _set_capturing(self, running: bool) -> None:
+        self.preview.set_running(running)
+        self.name_edit.setReadOnly(running)
+        self.start_btn.setEnabled(not running)
+        self.append_btn.setEnabled(not running)
+        self.progress_bar.setVisible(running)
 
     def _begin(self, append: bool) -> None:
         name = self.name_edit.text().strip()
@@ -654,13 +678,12 @@ class EnrollTab(QWidget):
             return
         samples = s["enroll_samples"]
         self._append = append
-        self.start_btn.setEnabled(False)
-        self.append_btn.setEnabled(False)
+        self._set_capturing(True)
         self.status.setText(tr("opening_camera"))
         self.progress_bar.setRange(0, samples)
         self.progress_bar.setValue(0)
         self.worker = EnrollWorker(self.detector, samples, camera_index=source, append=append)
-        self.worker.preview.connect(lambda img: _show_frame(self.preview, img))
+        self.worker.preview.connect(self.preview.show_frame)
         self.worker.guidance.connect(self._on_guidance)
         self.worker.finished_ok.connect(self._on_done)
         self.worker.failed.connect(self._on_fail)
@@ -680,8 +703,7 @@ class EnrollTab(QWidget):
         label = TemplateLabelDialog.prompt(self, default_label)
         self.store.add_profile(name, embedding, replace=not self._append, label=label or "")
         self.store.save()
-        self.start_btn.setEnabled(True)
-        self.append_btn.setEnabled(True)
+        self._set_capturing(False)
         self.refresh()  # 录入完即时刷新本页用户表
         if self._append:
             n = sum(1 for p in self.store.list_profiles() if p.name == name)
@@ -692,8 +714,7 @@ class EnrollTab(QWidget):
 
     def _on_fail(self, msg: str) -> None:
         self.status.setText(tr("failed_fmt", msg=msg))
-        self.start_btn.setEnabled(True)
-        self.append_btn.setEnabled(True)
+        self._set_capturing(False)
 
     def refresh(self) -> None:
         # 按名分组(保序去重):一行一个用户,显示模板数 / 最近录入 / 最快到期 / 状态
@@ -715,6 +736,10 @@ class EnrollTab(QWidget):
         has_profiles = bool(groups)
         self.table.setVisible(has_profiles)
         self.empty_users.setVisible(not has_profiles)
+        self.del_btn.setVisible(has_profiles)
+        self.manage_btn.setVisible(has_profiles)
+        self._profile_names = set(groups)
+        self._update_enroll_actions()
         self._update_profile_actions()
 
     def _update_profile_actions(self) -> None:
@@ -1015,14 +1040,12 @@ class SettingsTab(QWidget):
         self.hotkey_set_btn.clicked.connect(self._set_hotkey)
         self.hotkey_clear_btn = QPushButton(tr("hotkey_clear_btn"))
         self.hotkey_clear_btn.clicked.connect(self._clear_hotkey)
-        self.unlock_start_combo = QComboBox()
-        for mode in ("signin", "manual"):
-            self.unlock_start_combo.addItem(tr(f"unlock_start_{mode}"), mode)
-        mode_index = self.unlock_start_combo.findData(s["unlock_start_mode"])
-        self.unlock_start_combo.setCurrentIndex(max(0, mode_index))
-        self.unlock_start_combo.setToolTip(tr("unlock_start_mode_help"))
-        self.unlock_start_combo.currentIndexChanged.connect(self._update_hotkey_controls)
-        self._update_hotkey_controls()
+        self.start_mode = ModeSelector(
+            (("signin", "unlock_start_signin"), ("manual", "unlock_start_manual")), s["unlock_start_mode"]
+        )
+        self.camera_mode = ModeSelector(
+            (("local", "camera_local"), ("stream", "camera_stream")), s["camera_source_mode"]
+        )
         for sp in (self.match_spin, self.margin_spin, self.yaw_spin, self.blink_spin,
                    self.renewal_spin, self.samples_spin, self.max_templates_spin,
                    self.lockout_fails_spin, self.lockout_secs_spin, self.camera_spin):
@@ -1053,74 +1076,76 @@ class SettingsTab(QWidget):
         self.autosave_status.setWordWrap(True)
         for _get, _set, changed in self._bindings.values():
             changed.connect(self._schedule_save)
-        save_row = QHBoxLayout()
-        save_row.setContentsMargins(0, 0, 0, 0)
-        save_row.setSpacing(12)
-        save_row.addWidget(reset_btn)
-        save_row.addWidget(self.autosave_status)
-        save_row.addStretch(1)
+        content = QWidget()
+        content.setObjectName("consolePage")
+        panel_layout = QVBoxLayout(content)
+        panel_layout.setContentsMargins(34, 10, 34, 24)
+        panel_layout.setSpacing(8)
+        header = QHBoxLayout()
+        header.addWidget(page_label("params_security", "consoleTitle"), 1)
+        self.autosave_status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        header.addWidget(self.autosave_status, 1)
+        panel_layout.addLayout(header)
 
-        params_title = QLabel(tr("params_security"))
-        params_title.setObjectName("pageTitle")
-        common_title = QLabel(tr("settings_common_title"))
-        common_title.setObjectName("sectionTitle")
-        common_help = QLabel(tr("settings_common_help"))
-        common_help.setObjectName("hint")
-        common_help.setWordWrap(True)
+        def section(key, action=None):
+            panel_layout.addSpacing(9)
+            heading = QHBoxLayout()
+            heading.addWidget(page_label(key, "consoleSection"), 1)
+            if action is not None:
+                heading.addWidget(action)
+            panel_layout.addLayout(heading)
+            panel_layout.addWidget(divider())
 
-        common_grid = QGridLayout()
-        common_grid.setHorizontalSpacing(16)
-        common_grid.setVerticalSpacing(8)
-        common_grid.setColumnStretch(2, 1)
-        common_grid.addWidget(self.face_unlock_check, 0, 0, 1, 3)
-        common_grid.addWidget(QLabel(tr("face_unlock_scope_label")), 1, 0)
-        scope_row = QHBoxLayout()
-        scope_row.setContentsMargins(0, 0, 0, 0)
-        scope_row.setSpacing(16)
-        scope_row.addWidget(self.face_unlock_logon_check)
-        scope_row.addWidget(self.face_unlock_workstation_check)
-        scope_row.addStretch(1)
-        scope_w = QWidget()
-        scope_w.setLayout(scope_row)
-        common_grid.addWidget(scope_w, 1, 1, 1, 2)
-        common_grid.addWidget(self.liveness_check, 2, 0, 1, 3)
-        common_grid.addWidget(self.antispoof_check, 3, 0, 1, 3)
-        common_grid.addWidget(self.multi_face_check, 4, 0, 1, 3)
-        common_grid.addWidget(QLabel(tr("camera_index_label")), 5, 0)
-        cam_row = QHBoxLayout()
-        cam_row.setContentsMargins(0, 0, 0, 0)
-        cam_row.setSpacing(8)
-        cam_row.addWidget(self.camera_spin)
-        cam_row.addWidget(self.camera_test_btn)
-        cam_row.addStretch(1)
-        cam_w = QWidget()
-        cam_w.setLayout(cam_row)
-        common_grid.addWidget(cam_w, 5, 1, 1, 2)
-        common_grid.addWidget(QLabel(tr("camera_url_label")), 6, 0)
-        common_grid.addWidget(self.camera_url_edit, 6, 1, 1, 2)
-        common_grid.addWidget(QLabel(tr("camera_auth_label")), 7, 0)
-        auth_row = QHBoxLayout()
-        auth_row.setContentsMargins(0, 0, 0, 0)
-        auth_row.setSpacing(8)
-        auth_row.addWidget(self.camera_user_edit)
-        auth_row.addWidget(self.camera_pass_edit)
-        auth_w = QWidget()
-        auth_w.setLayout(auth_row)
-        common_grid.addWidget(auth_w, 7, 1, 1, 2)
-        common_grid.addWidget(QLabel(tr("unlock_hotkey_label")), 8, 0)
-        hotkey_row = QHBoxLayout()
-        hotkey_row.setContentsMargins(0, 0, 0, 0)
-        hotkey_row.setSpacing(8)
-        hotkey_row.addWidget(self.hotkey_value)
-        hotkey_row.addWidget(self.hotkey_set_btn)
-        hotkey_row.addWidget(self.hotkey_clear_btn)
-        hotkey_row.addStretch(1)
-        hotkey_w = QWidget()
-        hotkey_w.setLayout(hotkey_row)
-        common_grid.addWidget(hotkey_w, 8, 1, 1, 2)
-        common_grid.addWidget(QLabel(tr("unlock_start_mode_label")), 9, 0)
-        common_grid.addWidget(self.unlock_start_combo, 9, 1, 1, 2)
+        def row(label_key, *controls, stretch=False):
+            container = QWidget()
+            form = QHBoxLayout(container)
+            form.setContentsMargins(0, 0, 0, 0)
+            form.setSpacing(10)
+            label = label_key if isinstance(label_key, QLabel) else QLabel(tr(label_key) if label_key else "")
+            label.setWordWrap(True)
+            label.setFixedWidth(148)
+            label.setBuddy(controls[0])
+            form.addWidget(label)
+            for control in controls:
+                form.addWidget(control)
+            if not stretch:
+                form.addStretch()
+            panel_layout.addWidget(container)
+            return container
+
+        section("unlock_methods", self.face_unlock_check)
+        row("unlock_start_mode_label", self.start_mode)
+        self.mode_help = page_label("unlock_start_mode_help")
+        row(None, self.mode_help, stretch=True)
+        self.hotkey_row = row("unlock_hotkey_label", self.hotkey_value,
+                              self.hotkey_set_btn, self.hotkey_clear_btn)
+        row("face_unlock_scope_label", self.face_unlock_logon_check, self.face_unlock_workstation_check)
+        self.start_mode.changed.connect(self._update_hotkey_controls)
+        self._update_hotkey_controls()
         self._update_auth_scope_controls(self.face_unlock_check.isChecked())
+
+        section("grp_camera")
+        row("video_source", self.camera_mode)
+        self.camera_spin.setFixedSize(88, 34)
+        self.stream_url_row = row("camera_url_label", self.camera_url_edit, stretch=True)
+        self.stream_auth_row = row("camera_auth_label", self.camera_user_edit,
+                                   self.camera_pass_edit, stretch=True)
+        self.device_label = page_label("camera_index_label", "formLabel")
+        row(self.device_label, self.camera_spin, self.camera_test_btn)
+        self.camera_mode.changed.connect(self._update_camera_controls)
+        self._update_camera_controls()
+
+        section("security_protection")
+        for check, help_key in (
+            (self.liveness_check, "liveness_help"),
+            (self.antispoof_check, "antispoof_help"),
+            (self.multi_face_check, "multi_face_help"),
+        ):
+            security_row = QHBoxLayout()
+            check.setMinimumWidth(148)
+            security_row.addWidget(check)
+            security_row.addWidget(page_label(help_key), 1)
+            panel_layout.addLayout(security_row)
 
         self.advanced_params_btn = QPushButton(tr("advanced_params_show"))
         self.advanced_params_btn.setCheckable(True)
@@ -1131,7 +1156,7 @@ class SettingsTab(QWidget):
         advanced_help.setWordWrap(True)
 
         advanced_grid = QGridLayout()
-        advanced_grid.setHorizontalSpacing(16)
+        advanced_grid.setHorizontalSpacing(10)
         advanced_grid.setVerticalSpacing(8)
         advanced_grid.setColumnStretch(4, 1)
         r = 0
@@ -1170,27 +1195,11 @@ class SettingsTab(QWidget):
         advanced_layout.addLayout(advanced_grid)
         self.advanced_params_panel.hide()
 
-        panel = QWidget()
-        panel.setMaximumWidth(920)
-        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(0, 0, 0, 0)
-        panel_layout.setSpacing(10)
-        panel_layout.addWidget(params_title)
-        panel_layout.addWidget(common_title)
-        panel_layout.addWidget(common_help)
-        panel_layout.addLayout(common_grid)
-        panel_layout.addWidget(
-            self.advanced_params_btn,
-            alignment=Qt.AlignmentFlag.AlignLeft,
-        )
-        panel_layout.addWidget(self.advanced_params_panel)
-        panel_layout.addLayout(save_row)
-
-        update_title = QLabel(tr("update_title"))
-        update_title.setObjectName("h2")
-        self.update_status = QLabel(tr("update_current", version=display_version()))
+        panel_layout.addStretch()
+        panel_layout.addWidget(divider())
+        self.update_status = QLabel()
         self.update_status.setWordWrap(True)
+        self.update_status.hide()
         self.update_progress = QProgressBar()
         self.update_progress.setRange(0, 100)
         self.update_progress.hide()
@@ -1202,30 +1211,31 @@ class SettingsTab(QWidget):
         self.update_install_btn = QPushButton(tr("update_install"))
         self.update_install_btn.clicked.connect(self._install_update)
         self.update_install_btn.hide()
-        update_actions = QHBoxLayout()
-        update_actions.addWidget(self.update_btn)
-        update_actions.addWidget(self.update_download_btn)
-        update_actions.addWidget(self.update_install_btn)
-        update_actions.addStretch(1)
-        panel_layout.addWidget(update_title)
+        footer = QHBoxLayout()
+        footer.addWidget(self.advanced_params_btn)
+        footer.addWidget(self.update_btn)
+        footer.addStretch()
+        footer.addWidget(reset_btn)
+        panel_layout.addLayout(footer)
+        panel_layout.addWidget(self.advanced_params_panel)
         panel_layout.addWidget(self.update_status)
         panel_layout.addWidget(self.update_progress)
+        update_actions = QHBoxLayout()
+        update_actions.addWidget(self.update_download_btn)
+        update_actions.addWidget(self.update_install_btn)
+        update_actions.addStretch()
         panel_layout.addLayout(update_actions)
-
-        center = QHBoxLayout()
-        center.addStretch(1)
-        center.addWidget(panel, 8)
-        center.addStretch(1)
-
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(20, 18, 20, 18)
-        content_layout.addLayout(center)
-        content_layout.addStretch(1)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(_scrollable_page(content))
+
+    def _update_camera_controls(self) -> None:
+        stream = self.camera_mode.value() == "stream"
+        self.device_label.setText("" if stream else tr("camera_index_label"))
+        self.camera_spin.setVisible(not stream)
+        self.stream_url_row.setVisible(stream)
+        self.stream_auth_row.setVisible(stream)
 
     def _update_auth_scope_controls(self, enabled: bool) -> None:
         self.face_unlock_logon_check.setEnabled(enabled)
@@ -1252,6 +1262,7 @@ class SettingsTab(QWidget):
         self.update_install_btn.hide()
         self._update_candidate = None
         self._update_installer = None
+        self.update_status.show()
         self.update_status.setText(tr("update_checking"))
         self._update_check = UpdateCheckWorker()
         self._update_check.checked.connect(self._on_update_checked)
@@ -1377,13 +1388,10 @@ class SettingsTab(QWidget):
             "camera_url": line(self.camera_url_edit, strip=True),
             "camera_url_username": line(self.camera_user_edit, strip=True),
             "camera_url_password": line(self.camera_pass_edit),
-            "unlock_start_mode": (
-                self.unlock_start_combo.currentData,
-                lambda mode: self.unlock_start_combo.setCurrentIndex(
-                    self.unlock_start_combo.findData(mode)
-                ),
-                self.unlock_start_combo.currentIndexChanged,
-            ),
+            "unlock_start_mode": (self.start_mode.value, self.start_mode.set_value,
+                                  self.start_mode.changed),
+            "camera_source_mode": (self.camera_mode.value, self.camera_mode.set_value,
+                                   self.camera_mode.changed),
             "face_unlock_enabled": check(self.face_unlock_check),
             "face_unlock_logon_enabled": check(self.face_unlock_logon_check),
             "face_unlock_workstation_enabled": check(self.face_unlock_workstation_check),
@@ -1460,9 +1468,9 @@ class SettingsTab(QWidget):
         self._save()
 
     def _update_hotkey_controls(self) -> None:
-        manual = self.unlock_start_combo.currentData() == "manual"
-        for widget in (self.hotkey_value, self.hotkey_set_btn, self.hotkey_clear_btn):
-            widget.setEnabled(manual)
+        manual = self.start_mode.value() == "manual"
+        self.hotkey_row.setVisible(manual)
+        self.mode_help.setText(tr("manual_mode_help" if manual else "unlock_start_mode_help"))
 
     def _set_hotkey(self) -> None:
         dlg = HotkeyDialog(self)
@@ -1484,12 +1492,7 @@ class SettingsTab(QWidget):
 
     def _test_camera(self) -> None:
         """用当前(未保存的)串流 URL 或索引抓一帧弹窗预览,确认是不是想要的那台摄像头。"""
-        source = _resolve_camera_source(self, {
-            "camera_url": self.camera_url_edit.text(),
-            "camera_url_username": self.camera_user_edit.text(),
-            "camera_url_password": self.camera_pass_edit.text(),
-            "camera_index": self.camera_spin.value(),
-        })
+        source = _resolve_camera_source(self, self._read_settings())
         if source is None:
             return
         self.camera_test_btn.setEnabled(False)  # 防重入
@@ -1970,9 +1973,10 @@ class MainWindow(QWidget):
         nav_col.setContentsMargins(0, 0, 0, 0)
         nav_col.setSpacing(6)
         for i, text in enumerate((tr("tab_enroll"), tr("tab_test"), tr("tab_service"), tr("tab_settings"))):
-            btn = QPushButton(text)
+            btn = QPushButton(text.replace("&", "&&"))
             btn.setObjectName("navButton")
             btn.setCheckable(True)
+            btn.setIcon(console_icon(("face", "test", "service", "settings")[i]))
             btn.setProperty("pageIndex", i)
             if i == 2:
                 btn.setToolTip(tr("tab_service_tooltip"))
@@ -1983,23 +1987,27 @@ class MainWindow(QWidget):
 
         brand = QLabel("FaceHello")
         brand.setObjectName("brand")
-        side_hint = QLabel(tr("app_title").replace("_", ""))
-        side_hint.setObjectName("sideHint")
         self.status_label.setObjectName("sideHint")
         self.status_label.setWordWrap(True)
 
         sidebar = QWidget()
         sidebar.setObjectName("sideBar")
-        sidebar.setFixedWidth(210)
+        sidebar.setFixedWidth(max(210, 36 + max(btn.sizeHint().width() for btn in self.nav_buttons)))
         side_layout = QVBoxLayout(sidebar)
-        side_layout.setContentsMargins(16, 16, 16, 16)
+        side_layout.setContentsMargins(18, 28, 18, 16)
         side_layout.setSpacing(12)
-        side_layout.addWidget(brand)
-        side_layout.addWidget(side_hint)
+        brand_row = QHBoxLayout()
+        brand_icon = QLabel()
+        brand_icon.setPixmap(console_icon("face", "#a64d31", 28).pixmap(28, 28))
+        brand_icon.setStyleSheet("background:transparent")
+        brand_row.addWidget(brand_icon)
+        brand_row.addWidget(brand)
+        brand_row.addStretch()
+        side_layout.addLayout(brand_row)
         side_layout.addSpacing(10)
         side_layout.addLayout(nav_col)
         side_layout.addStretch(1)
-        lang_label = QLabel("Language")
+        lang_label = QLabel(tr("console_language"))
         lang_label.setObjectName("sideHint")
         self.lang_combo.setObjectName("sideCombo")
         side_layout.addWidget(lang_label)
@@ -2034,16 +2042,17 @@ class MainWindow(QWidget):
 
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(14)
+        body.setSpacing(0)
         body.addWidget(sidebar)
+        content_layout.setSpacing(0)
+        content_layout.insertWidget(0, self.title_bar)
         body.addWidget(content, 1)
 
         shell = QWidget()
         shell.setObjectName("windowShell")
         shell_layout = QVBoxLayout(shell)
-        shell_layout.setContentsMargins(18, 10, 18, 10)
+        shell_layout.setContentsMargins(1, 1, 1, 1)
         shell_layout.setSpacing(8)
-        shell_layout.addWidget(self.title_bar)
         shell_layout.addLayout(body, 1)
 
         layout = QVBoxLayout(self)
