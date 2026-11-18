@@ -66,8 +66,14 @@ SignedUninstaller=yes
 Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[CustomMessages]
+chinesesimplified.InstallFailedHeading=安装未完成
+chinesesimplified.InstallFailedBody=FaceHello 配置或验收失败。请查看错误信息和安装日志，保留恢复备份及验收基线。
+english.InstallFailedHeading=Installation incomplete
+english.InstallFailedBody=FaceHello configuration or acceptance failed. Review the error and setup log; keep any recovery backup and acceptance baseline.
+
 [Tasks]
-Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标:"
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Dirs]
 ; 数据 + 锁屏头像目录(SYSTEM 服务与提权 GUI 共享;CP 硬编码读 ProgramData\FaceHello)
@@ -86,7 +92,7 @@ Name: "{autodesktop}\FaceHello 管理台"; Filename: "{#PyWExe}"; Parameters: "-
 [Run]
 ; configure 统一检查 ACL、服务、版本化 CP 与命名管道 readiness；非零退出码由 [Code] 阻止完成安装。
 ; 收尾页可选:立即打开管理台(管理台会按需请求 UAC 提权)
-Filename: "{#PyWExe}"; Parameters: "-m app.main"; WorkingDir: "{app}"; Description: "立即打开 FaceHello 管理台"; Flags: postinstall nowait skipifsilent runasoriginaluser
+Filename: "{#PyWExe}"; Parameters: "-m app.main"; WorkingDir: "{app}"; Description: "立即打开 FaceHello 管理台"; Flags: postinstall nowait skipifsilent runasoriginaluser; Check: CanLaunchConsole
 
 [UninstallRun]
 ; 删文件前(此时 {app}\python 与脚本都还在):停服务 → 删服务 → 注销 CP → 清敏感数据。
@@ -138,6 +144,7 @@ var
   ParentPID: Cardinal;
   BackupDir: String;
   BaselinePath: String;
+  PostInstallSucceeded: Boolean;
 
 function BackupExistingInstall(): Boolean;
 var
@@ -329,6 +336,7 @@ var
   ResultCode: Integer;
   StartValue: String;
 begin
+  PostInstallSucceeded := False;
   Result := SaveStringToFile(ExpandConstant('{app}\.installed'), '', False);
   if not Result then
     exit;
@@ -342,6 +350,29 @@ begin
     ' --start ' + StartValue + ' --acceptance-baseline "' + BaselinePath + '"',
     ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) and
     (ResultCode = 0);
+  PostInstallSucceeded := Result;
+end;
+
+function GetCustomSetupExitCode(): Integer;
+begin
+  { ssPostInstall 的异常只会显示提示;必须显式把配置/验收失败传给调用方。 }
+  if PostInstallSucceeded then
+    Result := 0
+  else
+    Result := 1001;
+end;
+
+function CanLaunchConsole(): Boolean;
+begin
+  Result := PostInstallSucceeded;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpFinished) and (not PostInstallSucceeded) then begin
+    WizardForm.FinishedHeadingLabel.Caption := CustomMessage('InstallFailedHeading');
+    WizardForm.FinishedLabel.Caption := CustomMessage('InstallFailedBody');
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -375,6 +406,6 @@ begin
     else
       RaiseException('FaceHello 自动验收或安装配置失败。安装未完成；验收基线保留在 ' + BaselinePath + '；人脸数据和系统密码/PIN 未被删除。');
   end;
-  if (CurStep = ssDone) and (BackupDir <> '') then
+  if (CurStep = ssDone) and PostInstallSucceeded and (BackupDir <> '') then
     DelTree(BackupDir, True, True, True);
 end;

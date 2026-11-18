@@ -88,11 +88,13 @@ from face_hello.diagnostics import (
 )
 from face_hello import config, cred_vault, probes
 from face_hello.auth import AuthResult
+from face_hello.camera import CameraSource, CameraSourceError, camera_source, describe_source
 from face_hello.detector import FaceDetector
 from face_hello.i18n import (
     save_auth_scope_mirror,
     save_hotkey_mirror,
     save_lang_mirror,
+    save_unlock_start_mode_mirror,
     set_lang,
     tr,
 )
@@ -477,6 +479,24 @@ def _themed_qss() -> str:
     )
 
 
+def _resolve_camera_source(parent: QWidget, settings: dict) -> CameraSource | None:
+    """在进入忙碌状态(禁用按钮)之前解析摄像头来源。
+
+    URL 无效时弹出不含 URL 的提示并返回 None,调用方直接 return,按钮保持可用;
+    否则异常会在 worker 创建前抛出,没有 failed 信号能把已禁用的按钮恢复。
+    """
+    try:
+        return camera_source(settings)
+    except CameraSourceError:
+        QMessageBox.warning(parent, tr("tip"), tr("camera_url_invalid"))
+        return None
+
+
+def _url_may_contain_secret(url: str) -> bool:
+    """URL 内嵌 userinfo、查询参数或 fragment 时视为可能含凭据,需遮蔽显示。"""
+    return "@" in url or "?" in url or "#" in url
+
+
 def _renewal_days_text(profile) -> str:
     days = profile.days_until_renewal
     if days < 0:
@@ -629,6 +649,9 @@ class EnrollTab(QWidget):
             QMessageBox.warning(self, tr("tip"), tr("enter_username"))
             return
         s = self.store.get_settings()
+        source = _resolve_camera_source(self, s)
+        if source is None:
+            return
         samples = s["enroll_samples"]
         self._append = append
         self.start_btn.setEnabled(False)
@@ -636,8 +659,7 @@ class EnrollTab(QWidget):
         self.status.setText(tr("opening_camera"))
         self.progress_bar.setRange(0, samples)
         self.progress_bar.setValue(0)
-        self.worker = EnrollWorker(self.detector, samples, camera_index=s.get("camera_index", 0),
-                                   append=append)
+        self.worker = EnrollWorker(self.detector, samples, camera_index=source, append=append)
         self.worker.preview.connect(lambda img: _show_frame(self.preview, img))
         self.worker.guidance.connect(self._on_guidance)
         self.worker.finished_ok.connect(self._on_done)
@@ -860,14 +882,14 @@ class AuthTab(QWidget):
         if self.store.is_empty():
             QMessageBox.warning(self, tr("tip"), tr("no_enroll_warn"))
             return
+        source = _resolve_camera_source(self, self.store.get_settings())
+        if source is None:
+            return
         self.start_btn.setEnabled(False)
         self.monitor_btn.setEnabled(False)
         self.instruction.setStyleSheet(_INSTR_BASE)
         self.instruction.setText(tr("preparing"))
-        self.worker = AuthWorker(
-            self.detector, self.store,
-            camera_index=self.store.get_settings().get("camera_index", 0),
-        )
+        self.worker = AuthWorker(self.detector, self.store, camera_index=source)
         self.worker.preview.connect(lambda img: _show_frame(self.preview, img))
         self.worker.instruction.connect(self.instruction.setText)
         self.worker.finished_result.connect(self._on_result)
@@ -897,6 +919,9 @@ class AuthTab(QWidget):
         if self.store.is_empty():
             QMessageBox.warning(self, tr("tip"), tr("no_enroll_warn"))
             return
+        source = _resolve_camera_source(self, self.store.get_settings())
+        if source is None:
+            return
         self.start_btn.setEnabled(False)
         self.monitor_btn.setText(tr("stop_compare"))
         self.instruction.setStyleSheet(_INSTR_BASE)
@@ -905,7 +930,7 @@ class AuthTab(QWidget):
         self.histogram.clear()
         self.monitor = SimilarityMonitorWorker(
             self.detector, self.store,
-            camera_index=self.store.get_settings().get("camera_index", 0),
+            camera_index=source,
             threshold=self.store.get_settings()["match_threshold"],
         )
         self.monitor.preview.connect(lambda img: _show_frame(self.preview, img))
@@ -962,6 +987,17 @@ class SettingsTab(QWidget):
         self.camera_spin = QSpinBox()
         self.camera_spin.setRange(0, 10)
         self.camera_spin.setValue(int(s.get("camera_index", 0)))
+        self.camera_url_edit = QLineEdit(str(s.get("camera_url", "") or ""))
+        self.camera_url_edit.setPlaceholderText(tr("camera_url_placeholder"))
+        # URL 内嵌账号密码、查询参数或 fragment 时遮蔽显示,避免截图/旁人看到;
+        # 跟随内容变化更新(首次为空、之后才粘贴含密码的 URL 也要遮蔽)
+        self.camera_url_edit.textChanged.connect(self._sync_camera_url_echo)
+        self._sync_camera_url_echo(self.camera_url_edit.text())
+        self.camera_user_edit = QLineEdit(str(s.get("camera_url_username", "") or ""))
+        self.camera_user_edit.setPlaceholderText(tr("camera_user_placeholder"))
+        self.camera_pass_edit = QLineEdit(str(s.get("camera_url_password", "") or ""))
+        self.camera_pass_edit.setPlaceholderText(tr("camera_pass_placeholder"))
+        self.camera_pass_edit.setEchoMode(QLineEdit.Password)
         self.face_unlock_check = QCheckBox(tr("face_unlock_enabled"))
         self.face_unlock_check.setChecked(s.get("face_unlock_enabled", True))
         self.face_unlock_logon_check = QCheckBox(tr("face_unlock_logon"))
@@ -979,6 +1015,14 @@ class SettingsTab(QWidget):
         self.hotkey_set_btn.clicked.connect(self._set_hotkey)
         self.hotkey_clear_btn = QPushButton(tr("hotkey_clear_btn"))
         self.hotkey_clear_btn.clicked.connect(self._clear_hotkey)
+        self.unlock_start_combo = QComboBox()
+        for mode in ("signin", "manual"):
+            self.unlock_start_combo.addItem(tr(f"unlock_start_{mode}"), mode)
+        mode_index = self.unlock_start_combo.findData(s["unlock_start_mode"])
+        self.unlock_start_combo.setCurrentIndex(max(0, mode_index))
+        self.unlock_start_combo.setToolTip(tr("unlock_start_mode_help"))
+        self.unlock_start_combo.currentIndexChanged.connect(self._update_hotkey_controls)
+        self._update_hotkey_controls()
         for sp in (self.match_spin, self.margin_spin, self.yaw_spin, self.blink_spin,
                    self.renewal_spin, self.samples_spin, self.max_templates_spin,
                    self.lockout_fails_spin, self.lockout_secs_spin, self.camera_spin):
@@ -993,18 +1037,22 @@ class SettingsTab(QWidget):
         self.multi_face_check = QCheckBox(tr("multi_face_protection"))
         self.multi_face_check.setChecked(s.get("multi_face_protection_enabled", False))
 
-        # 修改即自动保存:控件变化后延迟一小段再写盘,拖动数值时不会每一格都写一次。
+        # 数值等选项合并写入，串流字段离开输入框后再保存。
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.setInterval(400)
-        self._autosave_timer.timeout.connect(self._save)
+        self._autosave_timer.timeout.connect(self._save_pending_settings)
         self._bindings = self._setting_bindings()
-        for _get, _set, changed in self._bindings.values():
-            changed.connect(self._schedule_save)
+        self._saved_settings = self._read_settings()
+        self._pending_settings = self._saved_settings
+        self._mirrors_pending = False
         reset_btn = QPushButton(tr("reset_settings"))
         reset_btn.clicked.connect(self._reset_settings)
         self.autosave_status = QLabel(tr("settings_autosave_hint"))
         self.autosave_status.setObjectName("hint")
+        self.autosave_status.setWordWrap(True)
+        for _get, _set, changed in self._bindings.values():
+            changed.connect(self._schedule_save)
         save_row = QHBoxLayout()
         save_row.setContentsMargins(0, 0, 0, 0)
         save_row.setSpacing(12)
@@ -1048,7 +1096,18 @@ class SettingsTab(QWidget):
         cam_w = QWidget()
         cam_w.setLayout(cam_row)
         common_grid.addWidget(cam_w, 5, 1, 1, 2)
-        common_grid.addWidget(QLabel(tr("unlock_hotkey_label")), 6, 0)
+        common_grid.addWidget(QLabel(tr("camera_url_label")), 6, 0)
+        common_grid.addWidget(self.camera_url_edit, 6, 1, 1, 2)
+        common_grid.addWidget(QLabel(tr("camera_auth_label")), 7, 0)
+        auth_row = QHBoxLayout()
+        auth_row.setContentsMargins(0, 0, 0, 0)
+        auth_row.setSpacing(8)
+        auth_row.addWidget(self.camera_user_edit)
+        auth_row.addWidget(self.camera_pass_edit)
+        auth_w = QWidget()
+        auth_w.setLayout(auth_row)
+        common_grid.addWidget(auth_w, 7, 1, 1, 2)
+        common_grid.addWidget(QLabel(tr("unlock_hotkey_label")), 8, 0)
         hotkey_row = QHBoxLayout()
         hotkey_row.setContentsMargins(0, 0, 0, 0)
         hotkey_row.setSpacing(8)
@@ -1058,7 +1117,9 @@ class SettingsTab(QWidget):
         hotkey_row.addStretch(1)
         hotkey_w = QWidget()
         hotkey_w.setLayout(hotkey_row)
-        common_grid.addWidget(hotkey_w, 6, 1, 1, 2)
+        common_grid.addWidget(hotkey_w, 8, 1, 1, 2)
+        common_grid.addWidget(QLabel(tr("unlock_start_mode_label")), 9, 0)
+        common_grid.addWidget(self.unlock_start_combo, 9, 1, 1, 2)
         self._update_auth_scope_controls(self.face_unlock_check.isChecked())
 
         self.advanced_params_btn = QPushButton(tr("advanced_params_show"))
@@ -1288,13 +1349,16 @@ class SettingsTab(QWidget):
         self.update_download_btn.setEnabled(True)
 
     def _setting_bindings(self) -> dict:
-        """设置键 -> (读值, 设值, 变更信号)。自动保存与重置都以此为准,新增设置加一行即可。
-        热键不是控件值,由 _save / _reset_settings 单独处理。"""
+        """自动保存与恢复默认值共用的控件绑定。"""
         def spin(w):
             return (w.value, w.setValue, w.valueChanged)
 
         def check(w):
             return (w.isChecked, w.setChecked, w.toggled)
+
+        def line(w, *, strip=False):
+            getter = (lambda: w.text().strip()) if strip else w.text
+            return (getter, w.setText, w.editingFinished)
 
         return {
             "liveness_enabled": check(self.liveness_check),
@@ -1310,32 +1374,79 @@ class SettingsTab(QWidget):
             "lockout_max_fails": spin(self.lockout_fails_spin),
             "lockout_seconds": spin(self.lockout_secs_spin),
             "camera_index": spin(self.camera_spin),
+            "camera_url": line(self.camera_url_edit, strip=True),
+            "camera_url_username": line(self.camera_user_edit, strip=True),
+            "camera_url_password": line(self.camera_pass_edit),
+            "unlock_start_mode": (
+                self.unlock_start_combo.currentData,
+                lambda mode: self.unlock_start_combo.setCurrentIndex(
+                    self.unlock_start_combo.findData(mode)
+                ),
+                self.unlock_start_combo.currentIndexChanged,
+            ),
             "face_unlock_enabled": check(self.face_unlock_check),
             "face_unlock_logon_enabled": check(self.face_unlock_logon_check),
             "face_unlock_workstation_enabled": check(self.face_unlock_workstation_check),
         }
 
     def _schedule_save(self, *_args) -> None:
-        self._autosave_timer.start()  # 连续修改会重新计时,只在停下后写一次
+        self._pending_settings = self._read_settings()
+        self.autosave_status.setText(tr("settings_save_pending"))
+        self._autosave_timer.start()
 
-    def _save(self) -> None:
-        """把本页设置写回人脸库并同步给 CP 的镜像文件。由自动保存计时器或重置调用。"""
-        self._autosave_timer.stop()
+    def _save_pending_settings(self) -> None:
+        self._save(self._pending_settings)
+
+    def _read_settings(self) -> dict:
         values = {key: get() for key, (get, _set, _changed) in self._bindings.items()}
         values["unlock_hotkey"] = self.unlock_hotkey
+        return values
+
+    def _save(self, values: dict | None = None) -> bool:
+        self._autosave_timer.stop()
+        if values is None:
+            values = self._read_settings()
+        changed = {key: value for key, value in values.items() if value != self._saved_settings[key]}
+        if not changed and not self._mirrors_pending:
+            if self.autosave_status.text() != tr("settings_autosaved"):
+                self.autosave_status.setText(tr("settings_autosave_hint"))
+            return True
+        # 串流地址无效时保留上一份配置，且不在自动保存时弹窗。
         try:
-            self.store.update_settings(**values)
-            self.store.save()
-        except Exception as exc:  # noqa: BLE001 如非管理员写不进 ProgramData:就地提示,不弹窗打断
-            self.autosave_status.setText(tr("settings_save_failed", e=exc))
-            return
-        save_hotkey_mirror(self.unlock_hotkey)
-        save_auth_scope_mirror(
-            self.face_unlock_check.isChecked(),
-            self.face_unlock_logon_check.isChecked(),
-            self.face_unlock_workstation_check.isChecked(),
-        )
+            camera_source(values)
+        except CameraSourceError:
+            self.autosave_status.setText(tr("camera_url_invalid"))
+            return False
+        if changed:
+            previous = self.store.get_settings()
+            self.store.update_settings(**changed)
+            try:
+                self.store.save()
+            except Exception:  # noqa: BLE001 文件或 DPAPI 出错时恢复共享 FaceStore 中的设置
+                self.store.update_settings(**{key: previous[key] for key in changed})
+                self.autosave_status.setText(tr("settings_save_failed"))
+                return False
+            self._saved_settings = values
+            self._mirrors_pending |= bool(changed.keys() & {
+                "unlock_hotkey", "unlock_start_mode", "face_unlock_enabled",
+                "face_unlock_logon_enabled", "face_unlock_workstation_enabled",
+            })
+        if self._mirrors_pending:
+            synced = (
+                save_hotkey_mirror(values["unlock_hotkey"]),
+                save_unlock_start_mode_mirror(values["unlock_start_mode"]),
+                save_auth_scope_mirror(
+                    values["face_unlock_enabled"],
+                    values["face_unlock_logon_enabled"],
+                    values["face_unlock_workstation_enabled"],
+                ),
+            )
+            if not all(synced):
+                self.autosave_status.setText(tr("unlock_start_sync_failed"))
+                return False
+            self._mirrors_pending = False
         self.autosave_status.setText(tr("settings_autosaved"))
+        return True
 
     def _reset_settings(self) -> None:
         """确认后把本页所有设置恢复为 config.DEFAULTS 并立即保存;不动人脸库与 LSA 密码。"""
@@ -1347,6 +1458,11 @@ class SettingsTab(QWidget):
         self.unlock_hotkey = config.DEFAULTS["unlock_hotkey"]
         self.hotkey_value.setText(_hotkey_text(self.unlock_hotkey))
         self._save()
+
+    def _update_hotkey_controls(self) -> None:
+        manual = self.unlock_start_combo.currentData() == "manual"
+        for widget in (self.hotkey_value, self.hotkey_set_btn, self.hotkey_clear_btn):
+            widget.setEnabled(manual)
 
     def _set_hotkey(self) -> None:
         dlg = HotkeyDialog(self)
@@ -1360,13 +1476,26 @@ class SettingsTab(QWidget):
         self.hotkey_value.setText(_hotkey_text(self.unlock_hotkey))
         self._schedule_save()
 
+    def _sync_camera_url_echo(self, text: str) -> None:
+        mode = (QLineEdit.Password if _url_may_contain_secret(text)
+                else QLineEdit.Normal)
+        if self.camera_url_edit.echoMode() != mode:
+            self.camera_url_edit.setEchoMode(mode)
+
     def _test_camera(self) -> None:
-        """用当前(未保存的)索引抓一帧弹窗预览,确认是不是想要的那台摄像头。"""
-        idx = self.camera_spin.value()
+        """用当前(未保存的)串流 URL 或索引抓一帧弹窗预览,确认是不是想要的那台摄像头。"""
+        source = _resolve_camera_source(self, {
+            "camera_url": self.camera_url_edit.text(),
+            "camera_url_username": self.camera_user_edit.text(),
+            "camera_url_password": self.camera_pass_edit.text(),
+            "camera_index": self.camera_spin.value(),
+        })
+        if source is None:
+            return
         self.camera_test_btn.setEnabled(False)  # 防重入
-        self._cam_test = CameraTestWorker(idx)
+        self._cam_test = CameraTestWorker(source)
         self._cam_test.ok.connect(self._on_cam_test_ok)
-        self._cam_test.failed.connect(lambda _e: self._on_cam_test_fail(idx))
+        self._cam_test.failed.connect(lambda _e: self._on_cam_test_fail(describe_source(source)))
         self._cam_test.finished.connect(lambda: self.camera_test_btn.setEnabled(True))
         self._cam_test.start()
 
@@ -1381,7 +1510,7 @@ class SettingsTab(QWidget):
         lay.addWidget(lbl)
         dlg.exec()
 
-    def _on_cam_test_fail(self, idx: int) -> None:
+    def _on_cam_test_fail(self, idx: str) -> None:
         QMessageBox.warning(self, tr("camera_test_title"), tr("camera_test_fail", idx=idx))
 
 
@@ -2037,6 +2166,15 @@ class MainWindow(QWidget):
         if self._close_ready:
             super().closeEvent(event)
             return
+        if not self._closing and not self.settings_tab._save():
+            answer = QMessageBox.question(
+                self, tr("confirm_title"), tr("settings_close_unsaved"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
         workers = self._active_workers()
         if not workers:
             super().closeEvent(event)

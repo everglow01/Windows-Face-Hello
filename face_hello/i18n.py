@@ -101,7 +101,9 @@ _CATALOG: dict[str, dict[str, str]] = {
         "reset_settings_confirm": "把本页所有设置恢复为初始值?\n\n已录入的人脸和登录密码不受影响。",
         "settings_autosave_hint": "修改会自动保存",
         "settings_autosaved": "已自动保存",
-        "settings_save_failed": "保存失败:{e}",
+        "settings_save_pending": "正在等待保存…",
+        "settings_save_failed": "无法保存设置。请检查写入权限后重试。",
+        "settings_close_unsaved": "有设置未能保存或同步到锁屏。仍要退出吗？",
         "match_threshold_label": "匹配阈值(越高越严):",
         "grp_camera": "摄像头",
         "grp_recognition": "识别",
@@ -134,8 +136,19 @@ _CATALOG: dict[str, dict[str, str]] = {
         "camera_index_label": "摄像头索引(0=默认):",
         "camera_test_btn": "测试",
         "camera_test_title": "摄像头预览",
-        "camera_test_fail": "打不开摄像头 index={idx},换个索引再试。",
+        "camera_test_fail": "打不开摄像头 {idx},换个索引或检查串流 URL 再试。",
+        "camera_url_invalid": "串流 URL 格式无效:需以 http/https/rtsp/rtsps/rtmp:// 开头并包含主机名。请到设置页修正后再试。",
+        "camera_url_label": "串流 URL(选填):",
+        "camera_url_placeholder": "http://192.168.x.x:8080/video(留空则用上面的索引)",
+        "camera_auth_label": "串流帐号 / 密码(选填):",
+        "camera_user_placeholder": "帐号",
+        "camera_pass_placeholder": "密码",
         "unlock_hotkey_label": "刷脸启动热键:",
+        "unlock_start_mode_label": "刷脸启动方式:",
+        "unlock_start_manual": "手动（箭头或指定热键）",
+        "unlock_start_signin": "进入登录界面后自动开始（默认）",
+        "unlock_start_mode_help": "用任意按键或鼠标点击退下锁屏封面后，自动开始一次刷脸。也可手动按箭头重试。",
+        "unlock_start_sync_failed": "设置已保存，但无法同步锁屏配置。请以管理员身份打开管理台后重试。",
         "face_unlock_enabled": "启用刷脸解锁",
         "face_unlock_scope_label": "启用范围:",
         "face_unlock_logon": "Windows 登录（开机/注销）",
@@ -299,8 +312,9 @@ _CATALOG: dict[str, dict[str, str]] = {
         "diag_models_missing": "模型缺失:{names}",
         "diag_models_load_fail": "模型加载失败:{e}",
         "diag_models_ok": "模型加载成功,耗时 {seconds}s;反欺骗模型可用:{antispoof}",
-        "diag_camera_fail": "摄像头 index={idx} 不可用:{e}",
-        "diag_camera_ok": "摄像头 index={idx} 可用,取到一帧 {w}x{h}",
+        "diag_camera_fail": "摄像头 {idx} 不可用:{e}",
+        "diag_camera_url_invalid": "已设置串流 URL,但格式无效(未改用本机摄像头测试)",
+        "diag_camera_ok": "摄像头 {idx} 可用,取到一帧 {w}x{h}",
         "diag_log_missing": "未找到日志:{path}",
         "diag_log_read_fail": "读取日志失败:{e}",
         "diag_log_empty_tail": "日志为空",
@@ -318,6 +332,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         "diag_advice_offline_check": "先运行 offline_check 下载并验证模型",
         "diag_advice_antispoof_optional": "反欺骗模型是可选项;缺失时认证会 fail-open 跳过",
         "diag_advice_camera_index": "在设置页调整摄像头 index 并用测试按钮确认",
+        "diag_advice_camera_url": "在设置页修正串流 URL(或清空改用摄像头 index),并用测试按钮确认",
         # --- GUI:主窗口 ---
         "model_loading": "● 模型加载中…",
         "model_ready": "● 就绪",
@@ -436,7 +451,9 @@ _CATALOG: dict[str, dict[str, str]] = {
         "reset_settings_confirm": "Restore every setting on this page to its default value?\n\nEnrolled faces and the sign-in password are not affected.",
         "settings_autosave_hint": "Changes are saved automatically",
         "settings_autosaved": "Saved automatically",
-        "settings_save_failed": "Save failed: {e}",
+        "settings_save_pending": "Waiting to save…",
+        "settings_save_failed": "Couldn't save settings. Check write permissions and try again.",
+        "settings_close_unsaved": "Some changes couldn't be saved or applied to the lock screen. Close anyway?",
         "match_threshold_label": "Match threshold (higher = stricter):",
         "grp_camera": "Camera",
         "grp_recognition": "Recognition",
@@ -469,8 +486,19 @@ _CATALOG: dict[str, dict[str, str]] = {
         "camera_index_label": "Camera index (0 = default):",
         "camera_test_btn": "Test",
         "camera_test_title": "Camera preview",
-        "camera_test_fail": "Can't open camera index={idx}; try another.",
+        "camera_test_fail": "Can't open camera {idx}; try another index or check the stream URL.",
+        "camera_url_invalid": "The stream URL is invalid: it must start with http/https/rtsp/rtsps/rtmp:// and include a host name. Fix it on the settings tab and try again.",
+        "camera_url_label": "Stream URL (optional):",
+        "camera_url_placeholder": "http://192.168.x.x:8080/video (leave empty to use the index above)",
+        "camera_auth_label": "Stream username / password (optional):",
+        "camera_user_placeholder": "Username",
+        "camera_pass_placeholder": "Password",
         "unlock_hotkey_label": "Face unlock hotkey:",
+        "unlock_start_mode_label": "Start face unlock:",
+        "unlock_start_manual": "Manually (arrow or configured hotkey)",
+        "unlock_start_signin": "Automatically on the sign-in screen (default)",
+        "unlock_start_mode_help": "Dismiss the lock screen with any key or a mouse click to start one scan. Use the arrow to retry.",
+        "unlock_start_sync_failed": "Settings were saved, but the lock-screen settings couldn't be applied. Run the console as administrator and try again.",
         "face_unlock_enabled": "Enable face unlock",
         "face_unlock_scope_label": "Enabled for:",
         "face_unlock_logon": "Windows sign-in (startup/sign-out)",
@@ -634,8 +662,9 @@ _CATALOG: dict[str, dict[str, str]] = {
         "diag_models_missing": "Missing models: {names}",
         "diag_models_load_fail": "Model load failed: {e}",
         "diag_models_ok": "Models loaded in {seconds}s; anti-spoof model available: {antispoof}",
-        "diag_camera_fail": "Camera index={idx} is unavailable: {e}",
-        "diag_camera_ok": "Camera index={idx} is available; captured one frame {w}x{h}",
+        "diag_camera_fail": "Camera {idx} is unavailable: {e}",
+        "diag_camera_url_invalid": "A stream URL is configured but invalid (the local camera was not tested instead)",
+        "diag_camera_ok": "Camera {idx} is available; captured one frame {w}x{h}",
         "diag_log_missing": "Log not found: {path}",
         "diag_log_read_fail": "Failed to read log: {e}",
         "diag_log_empty_tail": "Log is empty",
@@ -653,6 +682,7 @@ _CATALOG: dict[str, dict[str, str]] = {
         "diag_advice_offline_check": "Run offline_check first to download and verify models",
         "diag_advice_antispoof_optional": "The anti-spoof model is optional; if missing, authentication skips it fail-open",
         "diag_advice_camera_index": "Adjust the camera index on the settings tab and confirm it with the test button",
+        "diag_advice_camera_url": "Fix the stream URL on the settings tab (or clear it to use the camera index) and confirm it with the test button",
         # --- GUI: main window ---
         "model_loading": "● Loading model…",
         "model_ready": "● Ready",
@@ -706,14 +736,15 @@ def tr(key: str, **kw) -> str:
     return t(key, _LANG, **kw)
 
 
-def _save_mirror(path, text: str) -> None:
+def _save_mirror(path, text: str) -> bool:
     from . import config
 
     try:
         config.AVATAR_DIR.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="ascii")
     except OSError:
-        pass
+        return False
+    return True
 
 
 def save_lang_mirror(lang: str) -> None:
@@ -727,14 +758,20 @@ def save_lang_mirror(lang: str) -> None:
     _save_mirror(config.LANG_FILE, lang if lang in _CATALOG else DEFAULT_LANG)
 
 
-def save_hotkey_mirror(hotkey: str) -> None:
+def save_hotkey_mirror(hotkey: str) -> bool:
     from . import config
 
     text = str(hotkey or "").strip().upper()
-    _save_mirror(config.HOTKEY_FILE, text)
+    return _save_mirror(config.HOTKEY_FILE, text)
 
 
-def save_auth_scope_mirror(enabled: bool, logon: bool, workstation: bool) -> None:
+def save_unlock_start_mode_mirror(mode: str) -> bool:
+    from . import config
+
+    return _save_mirror(config.UNLOCK_START_MODE_FILE, "signin" if mode == "signin" else "manual")
+
+
+def save_auth_scope_mirror(enabled: bool, logon: bool, workstation: bool) -> bool:
     """写 CP 场景位掩码:bit 0=Windows 登录,bit 1=工作站解锁。"""
     from . import config
 
@@ -743,4 +780,4 @@ def save_auth_scope_mirror(enabled: bool, logon: bool, workstation: bool) -> Non
         mask |= 1
     if enabled and workstation:
         mask |= 2
-    _save_mirror(config.AUTH_SCOPE_FILE, str(mask))
+    return _save_mirror(config.AUTH_SCOPE_FILE, str(mask))

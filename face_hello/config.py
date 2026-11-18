@@ -44,6 +44,7 @@ AVATAR_DIR = _PROGRAMDATA
 # (CP 读不了 DPAPI 加密的人脸库)。控制台改语言时写,服务启动时按 settings 同步。
 LANG_FILE = _PROGRAMDATA / "lang.txt"
 HOTKEY_FILE = _PROGRAMDATA / "hotkey.txt"
+UNLOCK_START_MODE_FILE = _PROGRAMDATA / "unlock_start_mode.txt"
 # 刷脸启用范围镜像:十进制位掩码供 C++ CP 读取(bit 0=登录,bit 1=工作站解锁)。
 # 文件缺失或内容无效时 CP 默认两项都启用,保证旧版本升级行为不变。
 AUTH_SCOPE_FILE = _PROGRAMDATA / "auth_scope.txt"
@@ -106,7 +107,15 @@ DEFAULTS = {
     "max_templates_per_name": 5,  # 每个用户最多存几条模板(补录角度),超出按 FIFO 丢最早
     # 摄像头索引(0=默认/第一个)。多摄像头(内置+USB+虚拟)时改这里;控制台「测试」按钮可预览确认。
     "camera_index": 0,
+    # 网络串流摄像头 URL(如手机 IP Webcam 的 http://user:pass@192.168.x.x:8080/video)。
+    # 非空时取代 camera_index;服务以 LocalSystem 直接拉流,锁屏时不依赖用户会话里的虚拟摄像头。
+    "camera_url": "",
+    # 串流的 HTTP/RTSP 认证(选填)。与 camera_url 分开存,由 camera_source() 百分号编码后拼进 URL;
+    # 设置随人脸库一起经 DPAPI 加密落盘。URL 本身已带 user:pass@ 时以 URL 为准。
+    "camera_url_username": "",
+    "camera_url_password": "",
     "unlock_hotkey": "",
+    "unlock_start_mode": "signin",
     # CP 磁贴启用范围。总开关关闭时两个场景设置保留,重新开启后恢复原选择。
     "face_unlock_enabled": True,
     "face_unlock_logon_enabled": True,

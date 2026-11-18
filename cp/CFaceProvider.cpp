@@ -66,6 +66,32 @@ SessionUserState CurrentSessionUserState()
     return hasUser ? SessionUserState::Present : SessionUserState::Absent;
 }
 
+// 当前 LogonUI 是否跑在远程(RDP 等)会话里。
+// 摄像头接在物理机上,拍到的是坐在机器前的人,而不是远程发起登录的人:远程会话若也出
+// 刷脸磁贴,远程一方就能借本机摄像头前的人完成认证。Windows Hello 生物识别同样不在远程
+// 会话里提供。协议类型:0 = 控制台,1 = 旧版 ICA,2 = RDP;再用 SM_REMOTESESSION 兜底。
+bool IsRemoteSession()
+{
+    LPWSTR buffer = nullptr;
+    DWORD bytes = 0;
+    if (WTSQuerySessionInformationW(
+            WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION,
+            WTSClientProtocolType, &buffer, &bytes))
+    {
+        const bool remote = buffer != nullptr && bytes >= sizeof(USHORT)
+            && *reinterpret_cast<const USHORT*>(buffer) != 0;
+        if (buffer)
+        {
+            WTSFreeMemory(buffer);
+        }
+        if (remote)
+        {
+            return true;
+        }
+    }
+    return GetSystemMetrics(SM_REMOTESESSION) != 0;
+}
+
 bool IsUsageScenarioEnabled(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus)
 {
     const DWORD scope = ReadAuthScope();
@@ -188,7 +214,9 @@ void AutoLogonBridge::Signal()
     ReleaseSRWLockShared(&_lock);
     if (events)
     {
+        InterlockedIncrement(&_notifying);
         events->CredentialsChanged(context);
+        InterlockedDecrement(&_notifying);
         events->Release();
     }
 }
@@ -201,6 +229,11 @@ void AutoLogonBridge::Clear()
 bool AutoLogonBridge::IsRequested()
 {
     return InterlockedCompareExchange(&_requested, 0, 0) != 0;
+}
+
+bool AutoLogonBridge::IsNotifying()
+{
+    return InterlockedCompareExchange(&_notifying, 0, 0) != 0;
 }
 
 void AutoLogonBridge::Deactivate()
@@ -252,12 +285,13 @@ IFACEMETHODIMP CFaceProvider::QueryInterface(REFIID riid, void** ppv)
     static const QITAB qit[] =
     {
         QITABENT(CFaceProvider, ICredentialProvider),
+        QITABENT(CFaceProvider, ICredentialProviderWithDisplayState),
         { nullptr },
     };
     return QISearch(this, qit, riid, ppv);
 }
 
-// 只在登录和解锁工作站两个场景出磁贴;其余场景不接管。
+// 只在登录和解锁工作站两个场景出磁贴;其余场景不接管。远程会话一律不出磁贴。
 IFACEMETHODIMP CFaceProvider::SetUsageScenario(
     CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, DWORD /*dwFlags*/)
 {
@@ -265,7 +299,7 @@ IFACEMETHODIMP CFaceProvider::SetUsageScenario(
     {
     case CPUS_LOGON:
     case CPUS_UNLOCK_WORKSTATION:
-        if (!IsUsageScenarioEnabled(cpus))
+        if (IsRemoteSession() || !IsUsageScenarioEnabled(cpus))
         {
             _ReleaseEnumeratedCredentials();
             return E_NOTIMPL;
@@ -327,7 +361,8 @@ IFACEMETHODIMP CFaceProvider::GetCredentialCount(
     *pdwCount = _pCredential ? 1 : 0;
     *pdwDefault = 0;
     // 识别通过后 SignalAutoLogon 置位,LogonUI 据此自动调 GetSerialization 完成提交
-    *pbAutoLogonWithDefault = _autoLogon && _autoLogon->IsRequested() ? TRUE : FALSE;
+    *pbAutoLogonWithDefault = _autoLogon && _autoLogon->IsRequested()
+        && _pCredential && _pCredential->HasReadyResult() ? TRUE : FALSE;
     return S_OK;
 }
 
@@ -341,6 +376,22 @@ IFACEMETHODIMP CFaceProvider::GetCredentialAt(
     return E_INVALIDARG;
 }
 
+IFACEMETHODIMP CFaceProvider::SetDisplayState(DWORD flags)
+{
+    constexpr DWORD awake = 0x01;
+    constexpr DWORD curtain = 0x04;
+    constexpr DWORD curtainMoving = 0x08;
+    constexpr DWORD providerVisible = 0x80;
+    constexpr DWORD shuttingDown = 0x1000;
+    // 只在见过锁屏封面后接受可见的登录页状态。仅点亮屏幕或预选磁贴都不会开摄像头。
+    _sawLockCover = _sawLockCover || (flags & curtain) != 0;
+    _signInVisible = _sawLockCover && (flags & (awake | providerVisible)) == (awake | providerVisible)
+        && !(flags & (curtain | curtainMoving | shuttingDown));
+    if (_pCredential)
+        _pCredential->SetSignInState(_signInVisible, (flags & (curtain | shuttingDown)) != 0);
+    return S_OK;
+}
+
 void CFaceProvider::_CreateEnumeratedCredential(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus)
 {
     _ReleaseEnumeratedCredentials();
@@ -350,6 +401,10 @@ void CFaceProvider::_CreateEnumeratedCredential(CREDENTIAL_PROVIDER_USAGE_SCENAR
         if (!_autoLogon || FAILED(_pCredential->Initialize(cpus, _autoLogon)))
         {
             _ReleaseEnumeratedCredentials();
+        }
+        else
+        {
+            _pCredential->SetSignInState(_signInVisible, false);
         }
     }
 }

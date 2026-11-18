@@ -44,20 +44,27 @@ public:
         CREDENTIAL_PROVIDER_STATUS_ICON* pcpsiOptionalStatusIcon);
 
     HRESULT Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, AutoLogonBridge* autoLogon);
+    void SetSignInState(bool visible, bool ended);
+    bool HasReadyResult();
     CFaceCredential();
 
 private:
     ~CFaceCredential();
 
     enum class AuthState { Idle, Running, Success, Failed };
+    enum class StartMode { Manual, SignIn };
 
-    // 锁屏刷脸最多尝试次数(第 1 次自动,其余靠按「→」重试);用尽退回密码。
+    static StartMode _ReadStartMode();
+
+    // 锁屏刷脸最多尝试次数;用尽退回密码。
     static const int kMaxFaceAttempts = 3;
 
-    void _StartAuthThread();
+    void _StartAuthThread(bool automatic = false);
     void _StopAuthThread();
     void _StartHotkeyThread();
     void _StopHotkeyThread();
+    bool _CanUseResultLocked() const;
+    void _ClearAutomaticResult();
     void _AuthLoop();
     void _HotkeyLoop();
     static DWORD WINAPI _AuthThreadProc(LPVOID param);
@@ -82,4 +89,11 @@ private:
     std::wstring _authUser;        // 认证通过的账户名(供 GetSerialization)
     int _failCount;               // 已失败的刷脸次数(达 kMaxFaceAttempts 后停止重试,退回密码)
     int _hotkeyVk;
+    StartMode _startMode = StartMode::Manual;
+    bool _selected = false;
+    bool _signInVisible = false;
+    bool _autoStarted = false;       // 本磁贴最多自动发起一轮
+    bool _automaticRun = false;
+    bool _automaticCancelled = false;
+    ULONGLONG _automaticResultUntil = 0;
 };

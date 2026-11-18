@@ -84,7 +84,7 @@ def test_configure_service_recovery_writes_policy_and_closes_handles(monkeypatch
             "open_service",
             "scm",
             config.SERVICE_NAME,
-            win32service.SERVICE_CHANGE_CONFIG,
+            win32service.SERVICE_CHANGE_CONFIG | win32service.SERVICE_START,
         ),
         (
             "change",

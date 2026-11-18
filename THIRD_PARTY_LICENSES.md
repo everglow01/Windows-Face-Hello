@@ -36,6 +36,7 @@ train yourself or license from a vendor) and re-calibrate the thresholds.
 | [NumPy](https://numpy.org/) | Array math | BSD-3-Clause | |
 | [PySide6 (Qt for Python)](https://doc.qt.io/qtforpython/) | Console GUI | **LGPL-3.0** | Dynamically linked (imported); you may replace your PySide6/Qt copy with a compatible version. The LGPL text and relinking rights are preserved. Commercial Qt licensing is also available from The Qt Company. |
 | [pywin32](https://github.com/mhammond/pywin32) | Windows APIs (services, DPAPI, LSA, named pipes) | PSF (Python Software Foundation License) | |
+| [Microsoft Visual C++ Runtime](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files) | Native Python dependency loading | Microsoft Software License Terms | App-local: MSVCP DLLs already bundled by PySide6-Essentials are also copied beside `python.exe`; VCRUNTIME DLLs are supplied by standalone CPython. These private copies are serviced through FaceHello updates. |
 
 The portable runtime ships a standalone **CPython** distribution (Python
 Software Foundation License). The C++ Credential Provider links only Windows
